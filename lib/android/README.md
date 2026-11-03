@@ -61,26 +61,26 @@ Stable and prerelease tags publish these coordinates to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.github.umbrella22.vesper:vesper-player-kit:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit:0.9.1")
 
     // Optional Compose integration.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:<version>")
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:0.9.1")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:0.9.1")
 
     // Optional Cast, DLNA, and relay integration. The matching FFmpeg runtime
     // coordinate is resolved transitively for relay format adaptation.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:0.9.1")
 
     // Optional source normalization. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:0.9.1")
 
     // Optional post-download MP4 remux. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:0.9.1")
 
     // Optional diagnostics. Prefer debugImplementation/profileImplementation
     // when Release packages must not contain the plugin binary.
-    debugImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:<version>")
-    profileImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:<version>")
+    debugImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:0.9.1")
+    profileImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:0.9.1")
 }
 ```
 
@@ -88,6 +88,11 @@ Use `mavenCentral()` in the consuming project's dependency repositories. The
 core coordinate contains the Android host kit and arm64 JNI library. The
 Compose coordinates preserve the module order: UI depends on the Compose
 adapter, and the adapter depends on the core kit.
+
+The raw AAR consumer at
+[`fixtures/plugins/android-aar-consumer`](../../fixtures/plugins/android-aar-consumer/)
+assembles against staged release artifacts without depending on this checkout's
+source modules. Its CI job is the release consumer check for Android.
 
 GitHub Releases also publish the following standalone artifacts via
 `.github/workflows/mobile-lib-release.yml`:
@@ -459,6 +464,8 @@ Recompile UI consumers with the matching AAR after upgrading.
 
 ```kotlin
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import io.github.umbrella22.vesper.player.android.VesperPlayerSource
 import io.github.umbrella22.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.umbrella22.vesper.player.android.VesperDecoderBackend
 import io.github.umbrella22.vesper.player.android.compose.VesperPlayerSurface
@@ -468,12 +475,17 @@ import io.github.umbrella22.vesper.player.android.compose.rememberVesperPlayerUi
 @Composable
 fun PlayerScreen() {
     val controller = rememberVesperPlayerController(
+        initialSource = VesperPlayerSource.hls(
+            uri = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
+            label = "Sample video",
+        ),
         resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
         decoderBackend = VesperDecoderBackend.SystemOnly,
     )
     val uiState = rememberVesperPlayerUiState(controller)
 
     VesperPlayerSurface(controller = controller)
+    LaunchedEffect(controller) { controller.play() }
 
     // Bind your controls to:
     //   controller.play() / controller.pause()

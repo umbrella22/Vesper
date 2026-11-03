@@ -175,17 +175,31 @@ plugin projects live under [plugins/](plugins/).
 ### Android Package
 
 ```kotlin
-val controller = VesperPlayerControllerFactory.createDefault(
-    context = context,
-    initialSource = VesperPlayerSource.hls(
-        uri = "https://example.com/master.m3u8",
-        label = "Sample",
-    ),
-    resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
-)
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import io.github.umbrella22.vesper.player.android.VesperPlayerSource
+import io.github.umbrella22.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.umbrella22.vesper.player.android.compose.VesperPlayerSurface
+import io.github.umbrella22.vesper.player.android.compose.rememberVesperPlayerController
 
-VesperPlayerSurface(controller = controller)
+@Composable
+fun PlayerScreen() {
+    val controller = rememberVesperPlayerController(
+        initialSource = VesperPlayerSource.hls(
+            uri = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
+            label = "Sample",
+        ),
+        resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
+    )
+
+    VesperPlayerSurface(controller = controller)
+    LaunchedEffect(controller) { controller.play() }
+}
 ```
+
+`VesperPlayerSurface` initializes and disposes the controller by default. Hosts
+that manage the controller lifecycle themselves should set
+`manageControllerLifecycle = false` and call `initialize()` / `dispose()`.
 
 Read the Android host kit guide at [lib/android/README.md](lib/android/README.md)
 and use [examples/android-compose-host/README.md](examples/android-compose-host/README.md)
@@ -194,13 +208,25 @@ for a complete Compose app.
 ### iOS Package
 
 ```swift
-@StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
-    resiliencePolicy: .resilient()
-)
+import Foundation
+import SwiftUI
+import VesperPlayerKit
 
-PlayerSurfaceContainer(controller: controller)
-    .onAppear { controller.initialize() }
-    .onDisappear { controller.dispose() }
+struct PlayerView: View {
+    @StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
+        initialSource: VesperPlayerSource.hls(
+            url: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            label: "Sample"
+        ),
+        resiliencePolicy: .resilient()
+    )
+
+    var body: some View {
+        PlayerSurfaceContainer(controller: controller)
+            .onAppear { controller.initialize() }
+            .onDisappear { controller.dispose() }
+    }
+}
 ```
 
 Read the iOS host kit guide at
@@ -211,14 +237,22 @@ SwiftUI sample app.
 ### Flutter Packages
 
 ```dart
+import 'package:vesper_player/vesper_player.dart';
+
 final controller = await VesperPlayerController.create(
   initialSource: VesperPlayerSource.hls(
-    uri: 'https://example.com/master.m3u8',
+    uri: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8',
   ),
 );
 
-VesperPlayerView(controller: controller)
+await controller.initialize();
+await controller.play();
+// Return this widget from your build method.
+return VesperPlayerView(controller: controller);
 ```
+
+`create()` and `VesperPlayerView` do not initialize or dispose the controller;
+keep those calls in the host lifecycle as shown in the Flutter package guide.
 
 Read the main Flutter package guide at
 [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md) and
@@ -263,7 +297,7 @@ scaffold templates, then use the Rust CLI for the complete local workflow.
 Install the versioned CLI from crates.io:
 
 ```sh
-cargo install vesper-player-cli --version 0.9.0 --locked
+cargo install vesper-player-cli --version 0.9.1 --locked
 vesper --version
 ```
 
@@ -272,7 +306,7 @@ short Rust dependency and import name:
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.9.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.9.1" }
 ```
 
 ```rust
@@ -281,7 +315,7 @@ use player_plugin::{Plugin, PluginBuildError};
 
 For a WASM Component guest, use
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.9.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+"=0.9.1" }`; its Rust import remains `player_plugin_wasm`. The dependency key
 on the left defines the Rust import name, while `package` selects the published
 crates.io identity. All Vesper plugin SDK crates are released at one version so
 author projects can pin the complete contract exactly.
@@ -702,10 +736,9 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The workspace and package metadata identify the `0.9.0` source candidate. The
+The workspace and package metadata identify the `0.9.1` published release. The
 [changelog](CHANGELOG.md) records source changes and current release limitations.
-Local source repairs and candidate
-artifacts remain unpublished until their release and registry gates pass. The
+Published source and package artifacts are tracked by the release checklist. The
 [plugin author and host API contracts](lib/doc/plugin-author-api.md) identify
 0.9.x Rust APIs that require matching CLI and SDK dependencies; a version
 number alone does not establish registry compatibility.

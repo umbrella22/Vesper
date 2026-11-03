@@ -11,9 +11,11 @@ mod desktop_file_dialog;
 mod desktop_overlay_ui;
 mod desktop_presenter;
 mod desktop_symbols;
+mod desktop_typography;
 mod desktop_ui;
 #[cfg(target_os = "macos")]
 mod macos_host_overlay;
+mod playback;
 use desktop_file_dialog::pick_local_media_file;
 use desktop_overlay_ui::playback_stage_rect;
 use desktop_presenter::DesktopUiPresenter;
@@ -22,6 +24,7 @@ use desktop_ui::{
     DesktopPendingDownloadTaskViewData, DesktopPlaylistItemViewData, DesktopSidebarTab,
     SeekPreview, playback_state_label,
 };
+use playback::DesktopPlaybackSession;
 use player_host_desktop::download::{
     DesktopDownloadController, PendingDownloadTask, PreparedDownloadTask,
     download_primary_action_label, download_progress_summary, download_status_label,
@@ -217,6 +220,7 @@ struct DesktopPlayerApp {
     planner_rx: Receiver<PlannerEvent>,
     launch_tx: Sender<LaunchEvent>,
     launch_rx: Receiver<LaunchEvent>,
+    playback: DesktopPlaybackSession,
     pending_launch_activation: Option<PendingLaunchActivation>,
     pending_launch_activation_needs_paint: bool,
     pending_post_launch_play: bool,
@@ -224,7 +228,6 @@ struct DesktopPlayerApp {
     pending_post_launch_play_paint_deadline: Option<Instant>,
     file_dialog_tx: Sender<FileDialogEvent>,
     file_dialog_rx: Receiver<FileDialogEvent>,
-    next_launch_request_id: u64,
     active_launch_request_id: Option<u64>,
     active_launch_cancel_flag: Option<Arc<AtomicBool>>,
     launch_status: Option<SourceLaunchStatus>,
@@ -512,6 +515,7 @@ impl DesktopPlayerApp {
             planner_rx,
             launch_tx,
             launch_rx,
+            playback: DesktopPlaybackSession::default(),
             pending_launch_activation: None,
             pending_launch_activation_needs_paint: false,
             pending_post_launch_play: false,
@@ -519,7 +523,6 @@ impl DesktopPlayerApp {
             pending_post_launch_play_paint_deadline: None,
             file_dialog_tx,
             file_dialog_rx,
-            next_launch_request_id: 1,
             active_launch_request_id: None,
             active_launch_cancel_flag: None,
             launch_status: None,
@@ -753,14 +756,13 @@ impl DesktopPlayerApp {
         }
     }
 
+    #[cfg(test)]
     fn replace_active_launch_cancel_flag(&mut self) -> Arc<AtomicBool> {
-        if let Some(cancel_flag) = self.active_launch_cancel_flag.take() {
-            cancel_flag.store(true, Ordering::SeqCst);
-        }
-
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.active_launch_cancel_flag = Some(cancel_flag.clone());
-        cancel_flag
+        let (token, cancel) = self.playback.begin_source_launch();
+        self.source_generation = token.generation;
+        self.active_launch_request_id = Some(token.request_id);
+        self.active_launch_cancel_flag = Some(cancel.clone());
+        cancel
     }
 
     fn register_playlist_source(&mut self, source_uri: &str, label: Option<String>) {
@@ -864,11 +866,11 @@ impl DesktopPlayerApp {
 
     fn request_source_launch(&mut self, source: String, label: Option<String>) -> Result<()> {
         let label = label.unwrap_or_else(|| source_display_label(&source));
-        let request_id = self.next_launch_request_id;
-        self.next_launch_request_id = self.next_launch_request_id.saturating_add(1);
-        self.source_generation = self.source_generation.wrapping_add(1);
-        let source_generation = self.source_generation;
-        let cancel_flag = self.replace_active_launch_cancel_flag();
+        let (launch_token, cancel_flag) = self.playback.begin_source_launch();
+        let request_id = launch_token.request_id;
+        self.source_generation = launch_token.generation;
+        let source_generation = launch_token.generation;
+        self.active_launch_cancel_flag = Some(cancel_flag.clone());
         self.source = Some(source.clone());
         self.register_playlist_source(&source, Some(label.clone()));
         self.active_launch_request_id = Some(request_id);
@@ -1029,7 +1031,9 @@ impl DesktopPlayerApp {
                     launch_plan,
                     prepared_bootstrap,
                 }) => {
-                    if self.active_launch_request_id != Some(request_id) {
+                    if self.active_launch_request_id != Some(request_id)
+                        || !self.playback.is_current_launch(request_id)
+                    {
                         continue;
                     }
                     self.pending_launch_activation = Some(PendingLaunchActivation {
@@ -1052,11 +1056,14 @@ impl DesktopPlayerApp {
                     prepare_duration,
                     error,
                 }) => {
-                    if self.active_launch_request_id != Some(request_id) {
+                    if self.active_launch_request_id != Some(request_id)
+                        || !self.playback.is_current_launch(request_id)
+                    {
                         continue;
                     }
                     self.active_launch_request_id = None;
                     self.active_launch_cancel_flag = None;
+                    self.playback.finish_launch(request_id);
                     self.pending_launch_activation = None;
                     self.pending_launch_activation_needs_paint = false;
                     self.launch_status = Some(SourceLaunchStatus::Failed);
@@ -1086,7 +1093,9 @@ impl DesktopPlayerApp {
             return Ok(false);
         };
 
-        if self.active_launch_request_id != Some(pending.request_id) {
+        if self.active_launch_request_id != Some(pending.request_id)
+            || !self.playback.is_current_launch(pending.request_id)
+        {
             return Ok(false);
         }
 
@@ -1113,6 +1122,7 @@ impl DesktopPlayerApp {
             Ok(()) => {
                 self.active_launch_request_id = None;
                 self.active_launch_cancel_flag = None;
+                self.playback.finish_launch(pending.request_id);
                 self.launch_status = None;
                 self.register_playlist_source(&pending.source, Some(pending.label));
                 self.sync_ui_presenter();
@@ -1122,6 +1132,7 @@ impl DesktopPlayerApp {
             Err(error) => {
                 self.active_launch_request_id = None;
                 self.active_launch_cancel_flag = None;
+                self.playback.finish_launch(pending.request_id);
                 self.launch_status = Some(SourceLaunchStatus::Failed);
                 warn!(
                     ?error,
@@ -1274,7 +1285,15 @@ impl DesktopPlayerApp {
             self.last_frame = None;
             self.apply_frame(initial_frame)?;
         } else {
-            self.renderer = None;
+            if let Some(mut renderer) = self.renderer.take() {
+                // Retire the GPU overlay before the native overlay takes over.
+                // AppKit can retain the last drawable after its surface is dropped.
+                renderer.clear_overlay();
+                window.pre_present_notify();
+                if let Err(error) = renderer.render() {
+                    warn!(?error, "failed to retire the desktop GPU overlay");
+                }
+            }
             self.last_frame = None;
             #[cfg(target_os = "macos")]
             {
@@ -1340,6 +1359,7 @@ impl DesktopPlayerApp {
     }
 
     fn observe_render_outcome(&mut self, outcome: RenderFrameOutcome) {
+        self.playback.record_presentation(outcome);
         match outcome {
             RenderFrameOutcome::Presented => {
                 if self.pending_post_launch_play_needs_paint {
@@ -1398,6 +1418,16 @@ impl DesktopPlayerApp {
     }
 
     fn apply_frame(&mut self, frame: DecodedVideoFrame) -> Result<()> {
+        let playback_generation = self.playback.generation();
+        if playback_generation != self.source_generation
+            || !self.playback.accept_frame(self.source_generation)
+        {
+            debug!(
+                source_generation = playback_generation,
+                "discarded stale desktop playback frame"
+            );
+            return Ok(());
+        }
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let frame_sequence = self.frame_sequence;
         debug!(
@@ -1736,12 +1766,14 @@ impl DesktopPlayerApp {
     }
 
     fn dispatch_command(&mut self, command: PlayerRuntimeCommand) -> Result<()> {
+        self.playback.record_command_dispatch();
         let result = {
             let runtime = self.runtime_mut()?;
             runtime.dispatch(command)?
         };
         let frame = result.frame;
         let snapshot = result.snapshot;
+        self.playback.record_snapshot_event();
         self.log_runtime_events();
         self.update_window_title();
         self.sync_ui_presenter();

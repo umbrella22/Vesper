@@ -8,7 +8,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly CRATES_IO_API="https://crates.io/api/v1/crates"
 readonly CRATES_IO_USER_AGENT="vesper-player-sdk-release (https://github.com/umbrella22/Vesper)"
-readonly RUST_TOOLCHAIN="1.99.0"
+RUST_TOOLCHAIN="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/rust-toolchain.toml")"
+readonly RUST_TOOLCHAIN
+if [[ -z "$RUST_TOOLCHAIN" ]]; then
+  echo "rust-toolchain.toml does not declare a channel." >&2
+  exit 3
+fi
 readonly REGISTRY_CONNECT_TIMEOUT_SECONDS=10
 readonly REGISTRY_REQUEST_TIMEOUT_SECONDS=30
 

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/boundary-ci.yml"
+      - ".github/workflows/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -25,6 +27,8 @@ on:
       - main
     paths:
       - ".github/workflows/boundary-ci.yml"
+      - ".github/workflows/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -58,6 +62,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Verify Rust version pins
+        run: ./scripts/bump-rust-version.sh check
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli

@@ -1,15 +1,93 @@
-use player_render_wgpu::RgbaOverlayFrame;
+use player_render_wgpu::{
+    PlaybackControl, PlaybackOverlayPrimitive, PlaybackUiAction, PlaybackUiLayout, RgbaOverlayFrame,
+};
 use player_runtime::PlayerSnapshot;
 
-use crate::desktop_symbols::{DesktopSymbol, draw_symbol};
+use crate::desktop_symbols::DesktopSymbol;
+use crate::desktop_typography as typography;
 use crate::desktop_ui::{
     CONTROL_RATES, ControlAction, DesktopOverlayViewModel, DesktopSidebarTab,
     DesktopUiLayoutMetrics, DesktopUiRect, DesktopUiViewModel, SeekPreview, format_duration,
-    is_scrubbable_timeline,
 };
 
 const MIN_OVERLAY_DESIGN_WIDTH: f64 = 960.0;
 const MIN_OVERLAY_DESIGN_HEIGHT: f64 = 540.0;
+const DOWNLOAD_CARD_HEIGHT: u32 = 172;
+
+thread_local! {
+    static SIDEBAR_TEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RASTER_SCALE: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+}
+
+/// Layout and hit testing use logical units. Rasterize at up to 2x density so
+/// native Retina windows retain sharp text without changing control geometry.
+struct RasterScale(u32);
+
+impl RasterScale {
+    fn enter(scale: u32) -> Self {
+        Self(RASTER_SCALE.with(|current| current.replace(scale.clamp(1, 2))))
+    }
+
+    fn current() -> u32 {
+        RASTER_SCALE.with(std::cell::Cell::get)
+    }
+}
+
+impl Drop for RasterScale {
+    fn drop(&mut self) {
+        RASTER_SCALE.with(|current| current.set(self.0));
+    }
+}
+
+fn scaled_rect(rect: DesktopUiRect, scale: u32) -> DesktopUiRect {
+    DesktopUiRect {
+        x: rect.x.saturating_mul(scale),
+        y: rect.y.saturating_mul(scale),
+        width: rect.width.saturating_mul(scale),
+        height: rect.height.saturating_mul(scale),
+    }
+}
+
+fn draw_symbol(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: DesktopUiRect,
+    symbol: DesktopSymbol,
+    color: [u8; 4],
+) {
+    let scale = RasterScale::current();
+    crate::desktop_symbols::draw_symbol(
+        frame,
+        width * scale,
+        height * scale,
+        scaled_rect(rect, scale),
+        symbol,
+        color,
+    );
+}
+
+struct SidebarText(bool);
+impl SidebarText {
+    fn enter() -> Self {
+        Self(SIDEBAR_TEXT.with(|current| current.replace(true)))
+    }
+    fn active() -> bool {
+        SIDEBAR_TEXT.with(std::cell::Cell::get)
+    }
+}
+impl Drop for SidebarText {
+    fn drop(&mut self) {
+        SIDEBAR_TEXT.with(|current| current.set(self.0));
+    }
+}
+fn text_height(scale: u32) -> u32 {
+    if SidebarText::active() {
+        typography::line_height(scale)
+    } else {
+        7 * scale
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct OverlayButton {
@@ -37,7 +115,7 @@ struct SidebarLayout {
     stage_toolbar_rect: DesktopUiRect,
     control_bar_rect: DesktopUiRect,
     progress_rect: DesktopUiRect,
-    progress_hit_rect: DesktopUiRect,
+    playback_layout: PlaybackUiLayout,
     sidebar_padding: u32,
     column_width: u32,
     header_rect: DesktopUiRect,
@@ -121,8 +199,11 @@ pub fn render_desktop_overlay(
     let scaled_overlay = surface.to_design_overlay(overlay);
     let layout = overlay_layout(surface.design_width, surface.design_height, &scaled_overlay)?;
     let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, seek_preview);
-    let mut overlay_bytes =
-        vec![0; surface.design_width as usize * surface.design_height as usize * 4];
+    let raster_scale = surface.scale_x.max(surface.scale_y).ceil().clamp(1.0, 2.0) as u32;
+    let _raster_guard = RasterScale::enter(raster_scale);
+    let raster_width = surface.design_width * raster_scale;
+    let raster_height = surface.design_height * raster_scale;
+    let mut overlay_bytes = vec![0; raster_width as usize * raster_height as usize * 4];
 
     draw_stage_controls(
         &mut overlay_bytes,
@@ -132,6 +213,7 @@ pub fn render_desktop_overlay(
         &scaled_overlay,
         &layout,
     );
+    let _sidebar_text = SidebarText::enter();
     draw_sidebar(
         &mut overlay_bytes,
         surface.design_width,
@@ -141,8 +223,8 @@ pub fn render_desktop_overlay(
     );
 
     Some(RgbaOverlayFrame {
-        width: surface.design_width,
-        height: surface.design_height,
+        width: raster_width,
+        height: raster_height,
         bytes: overlay_bytes,
     })
 }
@@ -206,24 +288,22 @@ pub fn overlay_action_at(
     let y = clamp_cursor(design_cursor_y, surface.design_height);
     let stage_controls_interactive = stage_controls_interactive(overlay);
 
+    if x < layout.sidebar_rect.x {
+        if !stage_controls_interactive {
+            return None;
+        }
+        let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, None);
+        return layout
+            .playback_layout
+            .hit_test(design_cursor_x, design_cursor_y, &view_model.playback_ui)
+            .map(|action| view_model.renderer_action(action));
+    }
+
     layout
         .buttons
         .iter()
-        .find(|button| {
-            button.rect.contains(x, y)
-                && (button.rect.x >= layout.sidebar_rect.x || stage_controls_interactive)
-        })
+        .find(|button| button.rect.contains(x, y))
         .map(|button| button.action)
-        .or_else(|| {
-            seek_preview_at_for_surface(
-                surface,
-                design_cursor_x,
-                design_cursor_y,
-                snapshot,
-                overlay,
-            )
-            .map(|preview| ControlAction::SeekToRatio(preview.ratio as f32))
-        })
 }
 
 pub fn seek_preview_at(
@@ -257,10 +337,17 @@ pub fn seek_preview_for_drag(
     let surface = DesktopOverlaySurface::new(frame_width, frame_height, window_scale_factor)?;
     let layout = overlay_layout(surface.design_width, surface.design_height, overlay)?;
     let (design_cursor_x, _) = surface.to_design_cursor(cursor_x, 0.0);
-    preview_for_progress_ratio(
-        snapshot,
-        ratio_for_progress_x(layout.progress_rect, design_cursor_x),
-    )
+    let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, None);
+    view_model
+        .playback_ui
+        .seek_preview(ratio_for_progress_x(
+            layout.playback_layout.progress_rect,
+            design_cursor_x,
+        ))
+        .map(|preview| SeekPreview {
+            position: preview.position,
+            ratio: preview.ratio,
+        })
 }
 
 fn seek_preview_at_for_surface(
@@ -273,13 +360,20 @@ fn seek_preview_at_for_surface(
     let layout = overlay_layout(surface.design_width, surface.design_height, overlay)?;
     let x = clamp_cursor(cursor_x, surface.design_width);
     let y = clamp_cursor(cursor_y, surface.design_height);
-    if !layout.progress_hit_rect.contains(x, y) {
+    if !layout.playback_layout.progress_hit_rect.contains(x, y) {
         return None;
     }
-    preview_for_progress_ratio(
-        snapshot,
-        ratio_for_progress_x(layout.progress_rect, cursor_x),
-    )
+    let view_model = DesktopUiViewModel::from_snapshot(snapshot, true, None);
+    view_model
+        .playback_ui
+        .seek_preview(ratio_for_progress_x(
+            layout.playback_layout.progress_rect,
+            cursor_x,
+        ))
+        .map(|preview| SeekPreview {
+            position: preview.position,
+            ratio: preview.ratio,
+        })
 }
 
 fn overlay_layout(
@@ -314,6 +408,7 @@ fn overlay_layout(
         height: control_bar_height,
     };
     let mut buttons = Vec::new();
+    let mut playback_controls = Vec::new();
     let control_content_rect = DesktopUiRect {
         x: control_bar_rect.x.saturating_add(16),
         y: control_bar_rect.y.saturating_add(14),
@@ -341,15 +436,14 @@ fn overlay_layout(
         .zip(rate_widths.iter().copied())
         .zip(0..CONTROL_RATES.len())
     {
-        buttons.push(OverlayButton {
+        playback_controls.push(PlaybackControl {
             rect: DesktopUiRect {
                 x: rate_x,
                 y: top_row_y,
                 width,
                 height: rate_height,
             },
-            action: ControlAction::SetRate(rate),
-            style: ButtonStyle::Rate,
+            action: PlaybackUiAction::SetRate(rate),
         });
         if index + 1 < CONTROL_RATES.len() {
             rate_x = rate_x.saturating_add(width + rate_gap);
@@ -440,29 +534,30 @@ fn overlay_layout(
             current_x = current_x.saturating_add(gap);
         }
         let y = transport_top_y.saturating_add(primary_size.saturating_sub(*size) / 2);
-        buttons.push(OverlayButton {
+        playback_controls.push(PlaybackControl {
             rect: DesktopUiRect {
                 x: current_x,
                 y,
                 width: *size,
                 height: *size,
             },
-            action: *action,
-            style: *style,
+            action: (*action)
+                .as_playback_action()
+                .expect("transport action must be renderer-owned"),
         });
         current_x = current_x.saturating_add(*size);
     }
 
-    let sidebar_padding = 18;
+    let sidebar_padding = 20;
     let column_width = sidebar_rect.width.saturating_sub(sidebar_padding * 2);
     let header_rect = DesktopUiRect {
         x: sidebar_rect.x + sidebar_padding,
         y: 18,
         width: column_width,
-        height: 56,
+        height: 60,
     };
-    let source_actions_y = header_rect.y.saturating_add(header_rect.height + 32);
-    let tab_bar_y = source_actions_y.saturating_add(44);
+    let source_actions_y = header_rect.y.saturating_add(header_rect.height + 36);
+    let tab_bar_y = source_actions_y.saturating_add(52);
 
     let source_button_gap = 10;
     let source_button_width = (column_width.saturating_sub(source_button_gap * 2)) / 3;
@@ -481,7 +576,7 @@ fn overlay_layout(
                     + index as u32 * (source_button_width + source_button_gap),
                 y: source_actions_y,
                 width: source_button_width,
-                height: 34,
+                height: 40,
             },
             action: *action,
             style: ButtonStyle::SourceAction,
@@ -499,14 +594,14 @@ fn overlay_layout(
                 x: sidebar_rect.x + sidebar_padding + index as u32 * (tab_width + tab_gap),
                 y: tab_bar_y,
                 width: tab_width,
-                height: 32,
+                height: 40,
             },
             action: ControlAction::SelectSidebarTab(*tab),
             style: ButtonStyle::SidebarTab,
         });
     }
 
-    let content_y = tab_bar_y.saturating_add(58);
+    let content_y = tab_bar_y.saturating_add(66);
 
     match overlay.sidebar_tab {
         DesktopSidebarTab::Playlist => {
@@ -517,16 +612,16 @@ fn overlay_layout(
                         x: sidebar_rect.x + sidebar_padding,
                         y: current_y,
                         width: column_width,
-                        height: 58,
+                        height: 72,
                     },
                     action: ControlAction::FocusPlaylistItem(index),
                     style: ButtonStyle::SectionAction,
                 });
-                current_y = current_y.saturating_add(68);
+                current_y = current_y.saturating_add(82);
             }
         }
         DesktopSidebarTab::Downloads => {
-            let download_actions_y = content_y.saturating_add(24);
+            let download_actions_y = content_y.saturating_add(32);
             let download_button_width = (column_width.saturating_sub(source_button_gap * 2)) / 3;
             for (index, action) in [
                 ControlAction::CreateDownloadCurrentSource,
@@ -543,7 +638,7 @@ fn overlay_layout(
                             + index as u32 * (download_button_width + source_button_gap),
                         y: download_actions_y,
                         width: download_button_width,
-                        height: 32,
+                        height: 40,
                     },
                     action: *action,
                     style: ButtonStyle::SectionAction,
@@ -551,61 +646,28 @@ fn overlay_layout(
             }
 
             let mut current_y = download_actions_y.saturating_add(56);
-            current_y = current_y.saturating_add(overlay.pending_downloads.len() as u32 * 44);
+            current_y = current_y.saturating_add(overlay.pending_downloads.len() as u32 * 54);
 
             for task in &overlay.download_tasks {
                 let card_rect = DesktopUiRect {
                     x: sidebar_rect.x + sidebar_padding,
                     y: current_y,
                     width: column_width,
-                    height: if task.primary_action_label.is_some()
-                        || task.export_action_label.is_some()
-                    {
-                        118
-                    } else {
-                        92
-                    },
+                    height: DOWNLOAD_CARD_HEIGHT,
                 };
-                let action_y = card_rect.y + card_rect.height.saturating_sub(34);
-                let action_width = (column_width.saturating_sub(20)) / 3;
-                if task.primary_action_label.is_some() {
-                    buttons.push(OverlayButton {
-                        rect: DesktopUiRect {
-                            x: card_rect.x + 10,
-                            y: action_y,
-                            width: action_width,
-                            height: 24,
-                        },
-                        action: ControlAction::DownloadPrimaryAction(task.task_id),
-                        style: ButtonStyle::CardAction,
-                    });
-                }
-                if task.export_action_label.is_some() {
-                    buttons.push(OverlayButton {
-                        rect: DesktopUiRect {
-                            x: card_rect.x + 10 + action_width + 10,
-                            y: action_y,
-                            width: action_width,
-                            height: 24,
-                        },
-                        action: ControlAction::DownloadExport(task.task_id),
-                        style: ButtonStyle::CardAction,
-                    });
-                }
-                buttons.push(OverlayButton {
-                    rect: DesktopUiRect {
-                        x: card_rect.x + 10 + (action_width + 10) * 2,
-                        y: action_y,
-                        width: action_width,
-                        height: 24,
-                    },
-                    action: ControlAction::DownloadRemove(task.task_id),
-                    style: ButtonStyle::CardAction,
-                });
+                buttons.extend(download_card_buttons(task, card_rect));
                 current_y = current_y.saturating_add(card_rect.height + 14);
             }
         }
     }
+
+    let playback_layout = PlaybackUiLayout::from_parts(
+        metrics,
+        control_bar_rect,
+        progress_rect,
+        progress_hit_rect,
+        playback_controls,
+    );
 
     Some(SidebarLayout {
         sidebar_rect,
@@ -613,13 +675,43 @@ fn overlay_layout(
         stage_toolbar_rect,
         control_bar_rect,
         progress_rect,
-        progress_hit_rect,
+        playback_layout,
         sidebar_padding,
         column_width,
         header_rect,
         content_y,
         buttons,
     })
+}
+
+fn download_card_buttons(
+    task: &crate::desktop_ui::DesktopDownloadTaskViewData,
+    card: DesktopUiRect,
+) -> Vec<OverlayButton> {
+    let mut actions = Vec::with_capacity(3);
+    if task.primary_action_label.is_some() {
+        actions.push(ControlAction::DownloadPrimaryAction(task.task_id));
+    }
+    if task.export_action_label.is_some() {
+        actions.push(ControlAction::DownloadExport(task.task_id));
+    }
+    actions.push(ControlAction::DownloadRemove(task.task_id));
+    let count = actions.len() as u32;
+    let width = card.width.saturating_sub(24 + (count - 1) * 8) / count;
+    actions
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| OverlayButton {
+            rect: DesktopUiRect {
+                x: card.x + 12 + index as u32 * (width + 8),
+                y: card.y + card.height.saturating_sub(48),
+                width,
+                height: 36,
+            },
+            action,
+            style: ButtonStyle::CardAction,
+        })
+        .collect()
 }
 
 fn draw_stage_controls(
@@ -638,6 +730,7 @@ fn draw_stage_controls(
     };
     let controls_opacity = overlay.controls_opacity.clamp(0.0, 1.0);
     let hovered_action = hovered_action_for_layout(layout, overlay);
+    let playback_primitives = layout.playback_layout.primitives(&view_model.playback_ui);
 
     if controls_opacity > 0.01 {
         draw_stage_toolbar(
@@ -661,45 +754,54 @@ fn draw_stage_controls(
     }
 
     if controls_opacity > 0.01 {
-        fill_rounded_rect(
-            frame,
-            frame_width,
-            frame_height,
-            layout.progress_rect,
-            2,
-            scale_alpha([255, 255, 255, 24], controls_opacity),
-        );
-        if let Some(ratio) = view_model.displayed_progress_ratio {
-            let progress_width =
-                (ratio.clamp(0.0, 1.0) * f64::from(layout.progress_rect.width)).round() as u32;
+        let progress_track = playback_primitives.iter().find_map(|primitive| {
+            if let PlaybackOverlayPrimitive::ProgressTrack { rect, ratio } = primitive {
+                Some((*rect, *ratio))
+            } else {
+                None
+            }
+        });
+        if let Some((progress_rect, ratio)) = progress_track {
             fill_rounded_rect(
                 frame,
                 frame_width,
                 frame_height,
-                DesktopUiRect {
-                    x: layout.progress_rect.x,
-                    y: layout.progress_rect.y,
-                    width: progress_width,
-                    height: layout.progress_rect.height,
-                },
+                progress_rect,
                 2,
-                scale_alpha([244, 244, 244, 255], controls_opacity),
+                scale_alpha([255, 255, 255, 24], controls_opacity),
             );
-            let knob_radius = 5;
-            let knob_center_x = layout.progress_rect.x.saturating_add(
-                progress_width
-                    .max(knob_radius)
-                    .min(layout.progress_rect.width.saturating_sub(knob_radius)),
-            );
-            fill_circle(
-                frame,
-                frame_width,
-                frame_height,
-                knob_center_x,
-                layout.progress_rect.y + layout.progress_rect.height / 2,
-                knob_radius,
-                scale_alpha([255, 255, 255, 250], controls_opacity),
-            );
+            if let Some(ratio) = ratio {
+                let progress_width =
+                    (ratio.clamp(0.0, 1.0) * f64::from(progress_rect.width)).round() as u32;
+                fill_rounded_rect(
+                    frame,
+                    frame_width,
+                    frame_height,
+                    DesktopUiRect {
+                        x: progress_rect.x,
+                        y: progress_rect.y,
+                        width: progress_width,
+                        height: progress_rect.height,
+                    },
+                    2,
+                    scale_alpha([244, 244, 244, 255], controls_opacity),
+                );
+                let knob_radius = 5;
+                let knob_center_x = progress_rect.x.saturating_add(
+                    progress_width
+                        .max(knob_radius)
+                        .min(progress_rect.width.saturating_sub(knob_radius)),
+                );
+                fill_circle(
+                    frame,
+                    frame_width,
+                    frame_height,
+                    knob_center_x,
+                    progress_rect.y + progress_rect.height / 2,
+                    knob_radius,
+                    scale_alpha([255, 255, 255, 250], controls_opacity),
+                );
+            }
         }
 
         let current_time = format_duration(view_model.displayed_position);
@@ -707,7 +809,10 @@ fn draw_stage_controls(
             .duration
             .map(format_duration)
             .unwrap_or_else(|| "--:--".to_owned());
-        let bottom_text_y = layout.progress_rect.y.saturating_sub(2);
+        let progress_rect = progress_track
+            .map(|(rect, _)| rect)
+            .unwrap_or(layout.progress_rect);
+        let bottom_text_y = progress_rect.y.saturating_sub(2);
         draw_text(
             frame,
             frame_width,
@@ -734,19 +839,23 @@ fn draw_stage_controls(
         );
     }
 
-    for button in &layout.buttons {
-        if button.rect.x >= layout.sidebar_rect.x {
+    for primitive in &playback_primitives {
+        let PlaybackOverlayPrimitive::Control { rect, action } = primitive else {
             continue;
-        }
+        };
+        let Some(style) = playback_button_style(*action) else {
+            continue;
+        };
         if controls_opacity <= 0.01 {
             continue;
         }
-        let is_hovered = hovered_action == Some(button.action);
-        let is_active = match button.action {
+        let host_action = ControlAction::from_playback_action(*action);
+        let is_hovered = hovered_action == Some(host_action);
+        let is_active = match host_action {
             ControlAction::SetRate(rate) => view_model.is_rate_active(rate),
             _ => false,
         };
-        let (fill, border, text, scale) = match button.style {
+        let (fill, border, text, scale) = match style {
             ButtonStyle::Utility if is_hovered => {
                 ([255, 255, 255, 18], [0, 0, 0, 0], [255, 255, 255, 255], 1)
             }
@@ -785,15 +894,15 @@ fn draw_stage_controls(
         let border = scale_alpha(border, controls_opacity);
         let text = scale_alpha(text, controls_opacity);
 
-        if matches!(button.style, ButtonStyle::Rate) {
-            fill_rounded_rect(frame, frame_width, frame_height, button.rect, 8, fill);
+        if matches!(style, ButtonStyle::Rate) {
+            fill_rounded_rect(frame, frame_width, frame_height, *rect, 8, fill);
         } else if fill[3] > 0 {
             fill_rounded_rect(
                 frame,
                 frame_width,
                 frame_height,
-                button.rect,
-                button.rect.height.saturating_div(2).max(8),
+                *rect,
+                rect.height.saturating_div(2).max(8),
                 fill,
             );
         }
@@ -802,26 +911,26 @@ fn draw_stage_controls(
                 frame,
                 frame_width,
                 frame_height,
-                button.rect,
-                button.rect.height.saturating_div(2).max(8),
+                *rect,
+                rect.height.saturating_div(2).max(8),
                 border,
                 1,
             );
         }
-        match button.style {
+        match style {
             ButtonStyle::Utility
             | ButtonStyle::TransportSecondary
             | ButtonStyle::TransportPrimary => {
-                if let Some(symbol) = control_action_symbol(button.action, view_model.is_playing) {
-                    draw_symbol(frame, frame_width, frame_height, button.rect, symbol, text);
+                if let Some(symbol) = control_action_symbol(host_action, view_model.is_playing) {
+                    draw_symbol(frame, frame_width, frame_height, *rect, symbol, text);
                 }
             }
             ButtonStyle::Rate => draw_centered_text(
                 frame,
                 frame_width,
                 frame_height,
-                button.rect,
-                control_button_label(button.action, view_model.play_pause_label),
+                *rect,
+                control_button_label(host_action, view_model.play_pause_label),
                 scale,
                 text,
             ),
@@ -953,14 +1062,13 @@ fn draw_sidebar(
         .saturating_sub(header_text_x)
         .saturating_sub(10)
         .max(48);
-    let (header_title, header_title_scale) =
-        fit_text_to_width("MEDIA PANEL", 2, 1, title_max_width);
+    let (header_title, header_title_scale) = fit_text_to_width("Media", 2, 1, title_max_width);
     draw_text(
         frame,
         frame_width,
         frame_height,
         header_text_x,
-        layout.header_rect.y + 12,
+        layout.header_rect.y + 10,
         &header_title,
         header_title_scale,
         [255, 255, 255, 255],
@@ -974,14 +1082,8 @@ fn draw_sidebar(
         frame_width,
         frame_height,
         header_text_x,
-        layout.header_rect.y + 34,
-        &fit_text_to_width(
-            &format!("{} {}", overlay.playback_state_label, overlay.subtitle),
-            1,
-            1,
-            meta_width,
-        )
-        .0,
+        layout.header_rect.y + 38,
+        &fit_text_to_width(&overlay.playback_state_label, 1, 1, meta_width).0,
         1,
         [162, 173, 189, 255],
     );
@@ -1007,7 +1109,7 @@ fn draw_sidebar(
         .map(|button| button.rect.y)
         .min()
         .unwrap_or(layout.content_y);
-    let source_header_y = source_row_top.saturating_sub(18);
+    let source_header_y = source_row_top.saturating_sub(24);
     draw_symbol(
         frame,
         frame_width,
@@ -1027,7 +1129,7 @@ fn draw_sidebar(
         frame_height,
         layout.sidebar_rect.x + layout.sidebar_padding + 20,
         source_header_y,
-        "QUICK SOURCES",
+        "Open media",
         1,
         [162, 173, 189, 255],
     );
@@ -1165,7 +1267,7 @@ fn draw_playlist_section(
             124
         } else {
             (overlay.playlist_items.len() as u32)
-                .saturating_mul(68)
+                .saturating_mul(82)
                 .saturating_add(58)
         },
     };
@@ -1205,7 +1307,7 @@ fn draw_playlist_section(
         frame_height,
         left + 20,
         section_title_y,
-        "PLAYLIST",
+        "Play queue",
         1,
         [162, 173, 189, 255],
     );
@@ -1219,7 +1321,15 @@ fn draw_playlist_section(
             width: 74,
             height: 20,
         },
-        &format!("{} ITEMS", overlay.playlist_items.len()),
+        &format!(
+            "{} {}",
+            overlay.playlist_items.len(),
+            if overlay.playlist_items.len() == 1 {
+                "item"
+            } else {
+                "items"
+            }
+        ),
         [130, 208, 166, 28],
         [130, 208, 166, 255],
     );
@@ -1244,7 +1354,7 @@ fn draw_playlist_section(
             frame_width,
             frame_height,
             empty_rect,
-            "NO SOURCES IN QUEUE",
+            "Your queue is empty",
             1,
             [170, 182, 195, 255],
         );
@@ -1257,21 +1367,17 @@ fn draw_playlist_section(
             x: left,
             y,
             width,
-            height: 58,
+            height: 72,
         };
         let hovered = hovered_action == Some(ControlAction::FocusPlaylistItem(index));
         let accent = action_accent(ControlAction::FocusPlaylistItem(index));
         let status_badge_rect = DesktopUiRect {
-            x: rect.x + rect.width.saturating_sub(82),
-            y: rect.y + 10,
-            width: 70,
-            height: 18,
+            x: rect.x + rect.width.saturating_sub(100),
+            y: rect.y + 40,
+            width: 88,
+            height: 22,
         };
-        let title_max_width = status_badge_rect
-            .x
-            .saturating_sub(rect.x + 46)
-            .saturating_sub(12)
-            .max(48);
+        let title_max_width = rect.width.saturating_sub(60);
         let (title_label, title_scale) = fit_text_to_width(&item.label, 1, 1, title_max_width);
         fill_rounded_rect(
             frame,
@@ -1384,18 +1490,18 @@ fn draw_playlist_section(
             frame_width,
             frame_height,
             rect.x + 46,
-            rect.y + 33,
+            rect.y + 40,
             if item.is_active {
-                "ACTIVE SOURCE"
+                "Now playing"
             } else if hovered {
-                "CLICK TO SWITCH"
+                "Click to play"
             } else {
-                "READY TO OPEN"
+                "Ready to play"
             },
             1,
             [148, 159, 176, 255],
         );
-        y = y.saturating_add(68);
+        y = y.saturating_add(82);
     }
 }
 
@@ -1411,22 +1517,14 @@ fn draw_downloads_section(
     let width = layout.column_width;
     let action_gap = 10;
     let action_width = (width.saturating_sub(action_gap * 2)) / 3;
-    let actions_y = layout.content_y.saturating_add(24);
+    let actions_y = layout.content_y.saturating_add(32);
     let mut y = actions_y.saturating_add(56);
-    let tasks_total_height = overlay.download_tasks.iter().fold(0_u32, |sum, task| {
-        sum.saturating_add(
-            if task.primary_action_label.is_some() || task.export_action_label.is_some() {
-                132_u32
-            } else {
-                106_u32
-            }
-            .saturating_add(14),
-        )
-    });
+    let tasks_total_height =
+        (overlay.download_tasks.len() as u32).saturating_mul(DOWNLOAD_CARD_HEIGHT + 14);
     let pending_height = if overlay.pending_downloads.is_empty() {
         0_u32
     } else {
-        24_u32.saturating_add((overlay.pending_downloads.len() as u32).saturating_mul(44))
+        24_u32.saturating_add((overlay.pending_downloads.len() as u32).saturating_mul(54))
     };
     let empty_height = if overlay.pending_downloads.is_empty() && overlay.download_tasks.is_empty()
     {
@@ -1487,7 +1585,7 @@ fn draw_downloads_section(
         frame_height,
         left + 20,
         layout.content_y,
-        "DOWNLOAD MANAGER",
+        "Downloads",
         1,
         [162, 173, 189, 255],
     );
@@ -1502,9 +1600,9 @@ fn draw_downloads_section(
             height: 20,
         },
         if overlay.export_plugin_installed {
-            "EXPORT READY"
+            "Export ready"
         } else {
-            "EXPORT OFF"
+            "Export off"
         },
         if overlay.export_plugin_installed {
             [130, 208, 166, 28]
@@ -1530,7 +1628,7 @@ fn draw_downloads_section(
             x: left + index as u32 * (action_width + action_gap),
             y: actions_y,
             width: action_width,
-            height: 32,
+            height: 40,
         };
         let hovered = hovered_action == Some(*action);
         let accent = action_accent(*action);
@@ -1564,7 +1662,11 @@ fn draw_downloads_section(
             frame_width,
             frame_height,
             rect,
-            action_symbol(*action, false),
+            if matches!(action, ControlAction::CreateDownloadCurrentSource) {
+                None
+            } else {
+                action_symbol(*action, false)
+            },
             sidebar_button_label(*action),
             1,
             accent,
@@ -1579,7 +1681,7 @@ fn draw_downloads_section(
             frame_height,
             left,
             y.saturating_sub(16),
-            "PENDING",
+            "Preparing",
             1,
             [162, 173, 189, 255],
         );
@@ -1588,7 +1690,7 @@ fn draw_downloads_section(
                 x: left,
                 y,
                 width,
-                height: 36,
+                height: 46,
             };
             fill_rounded_rect(
                 frame,
@@ -1639,12 +1741,12 @@ fn draw_downloads_section(
                 frame_width,
                 frame_height,
                 left + 36,
-                y + 20,
+                y + 26,
                 &fit_text_to_width(&pending.source_uri, 1, 1, width.saturating_sub(48)).0,
                 1,
                 [144, 156, 172, 255],
             );
-            y = y.saturating_add(44);
+            y = y.saturating_add(54);
         }
     }
 
@@ -1653,7 +1755,7 @@ fn draw_downloads_section(
             x: left,
             y,
             width,
-            height: 58,
+            height: 72,
         };
         fill_rounded_rect(
             frame,
@@ -1668,33 +1770,15 @@ fn draw_downloads_section(
             frame_width,
             frame_height,
             rect,
-            "NO DOWNLOAD TASKS YET",
+            "No downloads yet",
             1,
             [170, 182, 195, 255],
         );
         y = y.saturating_add(70);
     }
 
-    if !overlay.download_tasks.is_empty() {
-        draw_text(
-            frame,
-            frame_width,
-            frame_height,
-            left,
-            y.saturating_sub(16),
-            "TASKS",
-            1,
-            [162, 173, 189, 255],
-        );
-    }
-
     for task in &overlay.download_tasks {
-        let card_height =
-            if task.primary_action_label.is_some() || task.export_action_label.is_some() {
-                132
-            } else {
-                106
-            };
+        let card_height = DOWNLOAD_CARD_HEIGHT;
         let rect = DesktopUiRect {
             x: left,
             y,
@@ -1711,20 +1795,14 @@ fn draw_downloads_section(
         let status_badge_width = measure_text(&normalize_text(&task.status, 18), 1)
             .saturating_add(34)
             .max(88)
-            .min(rect.width.saturating_div(2).max(88));
+            .min(rect.width.saturating_sub(62));
         let status_badge_rect = DesktopUiRect {
-            x: rect
-                .x
-                .saturating_add(rect.width.saturating_sub(status_badge_width + 12)),
-            y: rect.y + 10,
+            x: text_x,
+            y: rect.y + 36,
             width: status_badge_width,
-            height: 18,
+            height: 22,
         };
-        let title_max_width = status_badge_rect
-            .x
-            .saturating_sub(text_x)
-            .saturating_sub(10)
-            .max(48);
+        let title_max_width = rect.width.saturating_sub(62);
         let summary_max_width = rect
             .width
             .saturating_sub(text_x.saturating_sub(rect.x) + 16)
@@ -1823,7 +1901,7 @@ fn draw_downloads_section(
             frame_width,
             frame_height,
             text_x,
-            rect.y + 34,
+            rect.y + 62,
             &task_summary,
             task_summary_scale,
             [170, 182, 195, 255],
@@ -1831,7 +1909,7 @@ fn draw_downloads_section(
         if let Some(ratio) = task.export_progress.or(task.progress_ratio) {
             let track_rect = DesktopUiRect {
                 x: text_x,
-                y: rect.y + 52,
+                y: rect.y + 86,
                 width: rect
                     .width
                     .saturating_sub(text_x.saturating_sub(rect.x) + 16),
@@ -1865,7 +1943,7 @@ fn draw_downloads_section(
                 frame_width,
                 frame_height,
                 text_x,
-                rect.y + 64,
+                rect.y + 96,
                 &fit_text_to_width(
                     &format!(
                         "EXPORT {:.0}",
@@ -1885,7 +1963,7 @@ fn draw_downloads_section(
                 frame_width,
                 frame_height,
                 text_x,
-                rect.y + 64,
+                rect.y + 96,
                 &fit_text_to_width(path, 1, 1, rect.width.saturating_sub(62)).0,
                 1,
                 accent,
@@ -1896,63 +1974,44 @@ fn draw_downloads_section(
                 frame_width,
                 frame_height,
                 text_x,
-                rect.y + 64,
+                rect.y + 96,
                 &fit_text_to_width(error, 1, 1, rect.width.saturating_sub(62)).0,
                 1,
                 accent,
             );
         }
-        let action_y = rect.y + rect.height.saturating_sub(34);
-        let action_width = (width.saturating_sub(20)) / 3;
-        if let Some(primary_label) = task.primary_action_label.as_deref() {
+        for button in download_card_buttons(task, rect) {
+            let (symbol, label) = match button.action {
+                ControlAction::DownloadPrimaryAction(_) => (
+                    Some(DesktopSymbol::Download),
+                    match task.primary_action_label.as_deref().unwrap_or("") {
+                        "PAUSE" => "Pause",
+                        "RESUME" => "Resume",
+                        "OPEN" => "Open",
+                        "RETRY" => "Retry",
+                        other => other,
+                    },
+                ),
+                ControlAction::DownloadExport(_) => (
+                    Some(DesktopSymbol::Export),
+                    match task.export_action_label.as_deref().unwrap_or("") {
+                        "EXPORT MP4" => "MP4",
+                        other => other,
+                    },
+                ),
+                _ => (None, "Remove"),
+            };
             draw_action_button(
                 frame,
                 frame_width,
                 frame_height,
-                DesktopUiRect {
-                    x: rect.x + 10,
-                    y: action_y,
-                    width: action_width,
-                    height: 24,
-                },
-                Some(DesktopSymbol::Download),
-                primary_label,
-                hovered_action == Some(ControlAction::DownloadPrimaryAction(task.task_id)),
-                action_accent(ControlAction::DownloadPrimaryAction(task.task_id)),
+                button.rect,
+                symbol,
+                label,
+                hovered_action == Some(button.action),
+                action_accent(button.action),
             );
         }
-        if let Some(export_label) = task.export_action_label.as_deref() {
-            draw_action_button(
-                frame,
-                frame_width,
-                frame_height,
-                DesktopUiRect {
-                    x: rect.x + 10 + action_width + 10,
-                    y: action_y,
-                    width: action_width,
-                    height: 24,
-                },
-                Some(DesktopSymbol::Export),
-                export_label,
-                hovered_action == Some(ControlAction::DownloadExport(task.task_id)),
-                action_accent(ControlAction::DownloadExport(task.task_id)),
-            );
-        }
-        draw_action_button(
-            frame,
-            frame_width,
-            frame_height,
-            DesktopUiRect {
-                x: rect.x + 10 + (action_width + 10) * 2,
-                y: action_y,
-                width: action_width,
-                height: 24,
-            },
-            Some(DesktopSymbol::Remove),
-            "REMOVE",
-            hovered_action == Some(ControlAction::DownloadRemove(task.task_id)),
-            action_accent(ControlAction::DownloadRemove(task.task_id)),
-        );
         y = y.saturating_add(card_height + 14);
     }
 
@@ -2237,6 +2296,14 @@ fn hovered_action_for_layout(
     overlay: &DesktopOverlayViewModel,
 ) -> Option<ControlAction> {
     let (cursor_x, cursor_y) = overlay.cursor_position?;
+    if cursor_x < layout.sidebar_rect.x {
+        return layout
+            .playback_layout
+            .controls
+            .iter()
+            .find(|control| control.rect.contains(cursor_x, cursor_y))
+            .map(|control| ControlAction::from_playback_action(control.action));
+    }
     layout
         .buttons
         .iter()
@@ -2257,6 +2324,20 @@ fn control_action_symbol(action: ControlAction, is_playing: bool) -> Option<Desk
         ControlAction::SeekForward => Some(DesktopSymbol::SeekForward),
         ControlAction::SeekEnd => Some(DesktopSymbol::SeekEnd),
         _ => None,
+    }
+}
+
+fn playback_button_style(action: PlaybackUiAction) -> Option<ButtonStyle> {
+    match action {
+        PlaybackUiAction::SeekStart | PlaybackUiAction::SeekEnd | PlaybackUiAction::Stop => {
+            Some(ButtonStyle::Utility)
+        }
+        PlaybackUiAction::SeekBack | PlaybackUiAction::SeekForward => {
+            Some(ButtonStyle::TransportSecondary)
+        }
+        PlaybackUiAction::TogglePause => Some(ButtonStyle::TransportPrimary),
+        PlaybackUiAction::SetRate(_) => Some(ButtonStyle::Rate),
+        PlaybackUiAction::SeekToRatio(_) => None,
     }
 }
 
@@ -2429,7 +2510,9 @@ fn draw_centered_symbol_label_tones(
 ) {
     let gap = 6;
     let icon_size = rect.height.saturating_sub(14).clamp(10, 16);
-    let label_max_width = rect.width.saturating_sub(icon_size + gap + 16);
+    let label_max_width = rect
+        .width
+        .saturating_sub(symbol.map(|_| icon_size + gap).unwrap_or_default() + 16);
     let (label, label_scale) = fit_text_to_width(label, scale, scale, label_max_width.max(20));
     let text_width = measure_text(&label, label_scale);
     let total_width = text_width
@@ -2468,24 +2551,11 @@ fn draw_centered_symbol_label_tones(
         frame_height,
         text_x,
         rect.y
-            .saturating_add(rect.height.saturating_sub(7 * label_scale) / 2),
+            .saturating_add(rect.height.saturating_sub(text_height(label_scale)) / 2),
         &label,
         label_scale,
         text_color,
     );
-}
-
-fn preview_for_progress_ratio(snapshot: &PlayerSnapshot, ratio: f64) -> Option<SeekPreview> {
-    if !is_scrubbable_timeline(snapshot) {
-        return None;
-    }
-
-    let clamped_ratio = ratio.clamp(0.0, 1.0);
-    let position = snapshot.timeline.position_for_ratio(clamped_ratio)?;
-    Some(SeekPreview {
-        position,
-        ratio: clamped_ratio,
-    })
 }
 
 fn ratio_for_progress_x(progress_rect: DesktopUiRect, cursor_x: f64) -> f64 {
@@ -2516,12 +2586,12 @@ fn control_button_label(action: ControlAction, _play_pause_label: &'static str) 
 
 fn sidebar_button_label(action: ControlAction) -> &'static str {
     match action {
-        ControlAction::OpenLocalFile => "OPEN",
-        ControlAction::OpenHlsDemo => "HLS DEMO",
-        ControlAction::OpenDashDemo => "DASH DEMO",
-        ControlAction::SelectSidebarTab(DesktopSidebarTab::Playlist) => "PLAYLIST",
-        ControlAction::SelectSidebarTab(DesktopSidebarTab::Downloads) => "DOWNLOADS",
-        ControlAction::CreateDownloadCurrentSource => "CURRENT",
+        ControlAction::OpenLocalFile => "File",
+        ControlAction::OpenHlsDemo => "HLS",
+        ControlAction::OpenDashDemo => "DASH",
+        ControlAction::SelectSidebarTab(DesktopSidebarTab::Playlist) => "Queue",
+        ControlAction::SelectSidebarTab(DesktopSidebarTab::Downloads) => "Downloads",
+        ControlAction::CreateDownloadCurrentSource => "Current",
         ControlAction::CreateDownloadHlsDemo => "HLS",
         ControlAction::CreateDownloadDashDemo => "DASH",
         ControlAction::DownloadPrimaryAction(_) => "PRIMARY",
@@ -2533,6 +2603,20 @@ fn sidebar_button_label(action: ControlAction) -> &'static str {
 }
 
 fn normalize_text(text: &str, max_chars: usize) -> String {
+    if SidebarText::active() {
+        let mut characters = text.chars();
+        let clipped = characters.by_ref().take(max_chars).collect::<String>();
+        return if characters.next().is_some() {
+            let mut clipped = clipped
+                .chars()
+                .take(max_chars.saturating_sub(1))
+                .collect::<String>();
+            clipped.push('…');
+            clipped
+        } else {
+            clipped
+        };
+    }
     let normalized = text
         .chars()
         .map(|character| match character.to_ascii_uppercase() {
@@ -2571,7 +2655,7 @@ fn draw_centered_text(
     color: [u8; 4],
 ) {
     let text_width = measure_text(text, scale);
-    let text_height = 7 * scale;
+    let text_height = text_height(scale);
     let x = rect
         .x
         .saturating_add(rect.width.saturating_sub(text_width) / 2);
@@ -2582,6 +2666,9 @@ fn draw_centered_text(
 }
 
 fn measure_text(text: &str, scale: u32) -> u32 {
+    if SidebarText::active() {
+        return typography::measure(text, scale);
+    }
     let glyph_width = 5 * scale;
     let spacing = scale;
     let char_count = text.chars().count() as u32;
@@ -2604,10 +2691,10 @@ fn fit_text_to_width(
         return (normalized, fallback_scale);
     }
 
-    let ellipsis = "...";
+    let ellipsis = if SidebarText::active() { "…" } else { "..." };
     let ellipsis_width = measure_text(ellipsis, fallback_scale);
-    if ellipsis_width >= max_width {
-        return (ellipsis.to_owned(), fallback_scale);
+    if ellipsis_width > max_width {
+        return (String::new(), fallback_scale);
     }
 
     let mut fitted = normalized;
@@ -2643,6 +2730,24 @@ fn draw_text(
     scale: u32,
     color: [u8; 4],
 ) {
+    if SidebarText::active() {
+        let density = RasterScale::current();
+        typography::paint(text, scale, density, |offset_x, offset_y, alpha| {
+            let pixel_x = i64::from(x * density) + i64::from(offset_x);
+            let pixel_y = i64::from(y * density) + i64::from(offset_y);
+            if pixel_x >= 0 && pixel_y >= 0 {
+                blend_pixel(
+                    frame,
+                    frame_width * density,
+                    frame_height * density,
+                    pixel_x as u32,
+                    pixel_y as u32,
+                    apply_coverage(color, f32::from(alpha) / 255.0),
+                );
+            }
+        });
+        return;
+    }
     let glyph_width = 5 * scale;
     let spacing = scale;
 
@@ -2837,6 +2942,11 @@ fn fill_rounded_rect(
         return;
     }
 
+    let scale = RasterScale::current();
+    let (frame_width, frame_height) = (frame_width * scale, frame_height * scale);
+    let rect = scaled_rect(rect, scale);
+    let radius = radius * scale;
+
     let x_start = rect.x.saturating_sub(1).min(frame_width);
     let y_start = rect.y.saturating_sub(1).min(frame_height);
     let x_end = rect
@@ -2876,6 +2986,9 @@ fn fill_circle(
     radius: u32,
     color: [u8; 4],
 ) {
+    let scale = RasterScale::current();
+    let (frame_width, frame_height) = (frame_width * scale, frame_height * scale);
+    let (center_x, center_y, radius) = (center_x * scale, center_y * scale, radius * scale);
     let radius_i32 = radius as i32 + 1;
     let center_x_i32 = center_x as i32;
     let center_y_i32 = center_y as i32;
@@ -2916,6 +3029,9 @@ fn fill_rect(
     rect: DesktopUiRect,
     color: [u8; 4],
 ) {
+    let scale = RasterScale::current();
+    let (frame_width, frame_height) = (frame_width * scale, frame_height * scale);
+    let rect = scaled_rect(rect, scale);
     let x_end = rect.x.saturating_add(rect.width).min(frame_width);
     let y_end = rect.y.saturating_add(rect.height).min(frame_height);
     for y in rect.y.min(frame_height)..y_end {
@@ -3031,6 +3147,10 @@ fn stroke_rounded_rect(
     if rect.width == 0 || rect.height == 0 || thickness == 0 {
         return;
     }
+    let scale = RasterScale::current();
+    let (frame_width, frame_height) = (frame_width * scale, frame_height * scale);
+    let rect = scaled_rect(rect, scale);
+    let (radius, thickness) = (radius * scale, thickness * scale);
     let inner = DesktopUiRect {
         x: rect.x.saturating_add(thickness),
         y: rect.y.saturating_add(thickness),
@@ -3187,13 +3307,14 @@ fn blend_pixel(
 mod tests {
     use super::{
         ButtonStyle, fit_text_to_width, overlay_action_at, overlay_layout, playback_stage_rect,
-        stage_and_sidebar_rects,
+        seek_preview_at, stage_and_sidebar_rects,
     };
     use crate::desktop_ui::{
         ControlAction, DesktopDownloadTaskViewData, DesktopOverlayViewModel,
         DesktopPlaylistItemViewData, DesktopSidebarTab, DesktopUiRect,
     };
     use player_model::{MediaSourceKind, MediaSourceProtocol};
+    use player_render_wgpu::PlaybackUiAction;
     use player_runtime::{
         PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerSnapshot,
         PlayerTimelineKind, PlayerTimelineSnapshot, PresentationState,
@@ -3201,21 +3322,134 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn sidebar_preserves_filename_case_and_unicode() {
+        let _sidebar = super::SidebarText::enter();
+        let filename = "Café — 雨の森 01.mp4";
+        assert_eq!(super::normalize_text(filename, 100), filename);
+        assert_eq!(fit_text_to_width(filename, 1, 1, 500).0, filename);
+        let (label, scale) = fit_text_to_width(filename, 1, 1, 64);
+        assert!(super::measure_text(&label, scale) <= 64);
+        assert!(label.ends_with('…'));
+    }
+
+    #[test]
+    fn retina_overlay_preserves_sidebar_hit_targets() {
+        let overlay = test_overlay_view_model();
+        let snapshot = test_snapshot();
+        let layout = overlay_layout(960, 540, &overlay).expect("layout");
+        let file = layout
+            .buttons
+            .iter()
+            .find(|button| button.action == ControlAction::OpenLocalFile)
+            .expect("file action")
+            .rect;
+        let x = f64::from(file.x + file.width / 2);
+        let y = f64::from(file.y + file.height / 2);
+        for density in [1, 2] {
+            let frame = super::render_desktop_overlay(
+                960 * density,
+                540 * density,
+                f64::from(density),
+                &snapshot,
+                None,
+                &overlay,
+            )
+            .expect("rendered overlay");
+            assert_eq!((frame.width, frame.height), (960 * density, 540 * density));
+            assert_eq!(
+                frame.bytes.len(),
+                frame.width as usize * frame.height as usize * 4
+            );
+            assert_eq!(
+                overlay_action_at(
+                    960 * density,
+                    540 * density,
+                    f64::from(density),
+                    x * f64::from(density),
+                    y * f64::from(density),
+                    &snapshot,
+                    &overlay
+                ),
+                Some(ControlAction::OpenLocalFile)
+            );
+        }
+        assert_eq!(super::RasterScale::current(), 1);
+        assert!(!super::SidebarText::active());
+    }
+
+    #[test]
+    #[ignore = "writes optional visual review artifacts to VESPER_UI_CAPTURE_DIR"]
+    fn export_sidebar_previews() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::path::PathBuf::from(std::env::var("VESPER_UI_CAPTURE_DIR")?);
+        std::fs::create_dir_all(&directory)?;
+        for (width, height, density) in [(960, 540, 1), (1280, 720, 2)] {
+            for downloads in [false, true] {
+                let mut overlay = test_overlay_view_model();
+                overlay.playlist_items[0].label = "Café — 雨の森 01.mp4".to_owned();
+                if downloads {
+                    overlay.sidebar_tab = DesktopSidebarTab::Downloads;
+                    overlay.download_tasks.push(DesktopDownloadTaskViewData {
+                        task_id: 7,
+                        label: "A long concert recording with multiple tracks".into(),
+                        status: "DOWNLOADING".into(),
+                        progress_summary: "42% · 18.4 MiB / 43.8 MiB".into(),
+                        progress_ratio: Some(0.42),
+                        completed_path: None,
+                        error_message: None,
+                        primary_action_label: Some("PAUSE".into()),
+                        export_action_label: None,
+                        is_export_enabled: false,
+                        is_remove_enabled: true,
+                        is_exporting: false,
+                        export_progress: None,
+                    });
+                }
+                let frame = super::render_desktop_overlay(
+                    width * density,
+                    height * density,
+                    f64::from(density),
+                    &test_snapshot(),
+                    None,
+                    &overlay,
+                )
+                .ok_or("render failed")?;
+                let name = format!(
+                    "{}-{width}x{height}-{density}x",
+                    if downloads { "downloads" } else { "queue" }
+                );
+                std::fs::write(directory.join(format!("{name}.rgba")), &frame.bytes)?;
+                std::fs::write(
+                    directory.join(format!("{name}.json")),
+                    format!(
+                        "{{\"width\":{},\"height\":{},\"kind\":\"rendered fixture\"}}",
+                        frame.width, frame.height
+                    ),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn progress_track_stays_below_transport_row() {
         let overlay = test_overlay_view_model();
         let layout = overlay_layout(1365, 967, &overlay).expect("overlay layout");
         let transport_bottom = layout
-            .buttons
+            .playback_layout
+            .controls
             .iter()
-            .filter(|button| {
+            .filter(|control| {
                 matches!(
-                    button.style,
-                    ButtonStyle::Utility
-                        | ButtonStyle::TransportSecondary
-                        | ButtonStyle::TransportPrimary
+                    control.action,
+                    PlaybackUiAction::SeekStart
+                        | PlaybackUiAction::SeekBack
+                        | PlaybackUiAction::TogglePause
+                        | PlaybackUiAction::SeekForward
+                        | PlaybackUiAction::SeekEnd
+                        | PlaybackUiAction::Stop
                 )
             })
-            .map(|button| button.rect.y.saturating_add(button.rect.height))
+            .map(|control| control.rect.y.saturating_add(control.rect.height))
             .max()
             .expect("transport controls");
 
@@ -3232,18 +3466,22 @@ mod tests {
         let overlay = test_overlay_view_model();
         let layout = overlay_layout(1024, 720, &overlay).expect("overlay layout");
         let bounds = layout
-            .buttons
+            .playback_layout
+            .controls
             .iter()
-            .filter(|button| {
+            .filter(|control| {
                 matches!(
-                    button.style,
-                    ButtonStyle::Utility
-                        | ButtonStyle::TransportSecondary
-                        | ButtonStyle::TransportPrimary
+                    control.action,
+                    PlaybackUiAction::SeekStart
+                        | PlaybackUiAction::SeekBack
+                        | PlaybackUiAction::TogglePause
+                        | PlaybackUiAction::SeekForward
+                        | PlaybackUiAction::SeekEnd
+                        | PlaybackUiAction::Stop
                 )
             })
-            .fold(None::<DesktopUiRect>, |bounds, button| {
-                let rect = button.rect;
+            .fold(None::<DesktopUiRect>, |bounds, control| {
+                let rect = control.rect;
                 Some(match bounds {
                     Some(existing) => {
                         let left = existing.x.min(rect.x);
@@ -3317,11 +3555,12 @@ mod tests {
         let overlay = test_overlay_view_model();
         let layout = overlay_layout(1365, 967, &overlay).expect("overlay layout");
         let bounds = layout
-            .buttons
+            .playback_layout
+            .controls
             .iter()
-            .filter(|button| matches!(button.style, ButtonStyle::Rate))
-            .fold(None::<DesktopUiRect>, |bounds, button| {
-                let rect = button.rect;
+            .filter(|control| matches!(control.action, PlaybackUiAction::SetRate(_)))
+            .fold(None::<DesktopUiRect>, |bounds, control| {
+                let rect = control.rect;
                 Some(match bounds {
                     Some(existing) => {
                         let left = existing.x.min(rect.x);
@@ -3544,7 +3783,7 @@ mod tests {
             .map(|button| button.rect.y)
             .min()
             .expect("source buttons");
-        let source_header_y = source_row_top.saturating_sub(18);
+        let source_header_y = source_row_top.saturating_sub(24);
         let header_bottom = layout
             .header_rect
             .y
@@ -3623,6 +3862,42 @@ mod tests {
 
         let action = overlay_action_at(1365, 967, 1.0, center_x, center_y, &snapshot, &overlay);
         assert_eq!(action, Some(ControlAction::OpenHlsDemo));
+    }
+
+    #[test]
+    fn stage_transport_hit_uses_renderer_playback_layout() {
+        let overlay = test_overlay_view_model();
+        let snapshot = test_snapshot();
+        let layout = overlay_layout(1365, 967, &overlay).expect("overlay layout");
+        let control = layout
+            .playback_layout
+            .controls
+            .iter()
+            .find(|control| control.action == PlaybackUiAction::SeekStart)
+            .expect("seek start control");
+        let center_x = f64::from(control.rect.x + control.rect.width / 2);
+        let center_y = f64::from(control.rect.y + control.rect.height / 2);
+
+        let action = overlay_action_at(1365, 967, 1.0, center_x, center_y, &snapshot, &overlay);
+        assert_eq!(action, Some(ControlAction::SeekStart));
+    }
+
+    #[test]
+    fn stage_seek_hit_requires_runtime_seekable_range() {
+        let overlay = test_overlay_view_model();
+        let snapshot = test_snapshot();
+        let layout = overlay_layout(1365, 967, &overlay).expect("overlay layout");
+        let progress_hit_rect = layout.playback_layout.progress_hit_rect;
+        let cursor_x = f64::from(progress_hit_rect.x + progress_hit_rect.width / 2);
+        let cursor_y = f64::from(progress_hit_rect.y + progress_hit_rect.height / 2);
+
+        assert!(
+            seek_preview_at(1365, 967, 1.0, cursor_x, cursor_y, &snapshot, &overlay,).is_none()
+        );
+        assert_eq!(
+            overlay_action_at(1365, 967, 1.0, cursor_x, cursor_y, &snapshot, &overlay,),
+            None
+        );
     }
 
     #[test]

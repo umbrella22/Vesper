@@ -98,6 +98,12 @@ Release assets and pin every archive checksum. Stable and prerelease tags are
 pushed to the package repository after all required release assets pass
 verification.
 
+The checkout includes a consumer that resolves this remote package without a
+local Rust resolver bundle at
+[`fixtures/plugins/ios-spm-consumer`](../../../fixtures/plugins/ios-spm-consumer/).
+Run its `swift package resolve` command to verify the published tag and binary
+artifact closure.
+
 ### Swift Package (local)
 
 For app projects in this repository, depend on `lib/ios/VesperPlayerKit` as a
@@ -216,11 +222,16 @@ for SwiftUI scopes, runtime switching, and matching UI package requirements.
 ## Minimal SwiftUI Usage
 
 ```swift
+import Foundation
 import VesperPlayerKit
 import SwiftUI
 
 struct PlayerView: View {
     @StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
+        initialSource: VesperPlayerSource.hls(
+            url: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            label: "Sample video"
+        ),
         resiliencePolicy: .resilient()
     )
 

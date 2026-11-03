@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+ab_glyph = "0.2.32"
 anyhow.workspace = true
 pollster.workspace = true
 player-model = { path = "../../crates/model/player-model" }

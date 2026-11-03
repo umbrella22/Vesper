@@ -111,6 +111,22 @@ void main() {
     expect(received, hasLength(1));
   });
 
+  test('create keeps source initialization explicit before playback', () async {
+    controller = await VesperPlayerController.create(
+      initialSource: VesperPlayerSource.hls(
+        uri: 'https://fixture.test/master.m3u8',
+        label: 'Fixture',
+      ),
+    );
+
+    expect(platform.initializeCalls, 0);
+    await controller!.play();
+    expect(platform.playCalls, 1);
+
+    await controller!.initialize();
+    expect(platform.initializeCalls, 1);
+  });
+
   test('forwards pipeline EventHook reports once without changing snapshot',
       () async {
     controller = await VesperPlayerController.create();
@@ -242,6 +258,8 @@ final class _EventTestPlatform extends VesperPlayerPlatform {
   final StreamController<VesperPlayerEvent> _events =
       StreamController<VesperPlayerEvent>.broadcast(sync: true);
   VesperPlayerEvent? eventOnDispose;
+  int initializeCalls = 0;
+  int playCalls = 0;
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -274,6 +292,16 @@ final class _EventTestPlatform extends VesperPlayerPlatform {
 
   @override
   Stream<VesperPlayerEvent> eventsFor(String playerId) => _events.stream;
+
+  @override
+  Future<void> initialize(String playerId) async {
+    initializeCalls += 1;
+  }
+
+  @override
+  Future<void> play(String playerId) async {
+    playCalls += 1;
+  }
 
   @override
   Future<void> dispose(String playerId) async {

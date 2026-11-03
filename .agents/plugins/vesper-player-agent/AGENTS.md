@@ -68,8 +68,10 @@ already proves them impossible.
   `SAFETY` rationale.
 - Runtime is the source of shared defaults and cross-platform playback
   semantics. Platform layers may override only for explicit platform reasons.
-- The workspace MSRV is Rust 1.99.0. Treat the current checkout's toolchain and
-  generated/artifact evidence as authoritative for validation claims.
+- The workspace MSRV is declared by `rust-version` in `Cargo.toml`, and the
+  build toolchain is pinned in `rust-toolchain.toml`. Treat the current
+  checkout's toolchain and generated/artifact evidence as authoritative for
+  validation claims.
 
 ## Streaming Model
 

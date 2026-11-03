@@ -5,8 +5,9 @@ simulation or archive check. A protocol enum or capability probe is not proof
 that a host can play the media; public claims need a host route and regression
 evidence.
 
-The current workspace MSRV is Rust 1.99.0. Toolchain, cache, and device results
-bind to the checkout in which they were captured.
+The workspace MSRV is declared in `Cargo.toml`, and the build toolchain is
+pinned in `rust-toolchain.toml`. Toolchain, cache, and device results bind to
+the checkout in which they were captured.
 
 Also separate committed baseline behavior from uncommitted worktree candidates.
 A test file in the checkout is not execution evidence, and a successful local

@@ -106,6 +106,12 @@ Release gate:
 
 ## Third-Party Runtime Tracking Requirements
 
+The experimental `basic-player` desktop example embeds the unmodified Ubuntu
+Light font, copyright 2011 Canonical Ltd., under the Ubuntu Font Licence 1.0.
+The font and its full licence are in `examples/basic-player/assets/fonts/`.
+Desktop distributions that embed this font must retain `UFL.txt`. The font is
+separate from Vesper's Apache-2.0 source and from optional FFmpeg runtimes.
+
 When a release artifact bundles a third-party runtime, add an entry here with:
 
 1. component name

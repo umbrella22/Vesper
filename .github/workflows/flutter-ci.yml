@@ -7,6 +7,7 @@ on:
       - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
       - ".github/scripts/prepare-flutter-ios-local-spm.sh"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -43,6 +44,7 @@ on:
       - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
       - ".github/scripts/prepare-flutter-ios-local-spm.sh"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -145,6 +147,36 @@ jobs:
           ./scripts/vesper flutter pub-dry-run
           /tmp/vesper-flutter-pub-dry-run
 
+  flutter-pub-consumer:
+    name: Flutter Hosted Package Consumer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up current Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.2"
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Resolve published Flutter consumer fixture
+        working-directory: fixtures/plugins/flutter-pub-consumer
+        run: flutter pub get
+
+      - name: Analyze published Flutter consumer fixture
+        working-directory: fixtures/plugins/flutter-pub-consumer
+        run: flutter analyze
+
+      - name: Test published Flutter consumer fixture
+        working-directory: fixtures/plugins/flutter-pub-consumer
+        run: flutter test
+
   flutter-android:
     name: Flutter Android Host ${{ matrix.abi }}
     runs-on: ubuntu-latest
@@ -172,7 +204,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: ./.github/actions/setup-rust
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -401,7 +433,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: ./.github/actions/setup-rust
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 

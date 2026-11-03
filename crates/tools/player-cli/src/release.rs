@@ -719,13 +719,20 @@ impl ReleaseContext {
             )));
         }
         let expected_build = parsed.android_code()?;
-        let issues = verify_product_version(
+        let mut issues = verify_product_version(
             &self.root,
             &parsed,
             &publication_version,
             &expected_build,
             &expected_build,
         )?;
+        // Metadata-only unit fixtures intentionally omit the public docs. The
+        // documentation gate applies to a complete checkout, identified by its
+        // tracked workflow directory. Metadata-only unit fixtures do not carry
+        // repository automation or the public docs.
+        if self.root.join(".github/workflows").is_dir() {
+            verify_current_documentation(&self.root, &version, &mut issues)?;
+        }
         if !issues.is_empty() {
             let mut message = issues.join("\n");
             message.push_str(&format!(
@@ -1758,6 +1765,188 @@ fn verify_product_version(
     Ok(issues)
 }
 
+fn verify_current_documentation(
+    root: &Path,
+    version: &str,
+    issues: &mut Vec<String>,
+) -> ReleaseResult<()> {
+    expect_documentation_contains(
+        root,
+        "README.md",
+        &format!("cargo install vesper-player-cli --version {version} --locked"),
+        "current CLI install version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "README.md",
+        &format!(
+            "player-plugin = {{ package = \"vesper-player-plugin\", version = \"={version}\" }}"
+        ),
+        "current native plugin SDK version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "README.md",
+        &format!("The workspace and package metadata identify the `{version}`"),
+        "current release status version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "README.zh-CN.md",
+        &format!("插件 CLI 和 Rust author SDK 使用统一的 `{version}` 版本"),
+        "current Chinese CLI version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "README.zh-CN.md",
+        &format!("cargo install vesper-player-cli --version {version} --locked"),
+        "current Chinese CLI install version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "lib/flutter/vesper_player/README.md",
+        &format!("  vesper_player: {version}"),
+        "current Flutter package version",
+        issues,
+    )?;
+    for package in [
+        "vesper_player_external_playback",
+        "vesper_player_ui",
+        "vesper_player_source_normalizer_ffmpeg",
+        "vesper_player_remux_ffmpeg",
+    ] {
+        expect_documentation_contains(
+            root,
+            "lib/flutter/vesper_player/README.md",
+            &format!("  {package}: {version}"),
+            "current optional Flutter package version",
+            issues,
+        )?;
+    }
+    for coordinate in [
+        "vesper-player-kit",
+        "vesper-player-kit-compose",
+        "vesper-player-kit-compose-ui",
+        "vesper-player-kit-external-playback",
+        "vesper-player-kit-source-normalizer-ffmpeg",
+        "vesper-player-kit-remux-ffmpeg",
+        "vesper-player-kit-performance-diagnostics",
+    ] {
+        expect_documentation_contains(
+            root,
+            "lib/android/README.md",
+            &format!("io.github.umbrella22.vesper:{coordinate}:{version}"),
+            "current Android Maven coordinate version",
+            issues,
+        )?;
+    }
+    expect_documentation_absent(
+        root,
+        "lib/android/README.md",
+        "<version>",
+        "unresolved Android Maven version placeholder",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "lib/flutter/vesper_player/README.md",
+        "await controller.initialize();",
+        "explicit Flutter initialization in quickstart",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "lib/ios/VesperPlayerKit/README.md",
+        "initialSource: VesperPlayerSource.hls(",
+        "iOS quickstart source",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "lib/android/README.md",
+        "initialSource = VesperPlayerSource.hls(",
+        "Android quickstart source",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "fixtures/plugins/ios-spm-consumer/Package.swift",
+        &format!("exact: \"{version}\""),
+        "published SwiftPM consumer version",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "fixtures/plugins/ios-spm-consumer/Package.swift",
+        "url: \"https://github.com/umbrella22/VesperPlayerKit.git\"",
+        "remote SwiftPM consumer dependency",
+        issues,
+    )?;
+    expect_documentation_absent(
+        root,
+        "fixtures/plugins/ios-spm-consumer/Package.swift",
+        "path:",
+        "local SwiftPM consumer dependency",
+        issues,
+    )?;
+    expect_documentation_contains(
+        root,
+        "fixtures/plugins/flutter-pub-consumer/pubspec.yaml",
+        &format!("  vesper_player: {version}"),
+        "published Flutter consumer version",
+        issues,
+    )?;
+    expect_documentation_absent(
+        root,
+        "fixtures/plugins/flutter-pub-consumer/pubspec.yaml",
+        "path:",
+        "local Flutter consumer dependency",
+        issues,
+    )?;
+    Ok(())
+}
+
+fn expect_documentation_contains(
+    root: &Path,
+    relative: &str,
+    snippet: &str,
+    label: &str,
+    issues: &mut Vec<String>,
+) -> ReleaseResult<()> {
+    let path = root.join(relative);
+    let source = read_required_text(&path)?;
+    if !source.contains(snippet) {
+        issues.push(format!(
+            "Documentation version/lifecycle mismatch.\n  {}\n  missing {label}: {snippet}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn expect_documentation_absent(
+    root: &Path,
+    relative: &str,
+    snippet: &str,
+    label: &str,
+    issues: &mut Vec<String>,
+) -> ReleaseResult<()> {
+    let path = root.join(relative);
+    let source = read_required_text(&path)?;
+    if source.contains(snippet) {
+        issues.push(format!(
+            "Documentation version/lifecycle mismatch.\n  {}\n  found {label}: {snippet}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn expect_line(
     root: &Path,
     relative: &str,
@@ -2693,6 +2882,30 @@ mod tests {
             issue.contains("Cargo workspace version mismatch.")
                 && issue.contains("expected 0.4.0, found 0.4.1")
         }));
+    }
+
+    #[test]
+    fn current_documentation_check_reports_stale_version_snippets() {
+        let directory = tempfile::tempdir().expect("temporary documentation fixture");
+        write_fixture(
+            directory.path(),
+            "README.md",
+            "cargo install vesper-player-cli --version 0.9.0 --locked\n",
+        );
+        let mut issues = Vec::new();
+
+        expect_documentation_contains(
+            directory.path(),
+            "README.md",
+            "cargo install vesper-player-cli --version 0.9.1 --locked",
+            "current CLI install version",
+            &mut issues,
+        )
+        .expect("documentation fixture should be readable");
+
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("current CLI install version"));
+        assert!(issues[0].contains("0.9.1"));
     }
 
     #[test]

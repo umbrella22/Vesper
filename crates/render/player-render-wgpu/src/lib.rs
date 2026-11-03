@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 
 mod pipeline;
+mod playback_ui;
 mod renderer;
 mod shaders;
 mod types;
@@ -17,6 +18,11 @@ mod validation;
 mod viewport;
 mod window;
 
+pub use playback_ui::{
+    PLAYBACK_RATES, PlaybackControl, PlaybackLayoutMetrics, PlaybackOverlayPrimitive, PlaybackRect,
+    PlaybackSeekPreview, PlaybackSeekRange, PlaybackTimelineKind, PlaybackUiAction,
+    PlaybackUiLayout, PlaybackUiViewModel,
+};
 pub use renderer::VideoRenderer;
 pub use types::{
     DisplayRect, RenderFrameOutcome, RenderMode, RenderSurfaceConfig, RgbaOverlayFrame,

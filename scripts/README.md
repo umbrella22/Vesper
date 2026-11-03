@@ -11,6 +11,7 @@ cannot accidentally expose registry credentials through CLI arguments.
 ```text
 scripts/
   vesper      Unified task entrypoint
+  bump-rust-version.sh       Toolchain and MSRV pin bump and consistency check
   plugin-sdk-release.sh     Rust plugin SDK verification and crates.io publisher
   ffmpeg-profiles.toml       FFmpeg profile declarations
   ffmpeg-source-policy.toml  FFmpeg source and license policy
@@ -108,11 +109,22 @@ version along with the rest of its changelog content.
 
 ## Rust Toolchain
 
-The workspace MSRV and development toolchain are Rust 1.99.0.
-`rust-toolchain.toml` selects that release with the `rustfmt` and `clippy`
-components. CI toolchain pins, release scripts, and generated plugin manifests
-use the same version. Cross-compilation targets are installed by each platform
-build setup rather than required for every checkout.
+The build toolchain is pinned in `rust-toolchain.toml`; CI jobs read that file
+through `.github/actions/setup-rust` and do not carry their own version pins.
+The workspace MSRV is declared by `rust-version` in `Cargo.toml` and may stay
+below the build toolchain until a language, library, or dependency requirement
+forces it to move. Generated plugin manifests inherit the workspace MSRV at
+build time. Cross-compilation targets are installed by each platform build
+setup rather than required for every checkout.
+
+Update the pins with:
+
+```sh
+./scripts/bump-rust-version.sh bump 1.100.0          # toolchain only
+./scripts/bump-rust-version.sh bump 1.100.0 --msrv   # toolchain and MSRV
+./scripts/bump-rust-version.sh msrv 1.100.0          # MSRV only
+./scripts/bump-rust-version.sh check                 # verify every pin agrees
+```
 
 A directory-level `rustup override` takes precedence over the toolchain file.
 `rustup show active-toolchain` reports the selected toolchain and its source;
@@ -129,11 +141,11 @@ macros through the author SDK, packaging and host layers, loader, and CLI.
 Run `plugin-sdk-release.sh verify` before pushing the release commit. The
 command tests all public packages and creates their `.crate` archives in an
 isolated source snapshot, so local Git submodule metadata and working-tree build
-artifacts cannot affect the package contents. The script invokes the exact Rust
-1.99.0 toolchain through `rustup`, independent of the caller's default or local
-directory override. Pre-publication archives resolve same-release dependencies
-through temporary Cargo config patches; those patches are not written into the
-source tree or published manifests. After the release commit is on `main` and
+artifacts cannot affect the package contents. The script invokes the toolchain
+pinned in `rust-toolchain.toml` through `rustup`, independent of the caller's
+default or local directory override. Pre-publication archives resolve
+same-release dependencies through temporary Cargo config patches; those patches
+are not written into the source tree or published manifests. After the release commit is on `main` and
 its CI checks are green, create and push the annotated
 `plugin-sdk-v<version>` tag on that same commit. The dedicated workflow enters
 the protected `cargo.io` GitHub Environment, maps its `CARGOTOKEN` secret to
@@ -198,11 +210,11 @@ release jobs.
 ## GitHub Actions
 
 Every workflow that invokes `./scripts/vesper` first runs the local
-`.github/actions/setup-vesper-cli` composite action. The action installs Rust
-1.99.0, builds `player-cli` once with `cargo build --locked --release`, and
-exports the resulting executable through `VESPER_CLI`. The thin
-`scripts/vesper` launcher then executes that prebuilt binary instead of running
-Cargo for every command. On Windows, CLI steps that use the launcher explicitly
+`.github/actions/setup-vesper-cli` composite action. The action installs the
+toolchain pinned in `rust-toolchain.toml`, builds `player-cli` once with
+`cargo build --locked --release`, and exports the resulting executable through
+`VESPER_CLI`. The thin `scripts/vesper` launcher then executes that prebuilt
+binary instead of running Cargo for every command. On Windows, CLI steps that use the launcher explicitly
 select Bash while the setup action exports `vesper.exe`.
 
 The workflow split is intentional:

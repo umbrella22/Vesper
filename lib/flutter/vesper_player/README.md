@@ -63,15 +63,15 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: 0.6.0
+  vesper_player: 0.9.1
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: 0.6.0
+  vesper_player_external_playback: 0.9.1
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: 0.6.0
+  vesper_player_ui: 0.9.1
   # Optional normalized-resource playback.
-  vesper_player_source_normalizer_ffmpeg: 0.6.0
+  vesper_player_source_normalizer_ffmpeg: 0.9.1
   # Optional post-download MP4 remux.
-  vesper_player_remux_ffmpeg: 0.6.0
+  vesper_player_remux_ffmpeg: 0.9.1
 ```
 
 Repository source-checkout development writes ignored local dependency
@@ -80,6 +80,12 @@ overrides with:
 ```sh
 ./scripts/vesper flutter local-overrides
 ```
+
+The hosted-package consumer fixture at
+[`fixtures/plugins/flutter-pub-consumer`](../../../fixtures/plugins/flutter-pub-consumer/)
+deliberately has no path overrides. Run its `flutter pub get`, `flutter analyze`,
+and `flutter test` commands to verify the published pub.dev package from an
+external application.
 
 External hosts that intentionally consume a source checkout must provide
 root-level overrides for the federated packages that `vesper_player` resolves
@@ -132,23 +138,29 @@ serialized first-party plugin references must use the new identifiers.
 ```dart
 import 'package:vesper_player/vesper_player.dart';
 
-// 1. Create a controller.
+// In an async setup method, create a controller.
 final controller = await VesperPlayerController.create(
   initialSource: VesperPlayerSource.hls(
-    uri: 'https://example.com/stream.m3u8',
+    uri: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8',
     label: 'Sample video',
   ),
 );
 
-// 2. Embed the view in your widget tree.
-VesperPlayerView(controller: controller)
+// 2. Initialize the source before issuing playback commands.
+await controller.initialize();
 
-// 3. Start playback.
+// 3. Keep the view for your build method and start playback after initialize.
+final view = VesperPlayerView(controller: controller);
 await controller.play();
-
-// 4. Dispose when the widget goes away.
-await controller.dispose();
+return view;
 ```
+
+`VesperPlayerController.create` registers a player session but does not
+initialize its source. `VesperPlayerView` also does not manage the controller
+lifecycle, so call `initialize()` explicitly before `play()` in imperative
+Flutter hosts and call `await controller.dispose()` from the host teardown path.
+Android's Compose `VesperPlayerSurface` is a separate managed lifecycle path and
+initializes its controller by default.
 
 ### Listen to playback state
 

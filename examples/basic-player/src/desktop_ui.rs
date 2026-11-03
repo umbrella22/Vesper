@@ -2,15 +2,13 @@
 
 use std::time::Duration;
 
+use player_render_wgpu::{
+    PLAYBACK_RATES, PlaybackLayoutMetrics, PlaybackRect, PlaybackSeekPreview, PlaybackSeekRange,
+    PlaybackTimelineKind, PlaybackUiAction, PlaybackUiViewModel,
+};
 use player_runtime::{PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind, PresentationState};
 
-pub const CONTROL_RATES: &[(f32, &str)] = &[
-    (0.5, "0.5X"),
-    (1.0, "1X"),
-    (1.5, "1.5X"),
-    (2.0, "2X"),
-    (3.0, "3X"),
-];
+pub const CONTROL_RATES: &[(f32, &str)] = PLAYBACK_RATES;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlAction {
@@ -35,11 +33,48 @@ pub enum ControlAction {
     DownloadRemove(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SeekPreview {
-    pub position: Duration,
-    pub ratio: f64,
+impl ControlAction {
+    /// Converts a renderer playback action into the example's broader action
+    /// space. Sidebar, download, and source actions remain example-owned.
+    pub fn from_playback_action(action: PlaybackUiAction) -> Self {
+        match action {
+            PlaybackUiAction::SeekStart => Self::SeekStart,
+            PlaybackUiAction::SeekBack => Self::SeekBack,
+            PlaybackUiAction::TogglePause => Self::TogglePause,
+            PlaybackUiAction::Stop => Self::Stop,
+            PlaybackUiAction::SeekForward => Self::SeekForward,
+            PlaybackUiAction::SeekEnd => Self::SeekEnd,
+            PlaybackUiAction::SetRate(rate) => Self::SetRate(rate),
+            PlaybackUiAction::SeekToRatio(ratio) => Self::SeekToRatio(ratio),
+        }
+    }
+
+    pub fn as_playback_action(self) -> Option<PlaybackUiAction> {
+        match self {
+            Self::SeekStart => Some(PlaybackUiAction::SeekStart),
+            Self::SeekBack => Some(PlaybackUiAction::SeekBack),
+            Self::TogglePause => Some(PlaybackUiAction::TogglePause),
+            Self::Stop => Some(PlaybackUiAction::Stop),
+            Self::SeekForward => Some(PlaybackUiAction::SeekForward),
+            Self::SeekEnd => Some(PlaybackUiAction::SeekEnd),
+            Self::SetRate(rate) => Some(PlaybackUiAction::SetRate(rate)),
+            Self::SeekToRatio(ratio) => Some(PlaybackUiAction::SeekToRatio(ratio)),
+            Self::OpenLocalFile
+            | Self::OpenHlsDemo
+            | Self::OpenDashDemo
+            | Self::SelectSidebarTab(_)
+            | Self::FocusPlaylistItem(_)
+            | Self::CreateDownloadHlsDemo
+            | Self::CreateDownloadDashDemo
+            | Self::CreateDownloadCurrentSource
+            | Self::DownloadPrimaryAction(_)
+            | Self::DownloadExport(_)
+            | Self::DownloadRemove(_) => None,
+        }
+    }
 }
+
+pub type SeekPreview = PlaybackSeekPreview;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopSidebarTab {
@@ -94,105 +129,8 @@ pub struct DesktopOverlayViewModel {
     pub export_plugin_installed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DesktopUiRect {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl DesktopUiRect {
-    pub fn contains(self, x: u32, y: u32) -> bool {
-        x >= self.x
-            && x < self.x.saturating_add(self.width)
-            && y >= self.y
-            && y < self.y.saturating_add(self.height)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DesktopUiLayoutMetrics {
-    pub bar_height: u32,
-    pub padding: u32,
-    pub gap: u32,
-    pub icon_size: u32,
-    pub rate_width: u32,
-    pub progress_height: u32,
-    pub progress_hit_slop_top: u32,
-    pub progress_hit_slop_bottom: u32,
-    pub time_label_height: u32,
-}
-
-impl DesktopUiLayoutMetrics {
-    pub fn for_surface(frame_width: u32, frame_height: u32) -> Option<Self> {
-        if frame_width == 0 || frame_height == 0 {
-            return None;
-        }
-
-        let bar_height = (frame_height / 5).clamp(60, 88);
-        let padding = (bar_height / 5).max(8);
-        let gap = (padding / 2).max(8);
-        let icon_size = bar_height.saturating_sub(padding * 2);
-        let rate_width = (icon_size + 20).max(58);
-
-        Some(Self {
-            bar_height,
-            padding,
-            gap,
-            icon_size,
-            rate_width,
-            progress_height: 4,
-            progress_hit_slop_top: 8,
-            progress_hit_slop_bottom: 4,
-            time_label_height: 14,
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn overlay_origin_y(self, frame_height: u32) -> u32 {
-        frame_height.saturating_sub(self.bar_height)
-    }
-
-    #[allow(dead_code)]
-    pub fn button_origin_y(self, frame_height: u32) -> u32 {
-        self.overlay_origin_y(frame_height)
-            .saturating_add(self.padding)
-    }
-
-    #[allow(dead_code)]
-    pub fn progress_rect(self, frame_width: u32, frame_height: u32) -> DesktopUiRect {
-        DesktopUiRect {
-            x: 0,
-            y: self.overlay_origin_y(frame_height),
-            width: frame_width,
-            height: self.progress_height,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn progress_hit_rect(self, frame_width: u32, frame_height: u32) -> DesktopUiRect {
-        let progress_rect = self.progress_rect(frame_width, frame_height);
-        let y = progress_rect.y.saturating_sub(self.progress_hit_slop_top);
-        let bottom = progress_rect
-            .y
-            .saturating_add(progress_rect.height)
-            .saturating_add(self.progress_hit_slop_bottom)
-            .min(frame_height);
-
-        DesktopUiRect {
-            x: progress_rect.x,
-            y,
-            width: progress_rect.width,
-            height: bottom.saturating_sub(y),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn time_label_offset_y(self) -> u32 {
-        self.bar_height.saturating_sub(self.time_label_height) / 2
-    }
-}
+pub type DesktopUiRect = PlaybackRect;
+pub type DesktopUiLayoutMetrics = PlaybackLayoutMetrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopUiTimelineKind {
@@ -223,6 +161,9 @@ impl DesktopUiTimelineKind {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct DesktopUiViewModel {
+    /// Renderer-owned playback model; the surrounding fields keep the
+    /// example's existing text and drawing adapters source-compatible.
+    pub playback_ui: PlaybackUiViewModel,
     pub timeline_kind: DesktopUiTimelineKind,
     pub is_playing: bool,
     pub is_seekable: bool,
@@ -254,7 +195,24 @@ impl DesktopUiViewModel {
             .map(|preview| preview.ratio)
             .or_else(|| snapshot.timeline.displayed_ratio());
         let play_pause_label = play_pause_label(snapshot.state);
-        let can_scrub = is_scrubbable(snapshot.timeline.kind, snapshot.timeline.is_seekable);
+        let can_scrub = is_scrubbable_timeline(snapshot);
+        let playback_ui = PlaybackUiViewModel::new(
+            playback_timeline_kind(snapshot.timeline.kind),
+            snapshot.state == PresentationState::Playing,
+            snapshot.timeline.is_seekable,
+            controls_visible,
+            snapshot.playback_rate,
+            displayed_position,
+            duration,
+            snapshot
+                .timeline
+                .seekable_range
+                .map(|range| PlaybackSeekRange {
+                    start: range.start,
+                    end: range.end,
+                }),
+            displayed_progress_ratio,
+        );
         let time_label = duration
             .map(|duration| {
                 format!(
@@ -266,6 +224,7 @@ impl DesktopUiViewModel {
             .unwrap_or_else(|| format_duration(displayed_position));
 
         Self {
+            playback_ui,
             timeline_kind,
             is_playing: snapshot.state == PresentationState::Playing,
             is_seekable: snapshot.timeline.is_seekable,
@@ -280,6 +239,10 @@ impl DesktopUiViewModel {
             play_pause_label,
             time_label,
         }
+    }
+
+    pub fn renderer_action(&self, action: PlaybackUiAction) -> ControlAction {
+        ControlAction::from_playback_action(action)
     }
 
     pub fn is_rate_active(&self, rate: f32) -> bool {
@@ -297,7 +260,11 @@ pub fn playback_state_label(state: PresentationState) -> &'static str {
 }
 
 pub fn is_scrubbable_timeline(snapshot: &PlayerSnapshot) -> bool {
-    is_scrubbable(snapshot.timeline.kind, snapshot.timeline.is_seekable)
+    is_scrubbable(
+        snapshot.timeline.kind,
+        snapshot.timeline.is_seekable,
+        snapshot.timeline.seekable_range.is_some(),
+    )
 }
 
 pub fn format_duration(duration: Duration) -> String {
@@ -316,13 +283,27 @@ fn play_pause_label(state: PresentationState) -> &'static str {
     }
 }
 
-fn is_scrubbable(kind: PlayerTimelineKind, is_seekable: bool) -> bool {
-    is_seekable && matches!(kind, PlayerTimelineKind::Vod | PlayerTimelineKind::LiveDvr)
+fn is_scrubbable(kind: PlayerTimelineKind, is_seekable: bool, has_seekable_range: bool) -> bool {
+    is_seekable
+        && has_seekable_range
+        && matches!(kind, PlayerTimelineKind::Vod | PlayerTimelineKind::LiveDvr)
+}
+
+fn playback_timeline_kind(kind: PlayerTimelineKind) -> PlaybackTimelineKind {
+    match kind {
+        PlayerTimelineKind::Vod => PlaybackTimelineKind::Vod,
+        PlayerTimelineKind::Live => PlaybackTimelineKind::Live,
+        PlayerTimelineKind::LiveDvr => PlaybackTimelineKind::LiveDvr,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopUiLayoutMetrics, DesktopUiTimelineKind, DesktopUiViewModel, SeekPreview};
+    use super::{
+        ControlAction, DesktopUiLayoutMetrics, DesktopUiTimelineKind, DesktopUiViewModel,
+        SeekPreview,
+    };
+    use player_render_wgpu::PlaybackUiAction;
     use player_runtime::{
         MediaSourceKind, MediaSourceProtocol, MediaTrackCatalog, MediaTrackSelectionSnapshot,
         PlaybackProgress, PlayerMediaInfo, PlayerResilienceMetrics, PlayerSnapshot,
@@ -364,6 +345,29 @@ mod tests {
         assert_eq!(view_model.time_label, "00:45/02:00");
         assert!(view_model.can_scrub);
         assert!(view_model.controls_visible);
+        assert_eq!(
+            view_model.renderer_action(PlaybackUiAction::SeekForward),
+            ControlAction::SeekForward
+        );
+    }
+
+    #[test]
+    fn renderer_playback_actions_round_trip_through_host_adapter() {
+        let actions = [
+            PlaybackUiAction::SeekStart,
+            PlaybackUiAction::SeekBack,
+            PlaybackUiAction::TogglePause,
+            PlaybackUiAction::Stop,
+            PlaybackUiAction::SeekForward,
+            PlaybackUiAction::SeekEnd,
+            PlaybackUiAction::SetRate(1.5),
+            PlaybackUiAction::SeekToRatio(0.25),
+        ];
+
+        for action in actions {
+            let host_action = ControlAction::from_playback_action(action);
+            assert_eq!(host_action.as_playback_action(), Some(action));
+        }
     }
 
     #[test]

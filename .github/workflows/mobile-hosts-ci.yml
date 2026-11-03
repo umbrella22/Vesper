@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -32,6 +33,7 @@ on:
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
       - "fixtures/plugins/android-aar-consumer/**"
+      - "fixtures/plugins/ios-spm-consumer/**"
       - "fixtures/media/**"
       - "plugins/**"
   push:
@@ -40,6 +42,7 @@ on:
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-rust/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
@@ -67,6 +70,7 @@ on:
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
       - "fixtures/plugins/android-aar-consumer/**"
+      - "fixtures/plugins/ios-spm-consumer/**"
       - "fixtures/media/**"
       - "plugins/**"
   workflow_dispatch:
@@ -101,7 +105,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: ./.github/actions/setup-rust
         with:
           targets: aarch64-linux-android
 
@@ -253,7 +257,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: ./.github/actions/setup-rust
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
@@ -269,6 +273,9 @@ jobs:
         uses: ./.github/actions/select-xcode
         with:
           minimum-major: "16"
+
+      - name: Resolve published SwiftPM consumer fixture
+        run: swift package resolve --package-path fixtures/plugins/ios-spm-consumer
 
       - name: Stage canonical optional iOS plugin XCFrameworks
         run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64

@@ -1,0 +1,80 @@
+name: Set up Rust
+description: Install the repository-pinned Rust toolchain, the workspace MSRV, or an explicit version.
+
+inputs:
+  toolchain:
+    description: >-
+      "pinned" reads rust-toolchain.toml, "msrv" reads the workspace
+      rust-version from Cargo.toml, and any other value is used verbatim.
+    required: false
+    default: pinned
+  components:
+    description: Comma-separated rustup components to install.
+    required: false
+    default: ""
+  targets:
+    description: Comma-separated rustup target triples to install.
+    required: false
+    default: ""
+
+outputs:
+  toolchain:
+    description: Resolved Rust toolchain version.
+    value: ${{ steps.resolve.outputs.toolchain }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Rust toolchain
+      id: resolve
+      shell: bash
+      env:
+        REQUESTED_TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        set -euo pipefail
+        requested="${REQUESTED_TOOLCHAIN:-pinned}"
+        case "$requested" in
+          pinned)
+            version="$(awk '
+              /^[[:space:]]*channel[[:space:]]*=/ {
+                line = $0
+                sub(/^[^"]*"/, "", line)
+                sub(/".*$/, "", line)
+                print line
+                exit
+              }
+            ' rust-toolchain.toml)"
+            source="rust-toolchain.toml"
+            ;;
+          msrv)
+            version="$(awk '
+              /^\[workspace\.package\][[:space:]]*$/ { in_section = 1; next }
+              /^\[/ { in_section = 0 }
+              in_section && /^[[:space:]]*rust-version[[:space:]]*=/ {
+                line = $0
+                sub(/^[^"]*"/, "", line)
+                sub(/".*$/, "", line)
+                print line
+                exit
+              }
+            ' Cargo.toml)"
+            source="Cargo.toml workspace rust-version"
+            ;;
+          *)
+            version="$requested"
+            source="explicit input"
+            ;;
+        esac
+        if [[ -z "$version" ]]; then
+          echo "::error::Could not resolve a Rust toolchain from $source."
+          exit 1
+        fi
+        echo "toolchain=$version" >> "$GITHUB_OUTPUT"
+        echo "Using Rust $version from $source."
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.resolve.outputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}

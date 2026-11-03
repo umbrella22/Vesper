@@ -116,17 +116,30 @@ third_party/ 仓库内置依赖与生成的预构建媒体库
 ### Android 包
 
 ```kotlin
-val controller = VesperPlayerControllerFactory.createDefault(
-    context = context,
-    initialSource = VesperPlayerSource.hls(
-        uri = "https://example.com/master.m3u8",
-        label = "Sample",
-    ),
-    resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
-)
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import io.github.umbrella22.vesper.player.android.VesperPlayerSource
+import io.github.umbrella22.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.umbrella22.vesper.player.android.compose.VesperPlayerSurface
+import io.github.umbrella22.vesper.player.android.compose.rememberVesperPlayerController
 
-VesperPlayerSurface(controller = controller)
+@Composable
+fun PlayerScreen() {
+    val controller = rememberVesperPlayerController(
+        initialSource = VesperPlayerSource.hls(
+            uri = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
+            label = "Sample",
+        ),
+        resiliencePolicy = VesperPlaybackResiliencePolicy.resilient(),
+    )
+
+    VesperPlayerSurface(controller = controller)
+    LaunchedEffect(controller) { controller.play() }
+}
 ```
+
+`VesperPlayerSurface` 默认负责 controller 的 initialize / dispose。若 host 自己管理
+lifecycle，请设置 `manageControllerLifecycle = false` 并显式调用这些方法。
 
 Android host kit 指南见 [lib/android/README.md](lib/android/README.md)，完整 Compose app
 示例见 [examples/android-compose-host/README.md](examples/android-compose-host/README.md)。
@@ -134,13 +147,25 @@ Android host kit 指南见 [lib/android/README.md](lib/android/README.md)，完�
 ### iOS 包
 
 ```swift
-@StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
-    resiliencePolicy: .resilient()
-)
+import Foundation
+import SwiftUI
+import VesperPlayerKit
 
-PlayerSurfaceContainer(controller: controller)
-    .onAppear { controller.initialize() }
-    .onDisappear { controller.dispose() }
+struct PlayerView: View {
+    @StateObject private var controller = VesperPlayerControllerFactory.makeDefault(
+        initialSource: VesperPlayerSource.hls(
+            url: URL(string: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8")!,
+            label: "Sample"
+        ),
+        resiliencePolicy: .resilient()
+    )
+
+    var body: some View {
+        PlayerSurfaceContainer(controller: controller)
+            .onAppear { controller.initialize() }
+            .onDisappear { controller.dispose() }
+    }
+}
 ```
 
 iOS host kit 指南见 [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)，
@@ -149,14 +174,22 @@ SwiftUI 示例见 [examples/ios-swift-host/README.md](examples/ios-swift-host/RE
 ### Flutter 包
 
 ```dart
+import 'package:vesper_player/vesper_player.dart';
+
 final controller = await VesperPlayerController.create(
   initialSource: VesperPlayerSource.hls(
-    uri: 'https://example.com/master.m3u8',
+    uri: 'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8',
   ),
 );
 
-VesperPlayerView(controller: controller)
+await controller.initialize();
+await controller.play();
+// 在 build 方法中返回这个 widget。
+return VesperPlayerView(controller: controller);
 ```
+
+`create()` 和 `VesperPlayerView` 不会代替 host 管理 controller 的初始化或释放；
+请按 Flutter 主包指南中的 lifecycle 示例显式调用这些方法。
 
 Flutter 主包指南见 [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)，
 跨平台 host 示例见 [examples/flutter-host/README.md](examples/flutter-host/README.md)。
@@ -225,11 +258,11 @@ scripts/vesper ffi c-host-smoke
 
 ### 插件开发
 
-插件 CLI 和 Rust author SDK 使用统一的 `0.6.0` 版本。CLI 可直接从 crates.io
+插件 CLI 和 Rust author SDK 使用统一的 `0.9.1` 版本。CLI 可直接从 crates.io
 安装：
 
 ```sh
-cargo install vesper-player-cli --version 0.6.0 --locked
+cargo install vesper-player-cli --version 0.9.1 --locked
 vesper --version
 ```
 
@@ -237,14 +270,14 @@ Native 插件的 Cargo 依赖写法如下：
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.6.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.9.1" }
 ```
 
 其中 `vesper-player-plugin` 是 crates.io 上的分发包名，依赖 key
 `player-plugin` 继续对应 Rust 中的 `player_plugin` import，因此现有源码不需要采用
 更长的品牌化 import 名。WASM Component guest 同理使用
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.6.0" }`，Rust import 保持为 `player_plugin_wasm`。
+"=0.9.1" }`，Rust import 保持为 `player_plugin_wasm`。
 
 随后可用 `vesper plugin new` 创建 Native 或 WASM 项目，并通过 `build`、
 `inspect`、`check`、`package` 和 `verify` 完成构建与签名包验证。预编译 CLI 与
@@ -476,9 +509,9 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 
 ## 当前状态
 
-当前源码与包元数据已冻结为 `0.6.0`。Android、iOS、Flutter、plugin archive 与可选
-FFmpeg-backed 产物均具备面向现代 arm64 平台的受检发布路径；只有推送对应 release tag
-后，`0.6.0` 远端坐标才会进入实际发布流程。
+当前源码与包元数据对应已发布的 `0.9.1`。Android、iOS、Flutter、plugin archive 与可选
+FFmpeg-backed 产物均具备面向现代 arm64 平台的受检发布路径；当前发布证据由
+`CURRENT-CHECKLIST.md` 维护。
 
 移动端生产播放仍使用 Media3 与 AVPlayer。桌面播放、SDK-managed native-frame、Native
 AudioProcessor、decoder plugin、FrameProcessor 与 SourceNormalizer 仍属于实验或显式

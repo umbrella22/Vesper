@@ -20,6 +20,7 @@ use crate::plugin_scaffold_assets::{
 };
 
 const VESPER_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+const RUST_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -238,6 +239,7 @@ pub fn create_plugin_scaffold(
         &[
             ("{{CRATE_NAME}}", &toml_string(&crate_name)),
             ("{{LICENSE}}", &toml_string(&request.license)),
+            ("{{RUST_VERSION}}", RUST_VERSION),
             ("{{VESPER_SDK_VERSION}}", VESPER_SDK_VERSION),
         ],
     )?;
