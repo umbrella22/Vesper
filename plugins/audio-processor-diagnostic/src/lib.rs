@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 use std::mem::size_of;
+use std::num::{NonZeroU16, NonZeroU32};
 
 use player_plugin::{
     AudioPitchMode, AudioPlaybackPolicy, AudioProcessorCapabilities, AudioProcessorChain,
@@ -107,13 +108,16 @@ impl AudioProcessorSession for GainProcessor {
         }
         let samples = decode_f32(&frame.data);
         let mut output = match self.policy.pitch_mode {
-            AudioPitchMode::PreservePitch => wsola::stretch(
-                &samples,
-                frame.metadata.sample_rate,
-                frame.metadata.channels,
-                self.policy.playback_rate,
-            )
-            .map_err(|error| AudioProcessorError::Processor(error.to_string()))?,
+            AudioPitchMode::PreservePitch => {
+                let sample_rate = NonZeroU32::new(frame.metadata.sample_rate).ok_or_else(|| {
+                    AudioProcessorError::InvalidPcm("sample rate must be nonzero".to_owned())
+                })?;
+                let channels = NonZeroU16::new(frame.metadata.channels).ok_or_else(|| {
+                    AudioProcessorError::InvalidPcm("channel count must be nonzero".to_owned())
+                })?;
+                wsola::stretch(&samples, sample_rate, channels, self.policy.playback_rate)
+                    .map_err(|error| AudioProcessorError::Processor(error.to_string()))?
+            }
             AudioPitchMode::FollowRate => {
                 resample_follow_rate(&samples, frame.metadata.channels, self.policy.playback_rate)?
             }

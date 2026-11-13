@@ -12,7 +12,6 @@ player-playlist = { path = "../player-playlist" }
 player-preload = { path = "../player-preload" }
 player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 serde.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

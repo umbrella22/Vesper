@@ -1755,7 +1755,7 @@ pub fn verify_signed_plugin_package(
     let mut total_size = 0_u64;
     for index in 0..archive.len() {
         let entry = archive.by_index(index)?;
-        let path = entry.name().to_owned();
+        let path = entry.name()?.into_owned();
         crate::plugin_project::validate_archive_path("archive entry", &path)?;
         if !entry.is_file() || entry.encrypted() {
             return Err(PluginPackageError::InvalidPackage(format!(
@@ -3506,7 +3506,7 @@ kind = "notice"
         let mut writer = ZipWriter::new(output_file);
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).expect("source entry");
-            let name = entry.name().to_owned();
+            let name = entry.name().expect("source entry name").into_owned();
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).expect("read source entry");
             if name.ends_with("fixture plugin.dylib") {
@@ -3536,7 +3536,7 @@ kind = "notice"
                 .last_modified_time(DateTime::default())
                 .unix_permissions(entry.unix_mode().unwrap_or(PACKAGE_METADATA_FILE_MODE));
             writer
-                .start_file(entry.name(), options)
+                .start_file(entry.name().expect("source entry name"), options)
                 .expect("start copied entry");
             io::copy(&mut entry, &mut writer).expect("copy source entry");
         }

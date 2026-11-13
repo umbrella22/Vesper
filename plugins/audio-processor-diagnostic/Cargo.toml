@@ -11,6 +11,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 player-plugin = { package = "vesper-player-plugin", path = "../../crates/plugin/player-plugin" }
-wsola = "0.1.0"
+wsola = "0.3.0"
 
 [workspace]

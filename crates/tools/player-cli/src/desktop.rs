@@ -9,7 +9,8 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-use crate::{external_process, ffmpeg};
+use crate::ffmpeg;
+use crate::{external_process, plugin_build};
 
 #[cfg(all(target_os = "macos", test))]
 use sha2::{Digest, Sha256};
@@ -18,6 +19,9 @@ use sha2::{Digest, Sha256};
 use player_platform_process::configure_background_process_group;
 
 const FFPROBE_OUTPUT_LIMIT: usize = 4 * 1024;
+// Bound the retained Cargo build transcript and the desktop verification build.
+const CARGO_BUILD_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const BASIC_PLAYER_LOG_LIMIT: usize = 2 * 1024 * 1024;
 #[cfg(unix)]
 const BASIC_PLAYER_LOG_TAIL_LIMIT: usize = 64 * 1024;
@@ -706,7 +710,6 @@ fn map_ffmpeg_error(error: ffmpeg::FfmpegError) -> DesktopError {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn map_external_process_error(error: external_process::ExternalProcessError) -> DesktopError {
     match error.kind() {
         external_process::ExternalProcessErrorKind::Compatibility => {
@@ -725,36 +728,13 @@ pub fn verify_remux(
     output: &mut dyn io::Write,
 ) -> Result<(), DesktopError> {
     let (profile, mode) = parse_remux_tokens(tokens)?;
-    let override_path = env::var_os("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let target_dir = target_directory(root);
-    let plugin_path = match override_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(DesktopError::storage(format!(
-                    "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH points to a missing file: {}",
-                    path.display()
-                )));
-            }
-            path
-        }
-        None => {
-            let mut command = cargo_command(root);
-            command.arg("build").arg("-p").arg("player-remux-ffmpeg");
-            if profile == BuildProfile::Release {
-                command.arg("--release");
-            }
-            run_command(&mut command, "Cargo player-remux-ffmpeg build")?;
-            resolve_plugin_path(
-                &target_dir,
-                profile,
-                &shared_library_name("vesper_remux_ffmpeg")?,
-                "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
-                "player-remux-ffmpeg",
-            )?
-        }
-    };
+    let plugin_path = resolve_or_build_plugin(
+        root,
+        profile,
+        "player-remux-ffmpeg",
+        "vesper_remux_ffmpeg",
+        "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
+    )?;
     writeln!(
         output,
         "Using player-remux-ffmpeg plugin: {}",
@@ -779,36 +759,13 @@ pub fn verify_decoder_diagnostics(
     output: &mut dyn io::Write,
 ) -> Result<(), DesktopError> {
     let (profile, mode) = parse_diagnostics_tokens(tokens)?;
-    let override_path = env::var_os("VESPER_DECODER_FIXTURE_PLUGIN_PATH")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let target_dir = target_directory(root);
-    let plugin_path = match override_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(DesktopError::storage(format!(
-                    "VESPER_DECODER_FIXTURE_PLUGIN_PATH points to a missing file: {}",
-                    path.display()
-                )));
-            }
-            path
-        }
-        None => {
-            let mut command = cargo_command(root);
-            command.arg("build").arg("-p").arg("player-decoder-fixture");
-            if profile == BuildProfile::Release {
-                command.arg("--release");
-            }
-            run_command(&mut command, "Cargo player-decoder-fixture build")?;
-            resolve_plugin_path(
-                &target_dir,
-                profile,
-                &shared_library_name("vesper_decoder_fixture")?,
-                "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
-                "player-decoder-fixture",
-            )?
-        }
-    };
+    let plugin_path = resolve_or_build_plugin(
+        root,
+        profile,
+        "player-decoder-fixture",
+        "vesper_decoder_fixture",
+        "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
+    )?;
     let plugin_path = normalize_runtime_path(&plugin_path);
     writeln!(
         output,
@@ -844,36 +801,13 @@ pub fn verify_decoder_d3d11(
         ));
     }
     let (profile, mode) = parse_d3d11_tokens(tokens)?;
-    let override_path = env::var_os("VESPER_DECODER_D3D11_PLUGIN_PATH")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let target_dir = target_directory(root);
-    let plugin_path = match override_path {
-        Some(path) => {
-            if !path.is_file() {
-                return Err(DesktopError::storage(format!(
-                    "VESPER_DECODER_D3D11_PLUGIN_PATH points to a missing file: {}",
-                    path.display()
-                )));
-            }
-            path
-        }
-        None => {
-            let mut command = cargo_command(root);
-            command.arg("build").arg("-p").arg("player-decoder-d3d11");
-            if profile == BuildProfile::Release {
-                command.arg("--release");
-            }
-            run_command(&mut command, "Cargo player-decoder-d3d11 build")?;
-            resolve_plugin_path(
-                &target_dir,
-                profile,
-                &shared_library_name_for("windows", "vesper_decoder_d3d11")?,
-                "VESPER_DECODER_D3D11_PLUGIN_PATH",
-                "player-decoder-d3d11",
-            )?
-        }
-    };
+    let plugin_path = resolve_or_build_plugin(
+        root,
+        profile,
+        "player-decoder-d3d11",
+        "vesper_decoder_d3d11",
+        "VESPER_DECODER_D3D11_PLUGIN_PATH",
+    )?;
     writeln!(
         output,
         "Using D3D11 decoder plugin: {}",
@@ -918,7 +852,6 @@ pub fn verify_decoder_videotoolbox(
     let target_dir = target_directory(root);
     let decoder_plugin = resolve_or_build_plugin(
         root,
-        &target_dir,
         profile,
         "player-decoder-videotoolbox",
         "vesper_decoder_videotoolbox",
@@ -943,7 +876,6 @@ pub fn verify_decoder_videotoolbox(
     let frame_processor_plugin = if mode.needs_frame_processor() {
         let plugin = resolve_or_build_plugin(
             root,
-            &target_dir,
             profile,
             "player-frame-processor-diagnostic",
             "vesper_frame_processor_diagnostic",
@@ -1163,7 +1095,6 @@ fn run_decoder_macos_test(
 
 fn resolve_or_build_plugin(
     root: &Path,
-    target_dir: &Path,
     profile: BuildProfile,
     package: &str,
     library_stem: &str,
@@ -1183,19 +1114,48 @@ fn resolve_or_build_plugin(
     }
 
     let mut command = cargo_command(root);
-    command.arg("build").arg("-p").arg(package);
+    command
+        .args([
+            "build",
+            "-p",
+            package,
+            "--message-format=json-render-diagnostics",
+        ])
+        .stdin(Stdio::null());
     if profile == BuildProfile::Release {
         command.arg("--release");
     }
-    run_command(&mut command, &format!("Cargo {package} build"))?;
-    resolve_plugin_path(
-        target_dir,
-        profile,
-        &shared_library_name(library_stem)?,
-        environment_name,
-        package,
+    let label = format!("Cargo {package} build");
+    let result = external_process::run_interruptible_capture_with_timeout(
+        &mut command,
+        &label,
+        CARGO_BUILD_OUTPUT_LIMIT,
+        CARGO_BUILD_OUTPUT_LIMIT,
+        CARGO_BUILD_TIMEOUT,
     )
-    .map(|path| normalize_runtime_path(&path))
+    .map_err(map_external_process_error)?;
+    io::stderr()
+        .write_all(&result.stderr)
+        .map_err(output_error)?;
+    let artifact = plugin_build::resolve_cdylib_artifact(
+        &result.stdout,
+        library_stem,
+        &shared_library_name(library_stem)?,
+    );
+    if !result.status.success() {
+        return Err(DesktopError::conformance(format!(
+            "{label} exited unsuccessfully ({})",
+            result.status
+        )));
+    }
+    let artifact = artifact.map_err(DesktopError::conformance)?;
+    if !artifact.is_file() {
+        return Err(DesktopError::storage(format!(
+            "Cargo reported a missing {package} artifact: {}",
+            artifact.display()
+        )));
+    }
+    Ok(normalize_runtime_path(&artifact))
 }
 
 fn resolve_videotoolbox_smoke_source(
@@ -2207,35 +2167,6 @@ fn normalize_runtime_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn resolve_plugin_path(
-    target_dir: &Path,
-    profile: BuildProfile,
-    library_name: &str,
-    environment_name: &str,
-    crate_label: &str,
-) -> Result<PathBuf, DesktopError> {
-    let candidates = [
-        target_dir.join(profile.as_str()).join(library_name),
-        target_dir
-            .join(profile.as_str())
-            .join("deps")
-            .join(library_name),
-        target_dir.join("debug").join(library_name),
-        target_dir.join("debug").join("deps").join(library_name),
-        target_dir.join("release").join(library_name),
-        target_dir.join("release").join("deps").join(library_name),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            DesktopError::storage(format!(
-                "Could not find {library_name} under {}; build {crate_label} first or set {environment_name}.",
-                target_dir.display()
-            ))
-        })
-}
-
 fn require_tool(tool: &str) -> Result<(), DesktopError> {
     if command_available(tool) {
         Ok(())
@@ -2256,18 +2187,15 @@ fn command_available(command: &str) -> bool {
     };
     env::split_paths(&paths).any(|directory| {
         let candidate = directory.join(command);
-        if candidate.is_file() {
-            return true;
-        }
         #[cfg(windows)]
         {
-            for extension in [".exe", ".cmd", ".bat"] {
-                if directory.join(format!("{command}{extension}")).is_file() {
-                    return true;
-                }
-            }
+            candidate.is_file()
+                || [".exe", ".cmd", ".bat"]
+                    .iter()
+                    .any(|extension| directory.join(format!("{command}{extension}")).is_file())
         }
-        false
+        #[cfg(not(windows))]
+        candidate.is_file()
     })
 }
 

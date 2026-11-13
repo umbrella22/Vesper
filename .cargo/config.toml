@@ -2,3 +2,6 @@
 PKG_CONFIG_PATH = { value = "third_party/ffmpeg/desktop/lib/pkgconfig", relative = true, force = false }
 # Provide a stable SDK name for the macOS framework link to prevent rustc from invoking xcrun during the cargo check# phase and reporting Xcode's stderr noise as a warning.
 SDKROOT = { value = "macosx", force = false }
+
+[registry]
+global-min-publish-age = "3 days"

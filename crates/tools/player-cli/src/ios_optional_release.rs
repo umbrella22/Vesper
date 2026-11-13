@@ -4346,7 +4346,8 @@ mod implementation {
                         .by_index(index)
                         .expect("read ZIP entry")
                         .name()
-                        .to_owned()
+                        .expect("read ZIP entry name")
+                        .into_owned()
                 })
                 .collect::<Vec<_>>();
             assert_eq!(names, ["Root/", "Root/file"]);
@@ -4422,11 +4423,34 @@ mod implementation {
             };
             let error = preflight_zip(&forged, &policy, "fixture")
                 .expect_err("forged size must fail during preflight payload validation");
-            assert!(error.to_string().contains("declared 1 bytes"));
+            assert_eq!(error.kind(), crate::ios::IosErrorKind::Conformance);
+            assert!(error.to_string().contains("fixture entry 'Root/file'"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("larger than its declared uncompressed size"),
+                "{error}"
+            );
 
             let error = write_sanitized_zip(&forged, &sanitized, &policy, "fixture")
                 .expect_err("forged size must fail during sanitized copy validation");
-            assert!(error.to_string().contains("declared 1 bytes"));
+            assert_eq!(error.kind(), crate::ios::IosErrorKind::Conformance);
+            assert!(error.to_string().contains("fixture entry 'Root/file'"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("larger than its declared uncompressed size"),
+                "{error}"
+            );
+
+            let mut archive = ZipArchive::new(File::open(&forged).expect("open forged ZIP"))
+                .expect("read forged ZIP");
+            let mut entry = archive.by_name("Root/file").expect("read forged entry");
+            let mut output = Vec::new();
+            let error = copy_declared_bytes(&mut entry, &mut output, 1, 1024, "forged entry")
+                .expect_err("ZIP reader must reject expansion after the one-byte probe");
+            assert_eq!(error.kind(), crate::ios::IosErrorKind::Conformance);
+            assert_eq!(output.len(), 1);
 
             let mut output = Vec::new();
             let error =

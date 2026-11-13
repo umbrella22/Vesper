@@ -1099,7 +1099,12 @@ pub(crate) fn verify_runtime_aar(
         let entry = archive.by_index(index).map_err(|error| {
             FfmpegError::conformance(format!("invalid runtime AAR entry: {error}"))
         })?;
-        let name = entry.name();
+        let name = entry
+            .name()
+            .map_err(|error| {
+                FfmpegError::conformance(format!("invalid runtime AAR entry name: {error}"))
+            })?
+            .into_owned();
         if name.is_empty()
             || name.starts_with('/')
             || name.contains('\\')

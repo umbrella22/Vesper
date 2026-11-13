@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-## wsola 0.1.0
+## wsola 0.3.0
 
 Copyright (c) the wsola contributors.
 

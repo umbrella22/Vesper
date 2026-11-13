@@ -131,6 +131,19 @@ A directory-level `rustup override` takes precedence over the toolchain file.
 `rustup override unset` from the repository root removes an obsolete override
 without changing the global default toolchain.
 
+Cargo 1.100 desktop plugin verification reads the selected `compiler-artifact`
+path from the build's JSON output. Custom target/build directories and target
+triples therefore follow Cargo's configuration. Explicit plugin-path environment
+overrides continue to select an existing artifact without rebuilding it.
+
+The repository configures a three-day minimum publication age for newly resolved
+registry dependencies. Existing lockfile entries remain usable. Registries must
+provide publication timestamps for this policy to apply; `cargo install` does
+not apply it. For a reviewed urgent update, use
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>`.
+The build toolchain enforces this resolver policy; the older MSRV is retained
+for source compatibility checks.
+
 ## Rust Plugin SDK Release
 
 The public Rust packages use `vesper-player-*` crates.io identities while their

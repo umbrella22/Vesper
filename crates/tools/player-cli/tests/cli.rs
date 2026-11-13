@@ -15993,6 +15993,122 @@ while :; do sleep 1; done
 
 #[cfg(unix)]
 #[test]
+fn desktop_plugin_verification_uses_reported_cargo_artifacts() {
+    use std::path::Path;
+
+    let directory = tempfile::tempdir().expect("temporary Cargo artifact fixture");
+    let root = directory.path();
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write desktop manifest");
+    let fake_cargo = root.join("fake-cargo");
+    let messages = root.join("cargo.jsonl");
+    let log = root.join("cargo.log");
+    write_executable_script(
+        &fake_cargo,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$VESPER_TEST_CARGO_LOG"
+if [ "$1" = build ]; then
+  /bin/cat "$VESPER_TEST_CARGO_MESSAGES"
+else
+  printf '%s\n' "$VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH$VESPER_DECODER_FIXTURE_PLUGIN_PATH" >> "$VESPER_TEST_CARGO_LOG"
+fi
+"#,
+    );
+    for (route, target, override_name) in [
+        (
+            "verify-remux",
+            "vesper_remux_ffmpeg",
+            "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
+        ),
+        (
+            "verify-decoder-diagnostics",
+            "vesper_decoder_fixture",
+            "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
+        ),
+    ] {
+        let extension = if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        let library_name = format!("lib{target}.{extension}");
+        let artifact = root
+            .join("separate build 输出/configuration-hash")
+            .join(&library_name);
+        fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("create build dir");
+        fs::write(&artifact, b"current artifact").expect("write artifact");
+        let stale = root.join("target/release").join(&library_name);
+        fs::create_dir_all(stale.parent().expect("stale parent")).expect("create old layout");
+        fs::write(&stale, b"stale artifact").expect("write stale artifact");
+        let message = |path: &Path| {
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "package_id": "fixture 0.1.0",
+                "target": { "name": target, "kind": ["cdylib"], "crate_types": ["cdylib"] },
+                "filenames": [path],
+            })
+            .to_string()
+        };
+        let run = || {
+            Command::new(env!("CARGO_BIN_EXE_vesper"))
+                .env("CARGO", &fake_cargo)
+                .env("VESPER_TEST_CARGO_MESSAGES", &messages)
+                .env("VESPER_TEST_CARGO_LOG", &log)
+                .env_remove("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH")
+                .env_remove("VESPER_DECODER_FIXTURE_PLUGIN_PATH")
+                .env_remove(override_name)
+                .args(["desktop", route, "release", "loader", "--root"])
+                .arg(root)
+                .output()
+                .expect("run desktop plugin verification")
+        };
+        fs::write(&messages, message(&artifact)).expect("write Cargo artifact message");
+        let output = run();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(&artifact.display().to_string()), "{stdout}");
+        assert!(!stdout.contains(&stale.display().to_string()), "{stdout}");
+        let invocation = fs::read_to_string(&log).expect("read Cargo log");
+        assert!(invocation.contains("--message-format=json-render-diagnostics"));
+        assert!(invocation.contains("--release"));
+        assert!(invocation.contains(&artifact.display().to_string()));
+
+        for (transcript, expected) in [
+            (
+                "{\"reason\":\"build-finished\",\"success\":true}".to_owned(),
+                "did not report",
+            ),
+            (
+                format!("{}\n{}", message(&artifact), message(&stale)),
+                "multiple",
+            ),
+            (message(Path::new(&library_name)), "relative"),
+            ("invalid Cargo JSON".to_owned(), "invalid JSON"),
+        ] {
+            fs::write(&messages, transcript).expect("write invalid Cargo artifact output");
+            fs::write(&log, "").expect("reset Cargo invocation log");
+            let output = run();
+            assert_eq!(output.status.code(), Some(5));
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(expected), "{stderr}");
+            assert_eq!(
+                fs::read_to_string(&log)
+                    .expect("read failed build log")
+                    .lines()
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn desktop_remux_verification_preserves_override_and_ci_skip_semantics() {
     let directory = tempfile::tempdir().expect("temporary desktop remux fixture");
     let root = directory.path();
