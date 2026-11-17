@@ -1,0 +1,150 @@
+name: HarmonyOS preview artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/platform/mobile/player-platform-harmony/**'
+      - 'crates/platform/common/player-platform-mobile/**'
+      - 'crates/ffi/player-ffi-harmony/**'
+      - 'crates/core/**'
+      - 'crates/model/**'
+      - 'crates/tools/player-cli/src/harmony*'
+      - 'crates/tools/player-cli/src/harmony/**'
+      - 'examples/harmony-arkui-host/**'
+      - 'lib/harmony/**'
+      - 'fixtures/harmony/**'
+      - 'fixtures/media/tiny-h264-aac-mediacodec.m4v'
+      - 'scripts/harmony/**'
+      - 'include/vesper_harmony.h'
+      - '.github/workflows/harmony-ci.yml'
+      - '.github/actions/setup-rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+  pull_request:
+    paths:
+      - 'crates/platform/mobile/player-platform-harmony/**'
+      - 'crates/platform/common/player-platform-mobile/**'
+      - 'crates/ffi/player-ffi-harmony/**'
+      - 'crates/core/**'
+      - 'crates/model/**'
+      - 'crates/tools/player-cli/src/harmony*'
+      - 'crates/tools/player-cli/src/harmony/**'
+      - 'examples/harmony-arkui-host/**'
+      - 'lib/harmony/**'
+      - 'fixtures/harmony/**'
+      - 'fixtures/media/tiny-h264-aac-mediacodec.m4v'
+      - 'scripts/harmony/**'
+      - 'include/vesper_harmony.h'
+      - '.github/workflows/harmony-ci.yml'
+      - '.github/actions/setup-rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harmony-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: harmony-contracts
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Test Rust contracts
+        run: cargo test --locked -p player-download -p player-platform-harmony -p player-ffi-harmony
+      - name: Test HarmonyOS CLI routes
+        run: cargo test --locked -p vesper-player-cli --test harmony_regressions
+      - name: Test packaging and fixture contracts
+        run: python3 -m unittest discover -s scripts/harmony/tests -v
+
+  artifacts:
+    # Forks receive Rust/Python checks without access to the private toolchain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: rust
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require Apple Silicon
+        run: test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: aarch64-unknown-linux-ohos
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: harmony-artifacts
+          workspaces: |
+            . -> target
+            . -> target/harmony-kit
+      - name: Install the pinned header generator
+        run: cargo install cbindgen --version 0.29.4 --locked
+      - name: Fetch locked host and OHOS dependencies
+        run: cargo fetch --locked --target aarch64-apple-darwin --target aarch64-unknown-linux-ohos
+      - name: Download and verify the private SDK
+        env:
+          GH_TOKEN: ${{ secrets.HARMONY_SDK_TOKEN }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::HARMONY_SDK_TOKEN must have Contents: read on the private toolchain repository.'
+            exit 1
+          fi
+          python3 scripts/harmony/ci_toolchain.py install \
+            --release-manifest scripts/harmony/ci-toolchain.json \
+            --directory "$RUNNER_TEMP/harmony-command-line-tools"
+      - name: Build and package the preview
+        run: |
+          sdk_sha="$(python3 -c 'import json; print(json.load(open("scripts/harmony/ci-toolchain.json"))["sha256"])')"
+          python3 scripts/harmony/ci-artifacts.py \
+            --tools "$RUNNER_TEMP/harmony-command-line-tools" \
+            --sdk-archive-sha256 "$sdk_sha"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: harmony-preview-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            target/harmony-kit/release/*.zip
+            !target/harmony-kit/release/*-symbols.zip
+            target/harmony-kit/release/*.json
+            target/harmony-kit/release/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: harmony-symbols-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: target/harmony-kit/release/*-symbols.zip
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: harmony-build-evidence-${{ github.run_number }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            target/harmony-kit/ci-evidence
+            target/harmony-kit/build-*/build.log
+            target/harmony-kit/consumer-*/build.log

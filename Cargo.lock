@@ -2591,6 +2591,7 @@ dependencies = [
 name = "player-download"
 version = "0.9.1"
 dependencies = [
+ "player-dash-hls-bridge",
  "player-model",
  "quick-xml 0.42.0",
  "serde_json",
@@ -2614,6 +2615,13 @@ dependencies = [
 [[package]]
 name = "player-ffi-common"
 version = "0.9.1"
+
+[[package]]
+name = "player-ffi-harmony"
+version = "0.9.1"
+dependencies = [
+ "player-platform-harmony",
+]
 
 [[package]]
 name = "player-ffi-ios"
@@ -2726,6 +2734,20 @@ dependencies = [
  "tracing",
  "vesper-player-plugin",
  "vesper-player-plugin-loader",
+]
+
+[[package]]
+name = "player-platform-harmony"
+version = "0.9.1"
+dependencies = [
+ "player-dash-hls-bridge",
+ "player-download",
+ "player-model",
+ "player-platform-mobile",
+ "quick-xml 0.42.0",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

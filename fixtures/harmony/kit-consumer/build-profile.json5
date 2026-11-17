@@ -1,0 +1,16 @@
+{
+  "app": {
+    "products": [{
+      "name": "default",
+      "compatibleSdkVersion": "6.0.0(20)",
+      "targetSdkVersion": "26.0.0",
+      "runtimeOS": "HarmonyOS"
+    }],
+    "buildModeSet": [{ "name": "release" }]
+  },
+  "modules": [{
+    "name": "entry",
+    "srcPath": "./entry",
+    "targets": [{ "name": "default", "applyToProducts": ["default"] }]
+  }]
+}

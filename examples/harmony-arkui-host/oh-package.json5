@@ -1,0 +1,12 @@
+{
+  "modelVersion": "6.0.0",
+  "name": "vesper-harmony-example",
+  "version": "0.9.1",
+  "dependencies": {},
+  "devDependencies": {},
+  "overrides": {
+    "@vesper/player-kit": "file:../../target/harmony-kit/dist/vesper-player-kit.har",
+    "@vesper/player-kit-arkui": "file:../../target/harmony-kit/dist/vesper-player-kit-arkui.har",
+    "@vesper/player-kit-arkui-ui": "file:../../target/harmony-kit/dist/vesper-player-kit-arkui-ui.har"
+  }
+}

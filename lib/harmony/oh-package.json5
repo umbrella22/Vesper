@@ -1,0 +1,5 @@
+{
+  "modelVersion": "6.0.0", "name": "vesper-harmony-workspace",
+  "version": "0.9.1-harmony.0", "dependencies": {}, "devDependencies": {},
+  "overrides": { "@vesper/player-kit": "file:./vesper-player-kit", "@vesper/player-kit-arkui": "file:./vesper-player-kit-arkui" }
+}

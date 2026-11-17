@@ -1,0 +1,11 @@
+{
+  "app": {
+    "products": [{ "name": "default", "compatibleSdkVersion": "6.0.0(20)", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS" }],
+    "buildModeSet": [{ "name": "release" }]
+  },
+  "modules": [
+    { "name": "vesper_player_kit", "srcPath": "./vesper-player-kit", "targets": [{ "name": "default", "applyToProducts": ["default"] }] },
+    { "name": "vesper_player_kit_arkui", "srcPath": "./vesper-player-kit-arkui", "targets": [{ "name": "default", "applyToProducts": ["default"] }] },
+    { "name": "vesper_player_kit_arkui_ui", "srcPath": "./vesper-player-kit-arkui-ui", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }
+  ]
+}

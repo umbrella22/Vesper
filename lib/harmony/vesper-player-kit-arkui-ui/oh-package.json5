@@ -1,0 +1,1 @@
+{ "name": "@vesper/player-kit-arkui-ui", "version": "0.9.1-harmony.0", "description": "Optional Vesper ArkUI player Stage and controls.", "main": "Index.ets", "license": "Apache-2.0", "dependencies": { "@vesper/player-kit-arkui": "0.9.1-harmony.0" } }

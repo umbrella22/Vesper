@@ -38,6 +38,17 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 ./scripts/vesper android publish-maven-central vMAJOR.MINOR.PATCH --dry-run
 
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools doctor
+./scripts/vesper harmony audit-dependencies --offline
+./scripts/vesper harmony check-shared --offline
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-host-contracts
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-har --offline
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --ui
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --no-internet
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --example
+./scripts/vesper harmony kit-verify --hap target/harmony-kit/dist/vesper-harmony-ui-consumer-unsigned.hap
+
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios bootstrap-bridge-shim
 ./scripts/vesper ios sync-bridge-shim

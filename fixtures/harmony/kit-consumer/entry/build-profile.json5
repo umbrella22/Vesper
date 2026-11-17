@@ -1,0 +1,9 @@
+{
+  "apiType": "stageMode",
+  "buildOption": { "nativeLib": { "debugSymbol": { "strip": false } } },
+  "buildOptionSet": [{
+    "name": "release",
+    "arkOptions": { "obfuscation": { "ruleOptions": { "enable": false } } }
+  }],
+  "targets": [{ "name": "default" }]
+}

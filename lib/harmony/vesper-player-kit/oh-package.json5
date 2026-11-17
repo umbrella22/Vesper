@@ -1,0 +1,6 @@
+{
+  "name": "@vesper/player-kit", "version": "0.9.1-harmony.0",
+  "description": "Vesper native HarmonyOS playback host kit preview.",
+  "main": "Index.ets", "license": "Apache-2.0",
+  "dependencies": { "libvesper_player_harmony_node.so": "file:./src/main/cpp/types/libvesper_player_harmony_node" }
+}

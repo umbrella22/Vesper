@@ -1,0 +1,70 @@
+name: HarmonyOS playback or UI issue
+description: Report a HarmonyOS preview issue with its build and device details.
+title: "[HarmonyOS] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Preview artifacts are available from the HarmonyOS preview workflow.
+        The example's Diagnostics tab can run a check and save a local JSON report.
+        Device setup and known capability limits are recorded in [HarmonyOS testing](https://github.com/umbrella22/Vesper/blob/main/lib/harmony/TESTING.md).
+  - type: input
+    id: build
+    attributes:
+      label: Build identity
+      description: Workflow run URL, commit, or sdkSourceSha256 from the exported report.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Device and system
+      placeholder: |
+        Device model:
+        HarmonyOS version / API:
+        Physical device or emulator:
+        Phone/tablet, orientation, and window size for layout issues:
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Playback, buffering, or seeking
+        - Audio, tracks, or subtitles
+        - Downloads, cache, or offline playback
+        - Layout, controls, or gestures
+        - Lifecycle, background audio, or Picture in Picture
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the source protocol and a public sample or bundled fixture when possible. Keep authentication and private media URLs out of the issue.
+      placeholder: |
+        Source / fixture and protocol:
+        1.
+        2.
+        Expected behavior:
+        Observed behavior:
+        Frequency:
+    validations:
+      required: true
+  - type: dropdown
+    id: audible-output
+    attributes:
+      label: Audible output observed
+      description: Track selection and video progression do not establish whether sound was heard.
+      options:
+        - Not assessed
+        - Audible
+        - Silent
+        - Intermittent
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Diagnostic report, logs, or screenshots
+      description: Attach the saved diagnostic JSON and any relevant screenshot or short recording. Review additional logs before sharing them; the app does not upload reports automatically.

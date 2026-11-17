@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repository": "umbrella22/vesper-ci-toolchains",
+  "tag": "harmony-clt-26.0.0.865-mac-arm64",
+  "asset": "command-line-tools-26.0.0.865-mac-arm64.tar.gz",
+  "sha256": "5bd17c4821f65924d4ae0f9f457f80cdace9d4bc54852f59b86fc7f9388ba8ee",
+  "bytes": 1986389282,
+  "platform": "macOS-arm64",
+  "apiVersion": 26,
+  "sdkVersion": "26.0.0.105",
+  "releaseType": "Release"
+}

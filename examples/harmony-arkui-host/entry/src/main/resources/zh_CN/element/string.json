@@ -1,0 +1,884 @@
+{
+  "string": [
+    {
+      "name": "example_play",
+      "value": "播放"
+    },
+    {
+      "name": "example_downloads",
+      "value": "下载"
+    },
+    {
+      "name": "example_diagnostics",
+      "value": "诊断"
+    },
+    {
+      "name": "example_settings",
+      "value": "应用设置"
+    },
+    {
+      "name": "example_appearance",
+      "value": "外观"
+    },
+    {
+      "name": "example_system",
+      "value": "跟随系统"
+    },
+    {
+      "name": "example_light",
+      "value": "浅色"
+    },
+    {
+      "name": "example_dark",
+      "value": "深色"
+    },
+    {
+      "name": "example_inline_controls",
+      "value": "内嵌控件"
+    },
+    {
+      "name": "example_fullscreen_controls",
+      "value": "全屏控件"
+    },
+    {
+      "name": "example_compact",
+      "value": "紧凑"
+    },
+    {
+      "name": "example_expanded",
+      "value": "展开"
+    },
+    {
+      "name": "example_classic",
+      "value": "经典"
+    },
+    {
+      "name": "example_blue_accent",
+      "value": "系统蓝播放器"
+    },
+    {
+      "name": "example_reduced_motion",
+      "value": "减少动态效果"
+    },
+    {
+      "name": "example_appearance_note",
+      "value": "修改外观不会重新加载当前视频。"
+    },
+    {
+      "name": "example_window_failed",
+      "value": "无法切换窗口显示方式，请重试。"
+    },
+    {
+      "name": "example_ready",
+      "value": "正在准备…"
+    },
+    {
+      "name": "example_choose_file",
+      "value": "选择文件"
+    },
+    {
+      "name": "example_hls_sample",
+      "value": "HLS 样例"
+    },
+    {
+      "name": "example_dash_sample",
+      "value": "DASH 样例"
+    },
+    {
+      "name": "example_open_url",
+      "value": "打开链接"
+    },
+    {
+      "name": "example_open_media",
+      "value": "打开媒体"
+    },
+    {
+      "name": "example_up_next",
+      "value": "播放队列"
+    },
+    {
+      "name": "example_manage_queue",
+      "value": "管理队列"
+    },
+    {
+      "name": "example_videos",
+      "value": "%d 个视频"
+    },
+    {
+      "name": "example_now_playing",
+      "value": "正在播放"
+    },
+    {
+      "name": "example_in_queue",
+      "value": "待播放"
+    },
+    {
+      "name": "example_preloaded",
+      "value": "已预加载"
+    },
+    {
+      "name": "example_previous",
+      "value": "上一个视频"
+    },
+    {
+      "name": "example_next",
+      "value": "下一个视频"
+    },
+    {
+      "name": "example_queue_hint",
+      "value": "选择视频即可播放，切换后可以移除自定义视频。"
+    },
+    {
+      "name": "example_system_playback",
+      "value": "系统播放"
+    },
+    {
+      "name": "example_background_audio",
+      "value": "后台音频与媒体控制"
+    },
+    {
+      "name": "example_auto_pip",
+      "value": "自动画中画"
+    },
+    {
+      "name": "example_pip",
+      "value": "画中画"
+    },
+    {
+      "name": "example_options",
+      "value": "播放选项"
+    },
+    {
+      "name": "example_media_hint",
+      "value": "粘贴 MP4、HLS 或 DASH 媒体链接。"
+    },
+    {
+      "name": "example_media_url",
+      "value": "媒体链接"
+    },
+    {
+      "name": "example_media_type",
+      "value": "媒体类型"
+    },
+    {
+      "name": "example_auto",
+      "value": "自动"
+    },
+    {
+      "name": "example_add_queue",
+      "value": "添加到队列"
+    },
+    {
+      "name": "example_open_stream",
+      "value": "打开网络媒体"
+    },
+    {
+      "name": "example_description_empty",
+      "value": "选择样例或打开自己的媒体。"
+    },
+    {
+      "name": "example_welcome",
+      "value": "从这里开始观看"
+    },
+    {
+      "name": "example_studio_sample",
+      "value": "演示短片"
+    },
+    {
+      "name": "example_studio_detail",
+      "value": "内置 MP4 · 可离线观看"
+    },
+    {
+      "name": "example_dash_detail",
+      "value": "内置 DASH · 可离线观看"
+    },
+    {
+      "name": "example_hls_title",
+      "value": "Apple HLS 样例"
+    },
+    {
+      "name": "example_hls_detail",
+      "value": "自适应 HLS · 需要联网"
+    },
+    {
+      "name": "example_error_network",
+      "value": "连接已中断，请联网后重试。"
+    },
+    {
+      "name": "example_error_source",
+      "value": "无法打开媒体，请检查来源。"
+    },
+    {
+      "name": "example_error_expired",
+      "value": "媒体访问已过期，请重新打开以更新授权。"
+    },
+    {
+      "name": "example_error_capacity",
+      "value": "当前空间或可用容量不足。"
+    },
+    {
+      "name": "example_error_unsupported",
+      "value": "当前媒体或设备不支持此操作。"
+    },
+    {
+      "name": "example_error_in_use",
+      "value": "项目仍在使用中，请先结束播放或分享。"
+    },
+    {
+      "name": "example_error_not_ready",
+      "value": "请等待视频准备完成后再试。"
+    },
+    {
+      "name": "example_error_playback",
+      "value": "无法完成操作，请尝试其他视频。"
+    },
+    {
+      "name": "example_dismiss",
+      "value": "关闭"
+    },
+    {
+      "name": "example_remote_video",
+      "value": "网络视频"
+    },
+    {
+      "name": "example_added",
+      "value": "已加入播放队列。"
+    },
+    {
+      "name": "example_removed_queue",
+      "value": "已从队列移除。"
+    },
+    {
+      "name": "example_preload_last",
+      "value": "请先添加下一段视频。"
+    },
+    {
+      "name": "example_cache_cleared",
+      "value": "已清理启动缓存。"
+    },
+    {
+      "name": "example_policy_evaluated",
+      "value": "已保存策略，缓冲偏好从下次播放生效。"
+    },
+    {
+      "name": "example_pick_cancelled",
+      "value": "已取消选择视频。"
+    },
+    {
+      "name": "example_imported",
+      "value": "导入的视频"
+    },
+    {
+      "name": "example_imported_detail",
+      "value": "应用内副本 · 可离线播放"
+    },
+    {
+      "name": "example_downloaded_video",
+      "value": "下载的视频"
+    },
+    {
+      "name": "example_download_started",
+      "value": "已开始下载。"
+    },
+    {
+      "name": "example_download_paused",
+      "value": "已暂停下载。"
+    },
+    {
+      "name": "example_download_resumed",
+      "value": "已恢复任务，复用前会校验已有字节。"
+    },
+    {
+      "name": "example_download_deleted",
+      "value": "已删除下载。"
+    },
+    {
+      "name": "example_share_opened",
+      "value": "已打开分享面板，文件保留十分钟。"
+    },
+    {
+      "name": "example_saved",
+      "value": "已保存到所选位置。"
+    },
+    {
+      "name": "example_save_cancelled",
+      "value": "已取消保存，下载仍然保留。"
+    },
+    {
+      "name": "example_pip_enabled",
+      "value": "已开启画中画。"
+    },
+    {
+      "name": "example_diagnostics_copied",
+      "value": "已复制诊断，不含来源网址和认证头。"
+    },
+    {
+      "name": "example_history_cleared",
+      "value": "已清空事件记录。"
+    },
+    {
+      "name": "example_remove_video",
+      "value": "移除视频"
+    },
+    {
+      "name": "example_preload_video",
+      "value": "预加载视频"
+    },
+    {
+      "name": "example_recovery",
+      "value": "播放恢复"
+    },
+    {
+      "name": "example_recovery_detail",
+      "value": "遇到已知临时故障时重试，30 秒内最多两次。"
+    },
+    {
+      "name": "example_recovery_note",
+      "value": "暂停或切换来源会取消恢复。访问过期时需要更新来源。"
+    },
+    {
+      "name": "example_recovery_off",
+      "value": "已关闭"
+    },
+    {
+      "name": "example_recovery_idle",
+      "value": "已就绪"
+    },
+    {
+      "name": "example_recovery_waiting",
+      "value": "等待重试"
+    },
+    {
+      "name": "example_recovery_activating",
+      "value": "重新打开视频"
+    },
+    {
+      "name": "example_recovery_awaitingFrame",
+      "value": "等待画面输出"
+    },
+    {
+      "name": "example_recovery_recovered",
+      "value": "播放已恢复"
+    },
+    {
+      "name": "example_recovery_exhausted",
+      "value": "已达到重试上限"
+    },
+    {
+      "name": "example_recovery_hostAction",
+      "value": "请选择或更新来源"
+    },
+    {
+      "name": "example_recovery_cancelled",
+      "value": "恢复已取消"
+    },
+    {
+      "name": "example_track_preferences",
+      "value": "语言偏好"
+    },
+    {
+      "name": "example_track_preferences_detail",
+      "value": "轨道就绪后应用一次，之后以你的手动选择为准。"
+    },
+    {
+      "name": "example_audio_language",
+      "value": "首选音频语言"
+    },
+    {
+      "name": "example_subtitle_preference",
+      "value": "字幕偏好"
+    },
+    {
+      "name": "example_language_english",
+      "value": "英语"
+    },
+    {
+      "name": "example_language_chinese",
+      "value": "中文"
+    },
+    {
+      "name": "example_subtitle_off",
+      "value": "关闭"
+    },
+    {
+      "name": "example_subtitle_preferred",
+      "value": "首选语言"
+    },
+    {
+      "name": "example_preference_applied",
+      "value": "已应用偏好"
+    },
+    {
+      "name": "example_preference_deferred",
+      "value": "视频就绪后应用"
+    },
+    {
+      "name": "example_preference_unchanged",
+      "value": "保留当前选择"
+    },
+    {
+      "name": "example_preference_failed",
+      "value": "未能应用偏好"
+    },
+    {
+      "name": "example_policy",
+      "value": "播放与资源请求"
+    },
+    {
+      "name": "example_policy_detail",
+      "value": "选择缓冲偏好及后续请求尝试次数。"
+    },
+    {
+      "name": "example_policy_system",
+      "value": "默认 · 2 次"
+    },
+    {
+      "name": "example_policy_responsive",
+      "value": "快速 · 1 次"
+    },
+    {
+      "name": "example_policy_resilient",
+      "value": "持续 · 3 次"
+    },
+    {
+      "name": "example_policy_note",
+      "value": "缓冲偏好从下次播放生效，本地文件不适用。诊断区分别记录请求、原生接受与实际播放状态。"
+    },
+    {
+      "name": "example_preload",
+      "value": "启动预加载"
+    },
+    {
+      "name": "example_preload_detail",
+      "value": "为下一个视频预加载，不创建额外播放器。"
+    },
+    {
+      "name": "example_status",
+      "value": "状态"
+    },
+    {
+      "name": "example_received_reuse",
+      "value": "已接收 / 已复用"
+    },
+    {
+      "name": "example_preload_next",
+      "value": "预加载下一段"
+    },
+    {
+      "name": "example_cancel_preload",
+      "value": "取消预加载"
+    },
+    {
+      "name": "example_preload_note",
+      "value": "支持网络 MP4 和静态 SegmentBase DASH。预加载完成与播放实际复用分别报告。"
+    },
+    {
+      "name": "example_cache",
+      "value": "启动缓存"
+    },
+    {
+      "name": "example_cache_detail",
+      "value": "内存 8 MiB · 磁盘 32 MiB · 预加载有效期 30 秒"
+    },
+    {
+      "name": "example_disk_entries",
+      "value": "磁盘条目 / 大小"
+    },
+    {
+      "name": "example_disk_reuse",
+      "value": "磁盘复用"
+    },
+    {
+      "name": "example_cache_clear",
+      "value": "清理启动缓存"
+    },
+    {
+      "name": "example_offline_title",
+      "value": "离线视频"
+    },
+    {
+      "name": "example_offline_detail",
+      "value": "将视频保存在设备上，随时观看。"
+    },
+    {
+      "name": "example_new_download",
+      "value": "新建下载"
+    },
+    {
+      "name": "example_download_url",
+      "value": "下载来源网址"
+    },
+    {
+      "name": "example_download_type",
+      "value": "下载媒体类型"
+    },
+    {
+      "name": "example_download_video",
+      "value": "下载视频"
+    },
+    {
+      "name": "example_download_note",
+      "value": "完成后可离线播放。保存与分享支持原文件或 ZIP，成品上限为 256 MiB，包含 ZIP 开销。"
+    },
+    {
+      "name": "example_downloads_empty",
+      "value": "还没有下载"
+    },
+    {
+      "name": "example_downloads_empty_detail",
+      "value": "下载的视频会显示在这里。"
+    },
+    {
+      "name": "example_download_Queued",
+      "value": "等待下载"
+    },
+    {
+      "name": "example_download_Preparing",
+      "value": "准备中"
+    },
+    {
+      "name": "example_download_Downloading",
+      "value": "下载中"
+    },
+    {
+      "name": "example_download_Paused",
+      "value": "已暂停"
+    },
+    {
+      "name": "example_download_Failed",
+      "value": "需要处理"
+    },
+    {
+      "name": "example_download_Completed",
+      "value": "已完成"
+    },
+    {
+      "name": "example_download_Removed",
+      "value": "已删除"
+    },
+    {
+      "name": "example_resume_refresh",
+      "value": "请在上方更新来源网址，再恢复此任务。"
+    },
+    {
+      "name": "example_resume_verify",
+      "value": "继续前将验证已有字节。"
+    },
+    {
+      "name": "example_resume_restart",
+      "value": "此任务将从头开始下载。"
+    },
+    {
+      "name": "example_resume_reusable",
+      "value": "待校验字节"
+    },
+    {
+      "name": "example_export_too_large",
+      "value": "成品超过 256 MiB 导出上限，仍可离线播放。"
+    },
+    {
+      "name": "example_play_offline",
+      "value": "离线播放"
+    },
+    {
+      "name": "example_save",
+      "value": "保存"
+    },
+    {
+      "name": "example_share",
+      "value": "分享"
+    },
+    {
+      "name": "example_pause_download",
+      "value": "暂停下载"
+    },
+    {
+      "name": "example_resume_download",
+      "value": "恢复下载"
+    },
+    {
+      "name": "example_delete",
+      "value": "删除"
+    },
+    {
+      "name": "example_download_in_use",
+      "value": "请先切换到其他视频，再删除此下载。"
+    },
+    {
+      "name": "example_download_failed",
+      "value": "下载已停止，请更新来源后恢复任务。"
+    },
+    {
+      "name": "example_recovery_watching",
+      "value": "已就绪，可恢复暂时性播放错误"
+    },
+    {
+      "name": "example_recovery_hostActionRequired",
+      "value": "请更换视频或手动处理此错误"
+    },
+    {
+      "name": "example_recovery_sourceRefreshRequired",
+      "value": "更新视频来源后继续"
+    },
+    {
+      "name": "example_recovery_closed",
+      "value": "播放恢复已关闭"
+    },
+    {
+      "name": "example_recovery_unknown",
+      "value": "暂时无法读取恢复状态"
+    },
+    {
+      "name": "example_diag_player_status",
+      "value": "播放器状态"
+    },
+    {
+      "name": "example_diag_player_detail",
+      "value": "当前视频的实时状态。"
+    },
+    {
+      "name": "example_diag_copy_report",
+      "value": "复制诊断报告"
+    },
+    {
+      "name": "example_diag_position_duration",
+      "value": "位置 / 时长"
+    },
+    {
+      "name": "example_diag_timeline",
+      "value": "时间线"
+    },
+    {
+      "name": "example_diag_video_dimensions",
+      "value": "视频尺寸"
+    },
+    {
+      "name": "example_diag_first_frame",
+      "value": "首帧"
+    },
+    {
+      "name": "example_diag_playback_rate",
+      "value": "播放速度"
+    },
+    {
+      "name": "example_diag_volume",
+      "value": "音量"
+    },
+    {
+      "name": "example_diag_playback_epoch",
+      "value": "播放 epoch"
+    },
+    {
+      "name": "example_diag_surface",
+      "value": "Surface"
+    },
+    {
+      "name": "example_diag_cache_loader",
+      "value": "缓存 / 加载器"
+    },
+    {
+      "name": "example_diag_active_resources",
+      "value": "活动资源"
+    },
+    {
+      "name": "example_diag_retained_players",
+      "value": "保留播放器"
+    },
+    {
+      "name": "example_diag_dropped_events",
+      "value": "丢弃事件"
+    },
+    {
+      "name": "example_diag_error_code",
+      "value": "错误代码"
+    },
+    {
+      "name": "example_diag_selection_presentation",
+      "value": "轨道与展示状态"
+    },
+    {
+      "name": "example_diag_requested_selection",
+      "value": "请求选择"
+    },
+    {
+      "name": "example_diag_effective_selection",
+      "value": "有效选择"
+    },
+    {
+      "name": "example_diag_selection_outcome",
+      "value": "选择结果"
+    },
+    {
+      "name": "example_diag_confirmed_tracks",
+      "value": "已确认轨道"
+    },
+    {
+      "name": "example_diag_system_session",
+      "value": "系统会话"
+    },
+    {
+      "name": "example_diag_pip",
+      "value": "画中画"
+    },
+    {
+      "name": "example_diag_platform",
+      "value": "平台"
+    },
+    {
+      "name": "example_diag_runtime_api",
+      "value": "HarmonyOS API"
+    },
+    {
+      "name": "example_diag_native_player",
+      "value": "原生播放器"
+    },
+    {
+      "name": "example_diag_track_constraints",
+      "value": "轨道约束"
+    },
+    {
+      "name": "example_diag_decoder_guarantee",
+      "value": "解码器保证"
+    },
+    {
+      "name": "example_diag_hdr_evidence",
+      "value": "HDR 证据"
+    },
+    {
+      "name": "example_diag_audio_evidence",
+      "value": "音频输出证据"
+    },
+    {
+      "name": "example_diag_event_history",
+      "value": "事件历史"
+    },
+    {
+      "name": "example_diag_history_detail",
+      "value": "最近 80 次状态变化和应用错误。"
+    },
+    {
+      "name": "example_diag_clear_history",
+      "value": "清空历史"
+    },
+    {
+      "name": "example_diag_per_kind_selection",
+      "value": "各类型轨道选择"
+    },
+    {
+      "name": "example_diag_track_preferences",
+      "value": "轨道偏好"
+    },
+    {
+      "name": "example_diag_time_ranges",
+      "value": "已加载 / 可定位范围"
+    },
+    {
+      "name": "example_diag_policy_parameters",
+      "value": "请求 / 生效策略"
+    },
+    {
+      "name": "example_diag_window_policy",
+      "value": "窗口策略反馈"
+    },
+    {
+      "name": "example_public_dash_title",
+      "value": "Akamai DASH 示例"
+    },
+    {
+      "name": "example_public_dash_detail",
+      "value": "自适应 DASH · 需要网络"
+    },
+    {
+      "name": "example_diag_track_filter",
+      "value": "轨道筛选请求 / 回读"
+    },
+    {
+      "name": "example_diag_native_buffering",
+      "value": "当前原生缓冲配置"
+    },
+    {
+      "name": "example_diag_native_observations",
+      "value": "原生播放观测"
+    },
+    {
+      "name": "example_diag_decoder_preflight",
+      "value": "硬件解码能力预检"
+    },
+    {
+      "name": "example_diag_feedback",
+      "value": "播放反馈"
+    },
+    {
+      "name": "example_diag_feedback_detail",
+      "value": "对当前视频运行检查，再保存本地报告。报告不包含媒体 URL、请求头或私有路径，不会自动上传。"
+    },
+    {
+      "name": "example_diag_scenario",
+      "value": "诊断场景"
+    },
+    {
+      "name": "example_diag_scenario_progress",
+      "value": "播放进度 · 4 秒"
+    },
+    {
+      "name": "example_diag_scenario_audio",
+      "value": "备用音轨 · 当前视频"
+    },
+    {
+      "name": "example_diag_scenario_tail",
+      "value": "跳至最后 15 秒并检查结束"
+    },
+    {
+      "name": "example_diag_scenario_dvr",
+      "value": "直播回看可用性 · 当前流"
+    },
+    {
+      "name": "example_diag_environment",
+      "value": "运行环境 · 由你确认"
+    },
+    {
+      "name": "example_diag_unknown",
+      "value": "尚未确认"
+    },
+    {
+      "name": "example_diag_device",
+      "value": "真实设备"
+    },
+    {
+      "name": "example_diag_simulator",
+      "value": "模拟器"
+    },
+    {
+      "name": "example_diag_audio_observation",
+      "value": "听到的声音 · 人工观察"
+    },
+    {
+      "name": "example_diag_not_assessed",
+      "value": "尚未判断"
+    },
+    {
+      "name": "example_diag_audible",
+      "value": "有声音"
+    },
+    {
+      "name": "example_diag_silent",
+      "value": "没有声音"
+    },
+    {
+      "name": "example_diag_intermittent",
+      "value": "声音断续"
+    },
+    {
+      "name": "example_diag_run_scenario",
+      "value": "运行检查"
+    },
+    {
+      "name": "example_diag_save_report",
+      "value": "保存报告"
+    },
+    {
+      "name": "example_diag_scenario_finished",
+      "value": "检查完成，可保存报告并主动提交结果。"
+    }
+  ]
+}

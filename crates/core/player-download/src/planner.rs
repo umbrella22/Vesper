@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use player_dash_hls_bridge::{
+    dash::{DashManifestType, DashSegmentTimelineEntry},
+    ops::TemplateSegment,
+};
 use quick_xml::{
     Reader, XmlVersion,
     events::{BytesStart, Event},
@@ -40,16 +44,33 @@ pub trait DownloadPlanningClient {
     fn fetch_text(&self, uri: &str) -> PlayerResult<String>;
 
     fn content_length(&self, uri: &str) -> PlayerResult<Option<u64>>;
+
+    /// Probes a finite group of resources in input order. Inventory-backed
+    /// clients can request a bounded batch without inventing missing lengths.
+    fn content_lengths(&self, uris: &[&str]) -> PlayerResult<Vec<Option<u64>>> {
+        uris.iter().map(|uri| self.content_length(uri)).collect()
+    }
 }
 
 #[derive(Debug)]
 pub struct DownloadPlanner<C> {
     client: C,
+    maximum_files: Option<usize>,
 }
 
 impl<C> DownloadPlanner<C> {
     pub fn new(client: C) -> Self {
-        Self { client }
+        Self {
+            client,
+            maximum_files: None,
+        }
+    }
+
+    /// Limits the materialized asset, including generated manifests and init
+    /// files. DASH admission is checked before resource probes.
+    pub fn with_maximum_files(mut self, maximum: usize) -> Self {
+        self.maximum_files = Some(maximum);
+        self
     }
 
     pub fn client(&self) -> &C {
@@ -183,6 +204,42 @@ where
         }
 
         let selected = select_dash_representations(&manifest, manifest_uri, profile)?;
+        // Validate template syntax before probing any resource. Expansion must
+        // never send unresolved tokens or reparse a representation ID as syntax.
+        for item in &selected {
+            if let Some(template) = &item.segment_template {
+                let time = item
+                    .template_segments
+                    .first()
+                    .and_then(|segment| segment.time);
+                expand_dash_template(
+                    &template.media,
+                    &item.representation,
+                    template.start_number,
+                    time,
+                )?;
+                if let Some(initialization) = &template.initialization {
+                    expand_dash_template(
+                        initialization,
+                        &item.representation,
+                        template.start_number,
+                        time,
+                    )?;
+                }
+            }
+        }
+        let files = selected.iter().try_fold(1_u64, |count, item| {
+            count.checked_add(item.segment_template.as_ref().map_or(1, |template| {
+                item.segment_count + u64::from(template.initialization.is_some())
+            }))
+        });
+        if files.is_none_or(|files| self.maximum_files.is_some_and(|limit| files > limit as u64)) {
+            return Err(planning_error(
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
+                "DASH asset exceeds the configured output file capacity",
+            ));
+        }
         self.build_dash_index(&manifest, &selected)
     }
 
@@ -209,10 +266,11 @@ where
                             initialization,
                             &item.representation,
                             template.start_number,
+                            item.template_segments
+                                .first()
+                                .and_then(|segment| segment.time),
                         )?,
                     );
-                    let size = self.probe_required_size(&remote, None)?;
-                    add_total_size(&mut total_size_bytes, size)?;
                     let resource_id = format!("dash-{stream_key}-init");
                     resource_ids.push(resource_id.clone());
                     resources.push(DownloadResourceRecord {
@@ -223,27 +281,24 @@ where
                         ))),
                         byte_range: None,
                         generated_text: None,
-                        size_bytes: Some(size),
+                        size_bytes: None,
                         etag: None,
                         checksum: None,
                     });
                 }
 
-                for index in 0..item.segment_count {
+                for segment in &item.template_segments {
                     ensure_segment_capacity(segments.len())?;
-                    let number = template.start_number.checked_add(index).ok_or_else(|| {
-                        planning_error(
-                            PlayerErrorCode::InvalidSource,
-                            PlayerErrorCategory::Source,
-                            "DASH SegmentTemplate segment number overflowed u64",
-                        )
-                    })?;
+                    let number = segment.number;
                     let remote = resolve_uri(
                         &item.base_uri,
-                        &expand_dash_template(&template.media, &item.representation, number)?,
+                        &expand_dash_template(
+                            &template.media,
+                            &item.representation,
+                            number,
+                            segment.time,
+                        )?,
                     );
-                    let size = self.probe_required_size(&remote, None)?;
-                    add_total_size(&mut total_size_bytes, size)?;
                     let segment_id = format!("dash-{stream_key}-segment-{number}");
                     segment_ids.push(segment_id.clone());
                     segments.push(DownloadSegmentRecord {
@@ -254,14 +309,12 @@ where
                         ))),
                         sequence: Some(number),
                         byte_range: None,
-                        size_bytes: Some(size),
+                        size_bytes: None,
                         checksum: None,
                     });
                 }
             } else {
                 let remote = item.base_uri.clone();
-                let size = self.probe_required_size(&remote, None)?;
-                add_total_size(&mut total_size_bytes, size)?;
                 let extension = extension_from_uri(&remote, "mp4");
                 let resource_id = format!("dash-{stream_key}-media");
                 resource_ids.push(resource_id.clone());
@@ -271,7 +324,7 @@ where
                     relative_path: Some(PathBuf::from(format!("media/{stream_key}.{extension}"))),
                     byte_range: None,
                     generated_text: None,
-                    size_bytes: Some(size),
+                    size_bytes: None,
                     etag: None,
                     checksum: None,
                 });
@@ -295,6 +348,30 @@ where
             });
         }
 
+        let uris: Vec<&str> = resources
+            .iter()
+            .map(|resource| resource.uri.as_str())
+            .chain(segments.iter().map(|segment| segment.uri.as_str()))
+            .collect();
+        let sizes = self.client.content_lengths(&uris)?;
+        if sizes.len() != uris.len() || sizes.iter().any(Option::is_none) {
+            return Err(planning_error(
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Network,
+                "DASH resources did not expose stable content lengths",
+            ));
+        }
+        for (size_bytes, size) in resources
+            .iter_mut()
+            .map(|resource| &mut resource.size_bytes)
+            .chain(segments.iter_mut().map(|segment| &mut segment.size_bytes))
+            .zip(sizes)
+        {
+            if let Some(size) = size {
+                add_total_size(&mut total_size_bytes, size)?;
+                *size_bytes = Some(size);
+            }
+        }
         resources.insert(
             0,
             DownloadResourceRecord {
@@ -1031,6 +1108,8 @@ struct DashSegmentTemplateFields {
     start_number: Option<u64>,
     timescale: Option<u64>,
     duration: Option<u64>,
+    presentation_time_offset: Option<u64>,
+    timeline: Option<Vec<DashSegmentTimelineEntry>>,
 }
 
 impl DashSegmentTemplateFields {
@@ -1044,6 +1123,10 @@ impl DashSegmentTemplateFields {
             start_number: child.start_number.or(self.start_number),
             timescale: child.timescale.or(self.timescale),
             duration: child.duration.or(self.duration),
+            presentation_time_offset: child
+                .presentation_time_offset
+                .or(self.presentation_time_offset),
+            timeline: child.timeline.clone().or_else(|| self.timeline.clone()),
         }
     }
 
@@ -1054,6 +1137,8 @@ impl DashSegmentTemplateFields {
             start_number: self.start_number.unwrap_or(1),
             timescale: self.timescale.unwrap_or(1),
             duration: self.duration.unwrap_or(0),
+            presentation_time_offset: self.presentation_time_offset.unwrap_or(0),
+            timeline: self.timeline.clone().unwrap_or_default(),
         })
     }
 }
@@ -1065,6 +1150,8 @@ struct DashSegmentTemplate {
     start_number: u64,
     timescale: u64,
     duration: u64,
+    presentation_time_offset: u64,
+    timeline: Vec<DashSegmentTimelineEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -1077,6 +1164,7 @@ struct DashSelectedRepresentation {
     base_uri: String,
     segment_template: Option<DashSegmentTemplate>,
     segment_count: u64,
+    template_segments: Vec<TemplateSegment>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1095,9 +1183,41 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
     let mut current_adaptation = None;
     let mut current_representation = None;
     let mut base_url_capture: Option<(DashBaseUrlTarget, String)> = None;
+    let mut template_open = false;
+    let mut timeline_open = false;
+    let mut template_has_timeline = false;
+    let mut timeline_entries = 0_usize;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        if let Ok(Event::Start(tag) | Event::Empty(tag)) = &event {
+            match tag.local_name().as_ref() {
+                "SegmentTemplate" => {
+                    if template_open {
+                        return Err(dash_xml_error("nested SegmentTemplate is not supported"));
+                    }
+                    template_open = matches!(event, Ok(Event::Start(_)));
+                    template_has_timeline = false;
+                }
+                "SegmentTimeline" => {
+                    if !template_open
+                        || template_has_timeline
+                        || matches!(event, Ok(Event::Empty(_)))
+                    {
+                        return Err(dash_xml_error("invalid or empty SegmentTimeline"));
+                    }
+                    timeline_open = true;
+                    template_has_timeline = true;
+                    timeline_entries = 0;
+                }
+                "S" if !timeline_open => {
+                    return Err(dash_xml_error("S is outside SegmentTimeline"));
+                }
+                "S" => timeline_entries += 1,
+                _ => {}
+            }
+        }
+        match event {
             Ok(Event::Start(start)) => process_dash_open_element(
                 &reader,
                 &start,
@@ -1133,6 +1253,13 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
                 }
             }
             Ok(Event::End(end)) => match end.local_name().as_ref() {
+                "SegmentTemplate" => template_open = false,
+                "SegmentTimeline" => {
+                    if timeline_entries == 0 {
+                        return Err(dash_xml_error("SegmentTimeline must not be empty"));
+                    }
+                    timeline_open = false;
+                }
                 "BaseURL" => {
                     if let Some((target, value)) = base_url_capture.take() {
                         assign_dash_base_url(
@@ -1292,6 +1419,12 @@ fn process_dash_open_element(
                 start_number: dash_u64_attribute(reader, start, "startNumber")?,
                 timescale: dash_u64_attribute(reader, start, "timescale")?,
                 duration: dash_u64_attribute(reader, start, "duration")?,
+                presentation_time_offset: dash_u64_attribute(
+                    reader,
+                    start,
+                    "presentationTimeOffset",
+                )?,
+                timeline: None,
             };
             if let Some(representation) = current_representation.as_mut() {
                 representation.segment_template = fields;
@@ -1301,6 +1434,43 @@ fn process_dash_open_element(
                 period.segment_template = fields;
             } else {
                 manifest.segment_template = fields;
+            }
+        }
+        "SegmentTimeline" | "S" => {
+            let fields = if let Some(representation) = current_representation.as_mut() {
+                &mut representation.segment_template
+            } else if let Some(adaptation) = current_adaptation.as_mut() {
+                &mut adaptation.segment_template
+            } else if let Some(period) = current_period.as_mut() {
+                &mut period.segment_template
+            } else {
+                &mut manifest.segment_template
+            };
+            if start.local_name().as_ref() == "SegmentTimeline" {
+                fields.timeline = Some(Vec::new());
+            } else {
+                let timeline = fields
+                    .timeline
+                    .as_mut()
+                    .ok_or_else(|| dash_xml_error("S is outside SegmentTimeline"))?;
+                ensure_segment_capacity(timeline.len())?;
+                let repeat_count = dash_event_attribute(reader, start, "r")?
+                    .map(|value| value.parse::<i32>())
+                    .transpose()
+                    .map_err(|_| dash_xml_error("invalid SegmentTimeline repeat"))?
+                    .unwrap_or(0);
+                if repeat_count < -1 {
+                    return Err(dash_xml_error("SegmentTimeline repeat must be at least -1"));
+                }
+                timeline.push(DashSegmentTimelineEntry {
+                    start_time: dash_u64_attribute(reader, start, "t")?,
+                    duration: dash_u64_attribute(reader, start, "d")?
+                        .filter(|duration| *duration > 0)
+                        .ok_or_else(|| {
+                            dash_xml_error("SegmentTimeline duration must be positive")
+                        })?,
+                    repeat_count,
+                });
             }
         }
         "SegmentBase" => {
@@ -1462,26 +1632,30 @@ fn select_dash_representations(
             resolve_optional_dash_base(&period_base, adaptation.base_url.as_deref());
         let base_uri =
             resolve_optional_dash_base(&adaptation_base, representation.base_url.as_deref());
-        let segment_count = if let Some(template) = segment_template.as_ref() {
-            if template.duration == 0 || template.timescale == 0 {
-                return Err(planning_error(
-                    PlayerErrorCode::InvalidSource,
-                    PlayerErrorCategory::Source,
-                    "DASH SegmentTemplate duration and timescale must be greater than zero",
-                ));
-            }
-            let duration_seconds = duration_seconds.ok_or_else(|| {
-                planning_error(
-                    PlayerErrorCode::InvalidSource,
-                    PlayerErrorCategory::Source,
-                    "DASH SegmentTemplate planning requires a finite MPD duration",
-                )
-            })?;
-            let segment_seconds = template.duration as f64 / template.timescale as f64;
-            dash_segment_count(duration_seconds, segment_seconds)?
+        let template_segments = if let Some(template) = segment_template.as_ref() {
+            let shared = player_dash_hls_bridge::dash::DashSegmentTemplate {
+                media: template.media.clone(),
+                initialization: template.initialization.clone(),
+                timescale: template.timescale,
+                duration: (template.duration > 0).then_some(template.duration),
+                start_number: template.start_number,
+                presentation_time_offset: template.presentation_time_offset,
+                timeline: template.timeline.clone(),
+            };
+            player_dash_hls_bridge::ops::template_segments(
+                Some(DashManifestType::Static),
+                duration_seconds
+                    .filter(|seconds| {
+                        seconds.is_finite() && *seconds > 0.0 && *seconds < u64::MAX as f64 / 1000.0
+                    })
+                    .map(|seconds| (seconds * 1000.0).round() as u64),
+                &shared,
+            )
+            .map_err(|error| dash_xml_error(error.to_string()))?
         } else {
-            0
+            Vec::new()
         };
+        let segment_count = template_segments.len() as u64;
         total_segment_count = total_segment_count
             .checked_add(segment_count)
             .ok_or_else(|| {
@@ -1513,6 +1687,7 @@ fn select_dash_representations(
             base_uri,
             segment_template,
             segment_count,
+            template_segments,
         });
     }
 
@@ -1646,10 +1821,31 @@ fn rewrite_dash_mpd(manifest: &DashManifest, selected: &[DashSelectedRepresentat
                 .as_ref()
                 .map(|_| format!(" initialization=\"segments/{stream_key}/init.mp4\""))
                 .unwrap_or_default();
+            let duration = if template.timeline.is_empty() {
+                format!(" duration=\"{}\"", template.duration)
+            } else {
+                String::new()
+            };
             output.push_str(&format!(
-                "<SegmentTemplate timescale=\"{}\" duration=\"{}\" startNumber=\"{}\"{initialization} media=\"segments/{stream_key}/seg-$Number%05d$.m4s\" />",
-                template.timescale, template.duration, template.start_number
+                "<SegmentTemplate timescale=\"{}\"{duration} startNumber=\"{}\" presentationTimeOffset=\"{}\"{initialization} media=\"segments/{stream_key}/seg-$Number%05d$.m4s\"",
+                template.timescale, template.start_number, template.presentation_time_offset
             ));
+            if template.timeline.is_empty() {
+                output.push_str(" />");
+            } else {
+                output.push_str("><SegmentTimeline>");
+                for entry in &template.timeline {
+                    let time = entry
+                        .start_time
+                        .map(|time| format!(" t=\"{time}\""))
+                        .unwrap_or_default();
+                    output.push_str(&format!(
+                        "<S{time} d=\"{}\" r=\"{}\"/>",
+                        entry.duration, entry.repeat_count
+                    ));
+                }
+                output.push_str("</SegmentTimeline></SegmentTemplate>");
+            }
         } else {
             let extension = extension_from_uri(&item.base_uri, "mp4");
             output.push_str(&format!(
@@ -1683,83 +1879,54 @@ fn expand_dash_template(
     template: &str,
     representation: &DashRepresentation,
     number: u64,
+    time: Option<u64>,
 ) -> PlayerResult<String> {
-    let value = template.replace("$RepresentationID$", &representation.id);
-    replace_dash_number_token(&value, number)
-}
-
-fn replace_dash_number_token(value: &str, number: u64) -> PlayerResult<String> {
-    // Match the DASH bridge's formatting budget: 32 digits exceeds every u64
-    // segment number. MPD-controlled widths must be rejected before allocation.
-    const MAX_TEMPLATE_NUMBER_WIDTH: usize = 32;
-    let mut output = value.replace("$Number$", &number.to_string());
-    while let Some(start) = output.find("$Number%") {
-        let Some(end_offset) = output[start + "$Number%".len()..].find("$") else {
-            break;
-        };
-        let token_end = start + "$Number%".len() + end_offset + 1;
-        let format_spec = &output[start + "$Number%".len()..token_end - 1];
-        let width = format_spec
-            .strip_suffix('d')
-            .and_then(|value| value.strip_prefix('0'))
-            .map(str::parse::<usize>)
-            .transpose()
-            .map_err(|_| {
-                planning_error(
-                    PlayerErrorCode::InvalidSource,
-                    PlayerErrorCategory::Source,
-                    "invalid DASH SegmentTemplate format width",
-                )
-            })?
-            .unwrap_or(0);
-        if width > MAX_TEMPLATE_NUMBER_WIDTH {
-            return Err(planning_error(
-                PlayerErrorCode::InvalidSource,
-                PlayerErrorCategory::Source,
-                format!("DASH SegmentTemplate format width exceeds {MAX_TEMPLATE_NUMBER_WIDTH}"),
-            ));
-        }
-        output.replace_range(start..token_end, &format!("{number:0width$}"));
-    }
-    Ok(output)
-}
-
-fn dash_segment_count(duration_seconds: f64, segment_seconds: f64) -> PlayerResult<u64> {
-    if !duration_seconds.is_finite()
-        || !segment_seconds.is_finite()
-        || duration_seconds <= 0.0
-        || segment_seconds <= 0.0
-    {
-        return Err(planning_error(
-            PlayerErrorCode::InvalidSource,
-            PlayerErrorCategory::Source,
-            "DASH SegmentTemplate planning requires finite positive duration values",
-        ));
-    }
-    let segment_count = (duration_seconds / segment_seconds).ceil().max(1.0);
-    if segment_count > u64::MAX as f64 {
-        return Err(planning_error(
-            PlayerErrorCode::InvalidSource,
-            PlayerErrorCategory::Source,
-            "DASH SegmentTemplate segment count exceeds u64 range",
-        ));
-    }
-    let segment_count = segment_count as u64;
-    // Bound the segment count up front. The caller iterates `0..segment_count`
-    // and probes each segment over HTTP; an unbounded count from a pathological
-    // SegmentTemplate duration would otherwise drive a multi-GB allocation and
-    // a probe-request amplification storm before the per-iteration cap inside
-    // the loop fires. 100k mirrors MAX_PLANNED_SEGMENTS.
-    if segment_count > MAX_PLANNED_SEGMENTS as u64 {
-        return Err(planning_error(
-            PlayerErrorCode::InvalidSource,
-            PlayerErrorCategory::Source,
-            format!(
-                "DASH SegmentTemplate planning refused to expand more than {MAX_PLANNED_SEGMENTS} segments"
+    let mut output = String::new();
+    let mut remaining = template;
+    while let Some(start) = remaining.find('$') {
+        output.push_str(&remaining[..start]);
+        let tail = &remaining[start + 1..];
+        let end = tail
+            .find('$')
+            .ok_or_else(|| dash_xml_error("unterminated DASH template token"))?;
+        let token = &tail[..end];
+        match token {
+            "RepresentationID" => output.push_str(&representation.id),
+            "Number" => output.push_str(&number.to_string()),
+            "Time" => output.push_str(
+                &time
+                    .ok_or_else(|| dash_xml_error("Time requires SegmentTimeline"))?
+                    .to_string(),
             ),
-        ));
+            _ if (token.starts_with("Number%0") || token.starts_with("Time%0"))
+                && token.ends_with('d') =>
+            {
+                // Match the playback bridge's bounded formatting width.
+                let prefix = if token.starts_with("Time") { 6 } else { 8 };
+                let value = if prefix == 6 {
+                    time.ok_or_else(|| dash_xml_error("Time requires SegmentTimeline"))?
+                } else {
+                    number
+                };
+                let width = token[prefix..token.len() - 1]
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|width| (1..=32).contains(width))
+                    .ok_or_else(|| dash_xml_error("invalid DASH SegmentTemplate format width"))?;
+                output.push_str(&format!("{value:0width$}"));
+            }
+            _ => {
+                return Err(planning_error(
+                    PlayerErrorCode::Unsupported,
+                    PlayerErrorCategory::Capability,
+                    "DASH download templates support RepresentationID, Number and finite Timeline Time tokens only",
+                ));
+            }
+        }
+        remaining = &tail[end + 1..];
     }
-    Ok(segment_count)
+    output.push_str(remaining);
+    Ok(output)
 }
 
 fn parse_iso8601_duration_seconds(value: &str) -> Option<f64> {
@@ -2667,8 +2834,12 @@ mod tests {
     // probe is issued.
     #[test]
     fn refuses_oversized_dash_segment_template() {
-        // duration_seconds huge, segment_seconds tiny => segment_count huge.
-        let error = super::dash_segment_count(3_600_000_000.0, 0.001)
+        let uri = "https://cdn.test/pathological.mpd";
+        let client = FakeClient::default().with_text(uri, r#"<MPD type="static" mediaPresentationDuration="PT3600000000S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="video"><SegmentTemplate timescale="1000" duration="1" media="$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>"#);
+        let source =
+            DownloadSource::new(MediaSource::new(uri), DownloadContentFormat::DashSegments);
+        let error = DownloadPlanner::new(client)
+            .plan(&source, &DownloadProfile::default())
             .expect_err("pathological DASH template must be rejected");
         assert_eq!(error.category(), PlayerErrorCategory::Source);
         assert_eq!(error.code(), PlayerErrorCode::InvalidSource);

@@ -1,0 +1,15 @@
+'use strict';
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const { createLoader } = require('../../../../lib/harmony/tests/support/load.cjs');
+const load = createLoader(name => { if (name === '@kit.MediaKit') return { media: {} }; throw new Error(name); });
+const { dvrRewindTarget } = load(path.resolve(__dirname, '../entry/src/main/ets/DvrChecks.ets'));
+const window = { min: 94000, max: 100000 };
+const ptsUs = 96356134;
+const target = dvrRewindTarget(window, ptsUs);
+assert.ok(target > window.min + 999 && target < window.max - 999);
+assert.ok(target < ptsUs / 1000 - 999, 'window midpoint can be ahead of PTS and must not count as a rewind');
+assert.equal(dvrRewindTarget(window, 94500000), undefined, 'a window without an interior point behind PTS cannot prove DVR');
+assert.equal(dvrRewindTarget({ min: 100000, max: 148000 }, 95000000), undefined, 'coordinate mismatch must not create an edge-clamped rewind');
+assert.equal(dvrRewindTarget(window, NaN), undefined);
+console.log(JSON.stringify({ status: 'PASS', suite: 'dvr-rewind-target-native-coordinates' }));
