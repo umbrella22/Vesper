@@ -353,7 +353,7 @@ impl DashLive {
                 "Live DASH track identity or segment sequence changed within the activation",
             ));
         }
-        let master = build_hls_master_input_from_dash_manifest(&manifest, |set, _| {
+        let master_input = build_hls_master_input_from_dash_manifest(&manifest, |set, _| {
             format!(
                 "{root}{}.m3u8",
                 if set.kind == DashAdaptationKind::Video {
@@ -363,8 +363,8 @@ impl DashLive {
                 }
             )
         })
-        .and_then(|input| build_hls_master_playlist(&input))
         .map_err(|_| unsupported())?;
+        let master = build_hls_master_playlist(&master_input).map_err(|_| unsupported())?;
         let mut playlists = vec![json!({"uri":format!("{root}master.m3u8"), "text":master})];
         let mut resources = Vec::new();
         let mut sequences = Vec::new();

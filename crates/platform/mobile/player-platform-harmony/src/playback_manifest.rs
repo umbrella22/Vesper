@@ -193,13 +193,13 @@ fn hls(text: &str, projection: &mut Projection) -> Result<String, Value> {
     let mut variants = 0;
     let mut accepted = 0;
     for (index, line) in lines.iter().enumerate() {
-        if let Some(attrs) = line.strip_prefix("#EXT-X-KEY:") {
-            if attribute(&attributes(attrs)?, "METHOD") != "NONE" {
-                return Err(failure(
-                    "unsupported",
-                    "protected HLS cannot enter ordinary playback transport",
-                ));
-            }
+        if let Some(attrs) = line.strip_prefix("#EXT-X-KEY:")
+            && attribute(&attributes(attrs)?, "METHOD") != "NONE"
+        {
+            return Err(failure(
+                "unsupported",
+                "protected HLS cannot enter ordinary playback transport",
+            ));
         }
         if line.starts_with("#EXT-X-SESSION-KEY:") {
             return Err(unsupported());
@@ -238,40 +238,39 @@ fn hls(text: &str, projection: &mut Projection) -> Result<String, Value> {
         if let Some((tag, fields)) = line
             .split_once(':')
             .filter(|(tag, _)| tag.starts_with("#EXT"))
+            && (fields.contains("URI=") || tag == "#EXT-X-MEDIA")
         {
-            if fields.contains("URI=") || tag == "#EXT-X-MEDIA" {
-                let mut attrs = attributes(fields)?;
-                if tag == "#EXT-X-MEDIA"
-                    && attribute(&attrs, "TYPE") == "AUDIO"
-                    && variants > 0
-                    && !audio.contains(attribute(&attrs, "GROUP-ID"))
-                {
-                    continue;
-                }
-                for (key, value, _) in &mut attrs {
-                    if key == "URI" {
-                        *value = projection.resource(value)?;
-                    }
-                }
-                output.push_str(tag);
-                output.push(':');
-                for (offset, (key, value, quoted)) in attrs.iter().enumerate() {
-                    if offset > 0 {
-                        output.push(',');
-                    }
-                    output.push_str(key);
-                    output.push('=');
-                    if *quoted {
-                        output.push('"');
-                    }
-                    output.push_str(value);
-                    if *quoted {
-                        output.push('"');
-                    }
-                }
-                output.push('\n');
+            let mut attrs = attributes(fields)?;
+            if tag == "#EXT-X-MEDIA"
+                && attribute(&attrs, "TYPE") == "AUDIO"
+                && variants > 0
+                && !audio.contains(attribute(&attrs, "GROUP-ID"))
+            {
                 continue;
             }
+            for (key, value, _) in &mut attrs {
+                if key == "URI" {
+                    *value = projection.resource(value)?;
+                }
+            }
+            output.push_str(tag);
+            output.push(':');
+            for (offset, (key, value, quoted)) in attrs.iter().enumerate() {
+                if offset > 0 {
+                    output.push(',');
+                }
+                output.push_str(key);
+                output.push('=');
+                if *quoted {
+                    output.push('"');
+                }
+                output.push_str(value);
+                if *quoted {
+                    output.push('"');
+                }
+            }
+            output.push('\n');
+            continue;
         }
         output.push_str(&if line.is_empty() || line.starts_with('#') {
             (*line).to_owned()
@@ -316,12 +315,11 @@ fn xml_nodes(text: &str) -> Result<Vec<Node>, Value> {
             return Err(failure("capacity", "playback XML exceeds its tree budget"));
         }
         let event = reader.read_event().map_err(|_| unsupported())?;
-        if let Event::Start(tag) | Event::Empty(tag) = &event {
-            if tag.local_name().as_ref() == "ContentProtection"
-                || !xml_attribute(tag, "xml:base")?.is_empty()
-            {
-                return Err(unsupported());
-            }
+        if let Event::Start(tag) | Event::Empty(tag) = &event
+            && (tag.local_name().as_ref() == "ContentProtection"
+                || !xml_attribute(tag, "xml:base")?.is_empty())
+        {
+            return Err(unsupported());
         }
         let node = match event {
             Event::Start(tag) => {
@@ -378,35 +376,35 @@ fn filter_dash(element: &mut Element, projection: &mut Projection) -> Result<(),
             let mut had_representations = false;
             let mut accepted = 0;
             for child in adaptation.children.drain(..) {
-                if let Node::Element(representation) = &child {
-                    if representation.tag.local_name().as_ref() == "Representation" {
-                        had_representations = true;
-                        let declared_mime = xml_attribute(&representation.tag, "mimeType")?;
-                        let declared_codecs = xml_attribute(&representation.tag, "codecs")?;
-                        let mime = if declared_mime.is_empty() {
-                            &mime
-                        } else {
-                            &declared_mime
-                        };
-                        let codecs = if declared_codecs.is_empty() {
-                            &codecs
-                        } else {
-                            &declared_codecs
-                        };
-                        let media = matches!(kind.as_str(), "audio" | "video")
-                            || mime.starts_with("audio/")
-                            || mime.starts_with("video/");
-                        if media {
-                            media_seen += 1;
-                        }
-                        if media && !projection.supported(mime, codecs) {
-                            continue;
-                        }
-                        if media {
-                            media_kept += 1;
-                        }
-                        accepted += 1;
+                if let Node::Element(representation) = &child
+                    && representation.tag.local_name().as_ref() == "Representation"
+                {
+                    had_representations = true;
+                    let declared_mime = xml_attribute(&representation.tag, "mimeType")?;
+                    let declared_codecs = xml_attribute(&representation.tag, "codecs")?;
+                    let mime = if declared_mime.is_empty() {
+                        &mime
+                    } else {
+                        &declared_mime
+                    };
+                    let codecs = if declared_codecs.is_empty() {
+                        &codecs
+                    } else {
+                        &declared_codecs
+                    };
+                    let media = matches!(kind.as_str(), "audio" | "video")
+                        || mime.starts_with("audio/")
+                        || mime.starts_with("video/");
+                    if media {
+                        media_seen += 1;
                     }
+                    if media && !projection.supported(mime, codecs) {
+                        continue;
+                    }
+                    if media {
+                        media_kept += 1;
+                    }
+                    accepted += 1;
                 }
                 children.push(child);
             }
