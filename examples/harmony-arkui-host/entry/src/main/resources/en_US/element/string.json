@@ -1,0 +1,884 @@
+{
+  "string": [
+    {
+      "name": "example_play",
+      "value": "Play"
+    },
+    {
+      "name": "example_downloads",
+      "value": "Downloads"
+    },
+    {
+      "name": "example_diagnostics",
+      "value": "Diagnostics"
+    },
+    {
+      "name": "example_settings",
+      "value": "App settings"
+    },
+    {
+      "name": "example_appearance",
+      "value": "Appearance"
+    },
+    {
+      "name": "example_system",
+      "value": "System"
+    },
+    {
+      "name": "example_light",
+      "value": "Light"
+    },
+    {
+      "name": "example_dark",
+      "value": "Dark"
+    },
+    {
+      "name": "example_inline_controls",
+      "value": "Inline controls"
+    },
+    {
+      "name": "example_fullscreen_controls",
+      "value": "Fullscreen controls"
+    },
+    {
+      "name": "example_compact",
+      "value": "Compact"
+    },
+    {
+      "name": "example_expanded",
+      "value": "Expanded"
+    },
+    {
+      "name": "example_classic",
+      "value": "Classic"
+    },
+    {
+      "name": "example_blue_accent",
+      "value": "System blue player"
+    },
+    {
+      "name": "example_reduced_motion",
+      "value": "Reduce motion"
+    },
+    {
+      "name": "example_appearance_note",
+      "value": "Player appearance changes keep the current video in place."
+    },
+    {
+      "name": "example_window_failed",
+      "value": "The window could not change its presentation. Try again."
+    },
+    {
+      "name": "example_ready",
+      "value": "Getting ready…"
+    },
+    {
+      "name": "example_choose_file",
+      "value": "Choose file"
+    },
+    {
+      "name": "example_hls_sample",
+      "value": "HLS sample"
+    },
+    {
+      "name": "example_dash_sample",
+      "value": "DASH sample"
+    },
+    {
+      "name": "example_open_url",
+      "value": "Open URL"
+    },
+    {
+      "name": "example_open_media",
+      "value": "Open media"
+    },
+    {
+      "name": "example_up_next",
+      "value": "Up next"
+    },
+    {
+      "name": "example_manage_queue",
+      "value": "Manage queue"
+    },
+    {
+      "name": "example_videos",
+      "value": "%d videos"
+    },
+    {
+      "name": "example_now_playing",
+      "value": "Now playing"
+    },
+    {
+      "name": "example_in_queue",
+      "value": "Ready in queue"
+    },
+    {
+      "name": "example_preloaded",
+      "value": "Prepared for playback"
+    },
+    {
+      "name": "example_previous",
+      "value": "Previous video"
+    },
+    {
+      "name": "example_next",
+      "value": "Next video"
+    },
+    {
+      "name": "example_queue_hint",
+      "value": "Choose a video to play. Custom videos can be removed after switching to another video."
+    },
+    {
+      "name": "example_system_playback",
+      "value": "System playback"
+    },
+    {
+      "name": "example_background_audio",
+      "value": "Background audio & media controls"
+    },
+    {
+      "name": "example_auto_pip",
+      "value": "Automatic Picture in Picture"
+    },
+    {
+      "name": "example_pip",
+      "value": "Picture in Picture"
+    },
+    {
+      "name": "example_options",
+      "value": "Playback options"
+    },
+    {
+      "name": "example_media_hint",
+      "value": "Paste an MP4, HLS or DASH media URL."
+    },
+    {
+      "name": "example_media_url",
+      "value": "Media URL"
+    },
+    {
+      "name": "example_media_type",
+      "value": "Media type"
+    },
+    {
+      "name": "example_auto",
+      "value": "Auto"
+    },
+    {
+      "name": "example_add_queue",
+      "value": "Add to queue"
+    },
+    {
+      "name": "example_open_stream",
+      "value": "Open a stream"
+    },
+    {
+      "name": "example_description_empty",
+      "value": "Choose a video or open your own media."
+    },
+    {
+      "name": "example_welcome",
+      "value": "Your next watch starts here"
+    },
+    {
+      "name": "example_studio_sample",
+      "value": "Studio sample"
+    },
+    {
+      "name": "example_studio_detail",
+      "value": "Bundled MP4 · available offline"
+    },
+    {
+      "name": "example_dash_detail",
+      "value": "Bundled DASH · available offline"
+    },
+    {
+      "name": "example_hls_title",
+      "value": "Apple HLS sample"
+    },
+    {
+      "name": "example_hls_detail",
+      "value": "Adaptive HLS · internet required"
+    },
+    {
+      "name": "example_error_network",
+      "value": "The connection was interrupted. Try again when you are online."
+    },
+    {
+      "name": "example_error_source",
+      "value": "This media could not be opened. Check the source."
+    },
+    {
+      "name": "example_error_expired",
+      "value": "Media access expired. Reopen it with current access."
+    },
+    {
+      "name": "example_error_capacity",
+      "value": "There is not enough space or capacity for this action."
+    },
+    {
+      "name": "example_error_unsupported",
+      "value": "This action is unavailable for this media or device."
+    },
+    {
+      "name": "example_error_in_use",
+      "value": "This item is still being used. Finish playback or sharing first."
+    },
+    {
+      "name": "example_error_not_ready",
+      "value": "Wait for the video to be ready, then try again."
+    },
+    {
+      "name": "example_error_playback",
+      "value": "The action could not be completed. Try another video."
+    },
+    {
+      "name": "example_dismiss",
+      "value": "Dismiss"
+    },
+    {
+      "name": "example_remote_video",
+      "value": "Remote video"
+    },
+    {
+      "name": "example_added",
+      "value": "Video added to the queue."
+    },
+    {
+      "name": "example_removed_queue",
+      "value": "Video removed from the queue."
+    },
+    {
+      "name": "example_preload_last",
+      "value": "Add another video to preload next."
+    },
+    {
+      "name": "example_cache_cleared",
+      "value": "Startup cache cleared."
+    },
+    {
+      "name": "example_policy_evaluated",
+      "value": "Policy saved. Buffer preferences apply on the next activation."
+    },
+    {
+      "name": "example_pick_cancelled",
+      "value": "Video selection cancelled."
+    },
+    {
+      "name": "example_imported",
+      "value": "Imported video"
+    },
+    {
+      "name": "example_imported_detail",
+      "value": "Private copy · available offline"
+    },
+    {
+      "name": "example_downloaded_video",
+      "value": "Downloaded video"
+    },
+    {
+      "name": "example_download_started",
+      "value": "Download started."
+    },
+    {
+      "name": "example_download_paused",
+      "value": "Download paused."
+    },
+    {
+      "name": "example_download_resumed",
+      "value": "Download restored. Existing bytes are verified before reuse."
+    },
+    {
+      "name": "example_download_deleted",
+      "value": "Download deleted."
+    },
+    {
+      "name": "example_share_opened",
+      "value": "Share panel opened. The file remains available for ten minutes."
+    },
+    {
+      "name": "example_saved",
+      "value": "Video saved to the selected location."
+    },
+    {
+      "name": "example_save_cancelled",
+      "value": "Save cancelled. Your download is unchanged."
+    },
+    {
+      "name": "example_pip_enabled",
+      "value": "Picture in Picture started."
+    },
+    {
+      "name": "example_diagnostics_copied",
+      "value": "Diagnostics copied without source URLs or access headers."
+    },
+    {
+      "name": "example_history_cleared",
+      "value": "Event history cleared."
+    },
+    {
+      "name": "example_remove_video",
+      "value": "Remove video"
+    },
+    {
+      "name": "example_preload_video",
+      "value": "Preload video"
+    },
+    {
+      "name": "example_recovery",
+      "value": "Playback recovery"
+    },
+    {
+      "name": "example_recovery_detail",
+      "value": "Retry known temporary failures, up to twice within 30 seconds."
+    },
+    {
+      "name": "example_recovery_note",
+      "value": "A pause or source change cancels recovery. Expired access needs a refreshed source."
+    },
+    {
+      "name": "example_recovery_off",
+      "value": "Off"
+    },
+    {
+      "name": "example_recovery_idle",
+      "value": "Ready"
+    },
+    {
+      "name": "example_recovery_waiting",
+      "value": "Waiting to retry"
+    },
+    {
+      "name": "example_recovery_activating",
+      "value": "Reopening video"
+    },
+    {
+      "name": "example_recovery_awaitingFrame",
+      "value": "Waiting for video output"
+    },
+    {
+      "name": "example_recovery_recovered",
+      "value": "Playback restored"
+    },
+    {
+      "name": "example_recovery_exhausted",
+      "value": "Retry limit reached"
+    },
+    {
+      "name": "example_recovery_hostAction",
+      "value": "Choose or refresh the source"
+    },
+    {
+      "name": "example_recovery_cancelled",
+      "value": "Recovery cancelled"
+    },
+    {
+      "name": "example_track_preferences",
+      "value": "Language preferences"
+    },
+    {
+      "name": "example_track_preferences_detail",
+      "value": "Applied once after tracks become available. Your later choice takes priority."
+    },
+    {
+      "name": "example_audio_language",
+      "value": "Preferred audio language"
+    },
+    {
+      "name": "example_subtitle_preference",
+      "value": "Subtitles"
+    },
+    {
+      "name": "example_language_english",
+      "value": "English"
+    },
+    {
+      "name": "example_language_chinese",
+      "value": "Chinese"
+    },
+    {
+      "name": "example_subtitle_off",
+      "value": "Off"
+    },
+    {
+      "name": "example_subtitle_preferred",
+      "value": "Preferred language"
+    },
+    {
+      "name": "example_preference_applied",
+      "value": "Preference applied"
+    },
+    {
+      "name": "example_preference_deferred",
+      "value": "Applies when the video is ready"
+    },
+    {
+      "name": "example_preference_unchanged",
+      "value": "Kept the current choice"
+    },
+    {
+      "name": "example_preference_failed",
+      "value": "Preference could not be applied"
+    },
+    {
+      "name": "example_policy",
+      "value": "Playback and resource requests"
+    },
+    {
+      "name": "example_policy_detail",
+      "value": "Choose native buffer preferences and future resource request attempts."
+    },
+    {
+      "name": "example_policy_system",
+      "value": "Default · 2 attempts"
+    },
+    {
+      "name": "example_policy_responsive",
+      "value": "Quick · 1 attempt"
+    },
+    {
+      "name": "example_policy_resilient",
+      "value": "Persistent · 3 attempts"
+    },
+    {
+      "name": "example_policy_note",
+      "value": "Buffer preferences apply on the next activation and do not apply to local files. Diagnostics separates requests, native acceptance and playback observations."
+    },
+    {
+      "name": "example_preload",
+      "value": "Startup preload"
+    },
+    {
+      "name": "example_preload_detail",
+      "value": "Prepare the next video without starting another player."
+    },
+    {
+      "name": "example_status",
+      "value": "Status"
+    },
+    {
+      "name": "example_received_reuse",
+      "value": "Received / reuse"
+    },
+    {
+      "name": "example_preload_next",
+      "value": "Preload next"
+    },
+    {
+      "name": "example_cancel_preload",
+      "value": "Cancel preload"
+    },
+    {
+      "name": "example_preload_note",
+      "value": "Remote MP4 and static SegmentBase DASH can preload. Completion and playback reuse are separate results."
+    },
+    {
+      "name": "example_cache",
+      "value": "Startup cache"
+    },
+    {
+      "name": "example_cache_detail",
+      "value": "8 MiB memory · 32 MiB disk · 30 second preload lifetime"
+    },
+    {
+      "name": "example_disk_entries",
+      "value": "Disk entries / bytes"
+    },
+    {
+      "name": "example_disk_reuse",
+      "value": "Disk reuse"
+    },
+    {
+      "name": "example_cache_clear",
+      "value": "Clear startup cache"
+    },
+    {
+      "name": "example_offline_title",
+      "value": "Available offline"
+    },
+    {
+      "name": "example_offline_detail",
+      "value": "Keep your videos with you, wherever you go."
+    },
+    {
+      "name": "example_new_download",
+      "value": "New download"
+    },
+    {
+      "name": "example_download_url",
+      "value": "Download URL"
+    },
+    {
+      "name": "example_download_type",
+      "value": "Download media type"
+    },
+    {
+      "name": "example_download_video",
+      "value": "Download video"
+    },
+    {
+      "name": "example_download_note",
+      "value": "Completed assets play offline. Save and Share support originals or ZIP bundles up to 256 MiB, including ZIP overhead."
+    },
+    {
+      "name": "example_downloads_empty",
+      "value": "No downloads yet"
+    },
+    {
+      "name": "example_downloads_empty_detail",
+      "value": "Your downloads will appear here."
+    },
+    {
+      "name": "example_download_Queued",
+      "value": "Queued"
+    },
+    {
+      "name": "example_download_Preparing",
+      "value": "Preparing"
+    },
+    {
+      "name": "example_download_Downloading",
+      "value": "Downloading"
+    },
+    {
+      "name": "example_download_Paused",
+      "value": "Paused"
+    },
+    {
+      "name": "example_download_Failed",
+      "value": "Needs attention"
+    },
+    {
+      "name": "example_download_Completed",
+      "value": "Completed"
+    },
+    {
+      "name": "example_download_Removed",
+      "value": "Deleted"
+    },
+    {
+      "name": "example_resume_refresh",
+      "value": "Update the source URL above, then restore this task."
+    },
+    {
+      "name": "example_resume_verify",
+      "value": "Existing bytes will be checked before continuing."
+    },
+    {
+      "name": "example_resume_restart",
+      "value": "This task will start from the beginning."
+    },
+    {
+      "name": "example_resume_reusable",
+      "value": "Bytes available for verification"
+    },
+    {
+      "name": "example_export_too_large",
+      "value": "This asset exceeds the 256 MiB export limit. Offline playback remains available."
+    },
+    {
+      "name": "example_play_offline",
+      "value": "Play offline"
+    },
+    {
+      "name": "example_save",
+      "value": "Save"
+    },
+    {
+      "name": "example_share",
+      "value": "Share"
+    },
+    {
+      "name": "example_pause_download",
+      "value": "Pause download"
+    },
+    {
+      "name": "example_resume_download",
+      "value": "Restore download"
+    },
+    {
+      "name": "example_delete",
+      "value": "Delete"
+    },
+    {
+      "name": "example_download_in_use",
+      "value": "Play another video before deleting this download."
+    },
+    {
+      "name": "example_download_failed",
+      "value": "The download stopped. Refresh the source and restore the task."
+    },
+    {
+      "name": "example_recovery_watching",
+      "value": "Ready to recover transient playback failures"
+    },
+    {
+      "name": "example_recovery_hostActionRequired",
+      "value": "Choose another video or try a host action"
+    },
+    {
+      "name": "example_recovery_sourceRefreshRequired",
+      "value": "Update the video source to continue"
+    },
+    {
+      "name": "example_recovery_closed",
+      "value": "Recovery closed"
+    },
+    {
+      "name": "example_recovery_unknown",
+      "value": "Recovery state unavailable"
+    },
+    {
+      "name": "example_diag_player_status",
+      "value": "Player status"
+    },
+    {
+      "name": "example_diag_player_detail",
+      "value": "Live state from the current video."
+    },
+    {
+      "name": "example_diag_copy_report",
+      "value": "Copy report"
+    },
+    {
+      "name": "example_diag_position_duration",
+      "value": "Position / duration"
+    },
+    {
+      "name": "example_diag_timeline",
+      "value": "Timeline"
+    },
+    {
+      "name": "example_diag_video_dimensions",
+      "value": "Video dimensions"
+    },
+    {
+      "name": "example_diag_first_frame",
+      "value": "First frame"
+    },
+    {
+      "name": "example_diag_playback_rate",
+      "value": "Playback rate"
+    },
+    {
+      "name": "example_diag_volume",
+      "value": "Volume"
+    },
+    {
+      "name": "example_diag_playback_epoch",
+      "value": "Playback epoch"
+    },
+    {
+      "name": "example_diag_surface",
+      "value": "Surface"
+    },
+    {
+      "name": "example_diag_cache_loader",
+      "value": "Cache / loader"
+    },
+    {
+      "name": "example_diag_active_resources",
+      "value": "Active resources"
+    },
+    {
+      "name": "example_diag_retained_players",
+      "value": "Retained players"
+    },
+    {
+      "name": "example_diag_dropped_events",
+      "value": "Dropped events"
+    },
+    {
+      "name": "example_diag_error_code",
+      "value": "Error code"
+    },
+    {
+      "name": "example_diag_selection_presentation",
+      "value": "Selection & presentation"
+    },
+    {
+      "name": "example_diag_requested_selection",
+      "value": "Requested selection"
+    },
+    {
+      "name": "example_diag_effective_selection",
+      "value": "Effective selection"
+    },
+    {
+      "name": "example_diag_selection_outcome",
+      "value": "Selection outcome"
+    },
+    {
+      "name": "example_diag_confirmed_tracks",
+      "value": "Confirmed tracks"
+    },
+    {
+      "name": "example_diag_system_session",
+      "value": "System session"
+    },
+    {
+      "name": "example_diag_pip",
+      "value": "Picture in Picture"
+    },
+    {
+      "name": "example_diag_platform",
+      "value": "Platform"
+    },
+    {
+      "name": "example_diag_runtime_api",
+      "value": "HarmonyOS API"
+    },
+    {
+      "name": "example_diag_native_player",
+      "value": "Native player"
+    },
+    {
+      "name": "example_diag_track_constraints",
+      "value": "Track constraints"
+    },
+    {
+      "name": "example_diag_decoder_guarantee",
+      "value": "Decoder guarantee"
+    },
+    {
+      "name": "example_diag_hdr_evidence",
+      "value": "HDR evidence"
+    },
+    {
+      "name": "example_diag_audio_evidence",
+      "value": "Audio output evidence"
+    },
+    {
+      "name": "example_diag_event_history",
+      "value": "Event history"
+    },
+    {
+      "name": "example_diag_history_detail",
+      "value": "The latest 80 state changes and app errors."
+    },
+    {
+      "name": "example_diag_clear_history",
+      "value": "Clear history"
+    },
+    {
+      "name": "example_diag_per_kind_selection",
+      "value": "Per-kind selections"
+    },
+    {
+      "name": "example_diag_track_preferences",
+      "value": "Track preferences"
+    },
+    {
+      "name": "example_diag_time_ranges",
+      "value": "Loaded / seekable ranges"
+    },
+    {
+      "name": "example_diag_policy_parameters",
+      "value": "Requested / effective policy"
+    },
+    {
+      "name": "example_diag_window_policy",
+      "value": "Window policy feedback"
+    },
+    {
+      "name": "example_public_dash_title",
+      "value": "Akamai DASH sample"
+    },
+    {
+      "name": "example_public_dash_detail",
+      "value": "Adaptive DASH · internet required"
+    },
+    {
+      "name": "example_diag_track_filter",
+      "value": "Track filter request / readback"
+    },
+    {
+      "name": "example_diag_native_buffering",
+      "value": "Current native buffer configuration"
+    },
+    {
+      "name": "example_diag_native_observations",
+      "value": "Native playback observations"
+    },
+    {
+      "name": "example_diag_decoder_preflight",
+      "value": "Hardware capability preflight"
+    },
+    {
+      "name": "example_diag_feedback",
+      "value": "Playback feedback"
+    },
+    {
+      "name": "example_diag_feedback_detail",
+      "value": "Run a check on the selected video, then save a local report. Reports exclude media URLs, headers and private paths. Nothing is uploaded automatically."
+    },
+    {
+      "name": "example_diag_scenario",
+      "value": "Diagnostic scenario"
+    },
+    {
+      "name": "example_diag_scenario_progress",
+      "value": "Playback progression · 4 seconds"
+    },
+    {
+      "name": "example_diag_scenario_audio",
+      "value": "Alternate audio · current video"
+    },
+    {
+      "name": "example_diag_scenario_tail",
+      "value": "Seek to final 15 seconds and check completion"
+    },
+    {
+      "name": "example_diag_scenario_dvr",
+      "value": "Live DVR availability · current stream"
+    },
+    {
+      "name": "example_diag_environment",
+      "value": "Environment · reported by you"
+    },
+    {
+      "name": "example_diag_unknown",
+      "value": "Not confirmed"
+    },
+    {
+      "name": "example_diag_device",
+      "value": "Physical device"
+    },
+    {
+      "name": "example_diag_simulator",
+      "value": "Simulator"
+    },
+    {
+      "name": "example_diag_audio_observation",
+      "value": "What you heard · manual observation"
+    },
+    {
+      "name": "example_diag_not_assessed",
+      "value": "Not assessed"
+    },
+    {
+      "name": "example_diag_audible",
+      "value": "Audible"
+    },
+    {
+      "name": "example_diag_silent",
+      "value": "Silent"
+    },
+    {
+      "name": "example_diag_intermittent",
+      "value": "Intermittent audio"
+    },
+    {
+      "name": "example_diag_run_scenario",
+      "value": "Run check"
+    },
+    {
+      "name": "example_diag_save_report",
+      "value": "Save report"
+    },
+    {
+      "name": "example_diag_scenario_finished",
+      "value": "Check finished. Save the report to share your results."
+    }
+  ]
+}

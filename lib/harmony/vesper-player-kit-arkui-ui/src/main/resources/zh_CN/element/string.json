@@ -1,0 +1,309 @@
+{
+  "string": [
+    { "name": "vesper_subtitle_loading", "value": "正在加载字幕…" },
+    { "name": "vesper_subtitle_partial", "value": "部分字幕加载失败，仍可选择其他字幕。" },
+    { "name": "vesper_subtitle_failed", "value": "字幕加载失败，视频仍可继续播放。" },
+    { "name": "vesper_subtitle_default", "value": "默认" },
+    { "name": "vesper_subtitle_forced", "value": "强制" },
+    { "name": "vesper_caption_foreground", "value": "文字颜色" },
+    { "name": "vesper_caption_white", "value": "白色" },
+    { "name": "vesper_caption_yellow", "value": "黄色" },
+    { "name": "vesper_caption_edge", "value": "文字描边" },
+    {
+      "name": "vesper_play",
+      "value": "播放"
+    },
+    {
+      "name": "vesper_pause",
+      "value": "暂停"
+    },
+    {
+      "name": "vesper_replay",
+      "value": "重新播放"
+    },
+    {
+      "name": "vesper_fullscreen",
+      "value": "进入全屏"
+    },
+    {
+      "name": "vesper_exit_fullscreen",
+      "value": "退出全屏"
+    },
+    {
+      "name": "vesper_back",
+      "value": "返回"
+    },
+    {
+      "name": "vesper_more",
+      "value": "播放设置"
+    },
+    {
+      "name": "vesper_lock",
+      "value": "锁定控件"
+    },
+    {
+      "name": "vesper_unlock",
+      "value": "解锁控件"
+    },
+    {
+      "name": "vesper_back_ten",
+      "value": "后退 10 秒"
+    },
+    {
+      "name": "vesper_forward_ten",
+      "value": "前进 10 秒"
+    },
+    {
+      "name": "vesper_live",
+      "value": "直播"
+    },
+    {
+      "name": "vesper_on_demand",
+      "value": "点播"
+    },
+    {
+      "name": "vesper_timeline_unknown",
+      "value": "时间线暂不可用"
+    },
+    {
+      "name": "vesper_buffering",
+      "value": "缓冲中"
+    },
+    {
+      "name": "vesper_position",
+      "value": "播放位置"
+    },
+    {
+      "name": "vesper_speed",
+      "value": "播放速度"
+    },
+    {
+      "name": "vesper_quality",
+      "value": "画质"
+    },
+    {
+      "name": "vesper_quality_locked",
+      "value": "锁定"
+    },
+    {
+      "name": "vesper_audio",
+      "value": "音轨"
+    },
+    {
+      "name": "vesper_subtitles",
+      "value": "字幕"
+    },
+    {
+      "name": "vesper_auto",
+      "value": "自动"
+    },
+    {
+      "name": "vesper_off",
+      "value": "关闭"
+    },
+    {
+      "name": "vesper_system_default",
+      "value": "系统默认"
+    },
+    {
+      "name": "vesper_switching",
+      "value": "正在切换…"
+    },
+    {
+      "name": "vesper_selected",
+      "value": "已选择"
+    },
+    {
+      "name": "vesper_selection_failed",
+      "value": "切换失败，已保留之前的选择。"
+    },
+    {
+      "name": "vesper_selection_on_resume",
+      "value": "将在恢复播放后切换。"
+    },
+    {
+      "name": "vesper_adapt",
+      "value": "根据网络自动调整"
+    },
+    {
+      "name": "vesper_no_auto",
+      "value": "此视频不支持自动画质。"
+    },
+    {
+      "name": "vesper_no_tracks",
+      "value": "此视频没有可用轨道"
+    },
+    {
+      "name": "vesper_unavailable_track",
+      "value": "当前设备无法切换此轨道。"
+    },
+    {
+      "name": "vesper_audio_track",
+      "value": "音轨 %d"
+    },
+    {
+      "name": "vesper_subtitle_track",
+      "value": "字幕 %d"
+    },
+    {
+      "name": "vesper_video_track",
+      "value": "视频轨道 %d"
+    },
+    {
+      "name": "vesper_mute",
+      "value": "静音"
+    },
+    {
+      "name": "vesper_unmute",
+      "value": "取消静音"
+    },
+    {
+      "name": "vesper_volume",
+      "value": "音量"
+    },
+    {
+      "name": "vesper_brightness",
+      "value": "窗口亮度"
+    },
+    {
+      "name": "vesper_pip",
+      "value": "画中画"
+    },
+    {
+      "name": "vesper_pip_unavailable",
+      "value": "当前宿主未提供画中画。"
+    },
+    {
+      "name": "vesper_normal",
+      "value": "1× · 正常"
+    },
+    {
+      "name": "vesper_speed_vod",
+      "value": "仅点播视频支持倍速播放。"
+    },
+    {
+      "name": "vesper_close",
+      "value": "关闭"
+    },
+    {
+      "name": "vesper_retry",
+      "value": "重试"
+    },
+    {
+      "name": "vesper_change_source",
+      "value": "选择其他视频"
+    },
+    {
+      "name": "vesper_dismiss",
+      "value": "知道了"
+    },
+    {
+      "name": "vesper_refresh_source",
+      "value": "重新打开媒体"
+    },
+    {
+      "name": "vesper_details",
+      "value": "技术详情"
+    },
+    {
+      "name": "vesper_error_network",
+      "value": "连接已中断，请联网后重试。"
+    },
+    {
+      "name": "vesper_error_unsupported",
+      "value": "当前设备不支持此媒体或操作。"
+    },
+    {
+      "name": "vesper_error_expired",
+      "value": "媒体访问已过期，请重新打开以更新授权。"
+    },
+    {
+      "name": "vesper_error_source",
+      "value": "无法打开媒体，请检查来源或选择其他视频。"
+    },
+    {
+      "name": "vesper_error_capacity",
+      "value": "当前空间或可用容量不足。"
+    },
+    {
+      "name": "vesper_error_in_use",
+      "value": "此项目仍在使用中，请在播放或分享结束后重试。"
+    },
+    {
+      "name": "vesper_error_not_ready",
+      "value": "请等待视频准备完成后再操作。"
+    },
+    {
+      "name": "vesper_error_playback",
+      "value": "无法播放此视频，请选择其他来源。"
+    },
+    {
+      "name": "vesper_error_cancelled",
+      "value": "操作已取消。"
+    },
+    {
+      "name": "vesper_hold_speed",
+      "value": "2 倍速播放"
+    },
+    {
+      "name": "vesper_gestures",
+      "value": "双击播放或暂停，长按 2 倍速；左右滑动快进后退，左侧上下调亮度，右侧上下调音量。"
+    },
+    {
+      "name": "vesper_captions_style",
+      "value": "字幕外观"
+    },
+    {
+      "name": "vesper_caption_size",
+      "value": "字幕大小"
+    },
+    {
+      "name": "vesper_caption_background",
+      "value": "字幕背景"
+    },
+    {
+      "name": "vesper_language_en",
+      "value": "英语"
+    },
+    {
+      "name": "vesper_language_zh",
+      "value": "中文"
+    },
+    {
+      "name": "vesper_language_ja",
+      "value": "日语"
+    },
+    {
+      "name": "vesper_language_ko",
+      "value": "韩语"
+    },
+    {
+      "name": "vesper_language_fr",
+      "value": "法语"
+    },
+    {
+      "name": "vesper_language_de",
+      "value": "德语"
+    },
+    {
+      "name": "vesper_language_es",
+      "value": "西班牙语"
+    },
+    {
+      "name": "vesper_language_pt",
+      "value": "葡萄牙语"
+    },
+    {
+      "name": "vesper_language_ru",
+      "value": "俄语"
+    },
+    {
+      "name": "vesper_language_it",
+      "value": "意大利语"
+    },
+    {
+      "name": "vesper_language_ar",
+      "value": "阿拉伯语"
+    }
+  ]
+}

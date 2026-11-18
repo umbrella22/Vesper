@@ -18,5 +18,7 @@ publish = ["crates-io"]
 name = "player_plugin_wasm"
 
 [dependencies]
-dlmalloc.workspace = true
 wit-bindgen.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))'.dependencies]
+dlmalloc.workspace = true

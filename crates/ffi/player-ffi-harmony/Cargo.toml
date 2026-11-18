@@ -1,0 +1,14 @@
+[package]
+name = "player-ffi-harmony"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "vesper_player_harmony"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+player-platform-harmony = { path = "../../platform/mobile/player-platform-harmony" }

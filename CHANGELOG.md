@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed
+
+- Pin the build toolchain to Rust 1.100.0 while retaining the Rust 1.99.0 MSRV.
+- Resolve desktop verification plugins from Cargo's reported cdylib artifacts,
+  supporting custom build layouts and rejecting missing or ambiguous outputs.
+- Apply a three-day publication cooldown when resolving new registry dependency
+  versions; preserve existing lockfile selections and allow reviewed overrides.
+- Remove unused model/runtime dependencies and restrict the WASM guest allocator
+  dependency to its `wasm32-wasip2` execution target.
+
+### Dependencies
+
+- Upgrade Wasmtime to 50.0.1, ZIP to 9.5.1, and rustix to 1.1.6. Refresh
+  compatible Rust dependencies and all three tracked lockfiles without raising
+  the workspace MSRV.
+- Update wit-bindgen to 0.63.0 and WIT parsing/component tools to 0.263.0.
+- Upgrade the optional diagnostic audio plugin to wsola 0.3.0 and adapt its
+  nonzero sample-rate and channel-count API while preserving pitch/rate behavior.
+- Adapt archive readers to ZIP's fallible filename API and propagate decoding
+  errors through the existing package and Android FFmpeg validation errors.
+
 ## 0.9.1 - 2026-10-12
 
 <!-- release-notes:en -->

@@ -1,0 +1,17 @@
+[package]
+name = "player-platform-harmony"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+player-platform-mobile = { path = "../../common/player-platform-mobile" }
+player-dash-hls-bridge = { path = "../../../core/player-dash-hls-bridge" }
+player-download = { path = "../../../core/player-download" }
+player-model = { path = "../../../model/player-model" }
+serde.workspace = true
+serde_json.workspace = true
+quick-xml.workspace = true
+url.workspace = true

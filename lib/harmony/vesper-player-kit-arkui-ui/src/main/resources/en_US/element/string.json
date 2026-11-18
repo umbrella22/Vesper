@@ -1,0 +1,309 @@
+{
+  "string": [
+    { "name": "vesper_subtitle_loading", "value": "Loading subtitles…" },
+    { "name": "vesper_subtitle_partial", "value": "Some subtitles could not be loaded. Other tracks are still available." },
+    { "name": "vesper_subtitle_failed", "value": "Subtitles could not be loaded. Video playback is still available." },
+    { "name": "vesper_subtitle_default", "value": "Default" },
+    { "name": "vesper_subtitle_forced", "value": "Forced" },
+    { "name": "vesper_caption_foreground", "value": "Text color" },
+    { "name": "vesper_caption_white", "value": "White" },
+    { "name": "vesper_caption_yellow", "value": "Yellow" },
+    { "name": "vesper_caption_edge", "value": "Text outline" },
+    {
+      "name": "vesper_play",
+      "value": "Play"
+    },
+    {
+      "name": "vesper_pause",
+      "value": "Pause"
+    },
+    {
+      "name": "vesper_replay",
+      "value": "Replay"
+    },
+    {
+      "name": "vesper_fullscreen",
+      "value": "Enter fullscreen"
+    },
+    {
+      "name": "vesper_exit_fullscreen",
+      "value": "Exit fullscreen"
+    },
+    {
+      "name": "vesper_back",
+      "value": "Back"
+    },
+    {
+      "name": "vesper_more",
+      "value": "Playback settings"
+    },
+    {
+      "name": "vesper_lock",
+      "value": "Lock controls"
+    },
+    {
+      "name": "vesper_unlock",
+      "value": "Unlock controls"
+    },
+    {
+      "name": "vesper_back_ten",
+      "value": "Back 10 seconds"
+    },
+    {
+      "name": "vesper_forward_ten",
+      "value": "Forward 10 seconds"
+    },
+    {
+      "name": "vesper_live",
+      "value": "LIVE"
+    },
+    {
+      "name": "vesper_on_demand",
+      "value": "On demand"
+    },
+    {
+      "name": "vesper_timeline_unknown",
+      "value": "Timeline unavailable"
+    },
+    {
+      "name": "vesper_buffering",
+      "value": "Buffering"
+    },
+    {
+      "name": "vesper_position",
+      "value": "Playback position"
+    },
+    {
+      "name": "vesper_speed",
+      "value": "Playback speed"
+    },
+    {
+      "name": "vesper_quality",
+      "value": "Video quality"
+    },
+    {
+      "name": "vesper_quality_locked",
+      "value": "Locked"
+    },
+    {
+      "name": "vesper_audio",
+      "value": "Audio tracks"
+    },
+    {
+      "name": "vesper_subtitles",
+      "value": "Subtitles"
+    },
+    {
+      "name": "vesper_auto",
+      "value": "Automatic"
+    },
+    {
+      "name": "vesper_off",
+      "value": "Off"
+    },
+    {
+      "name": "vesper_system_default",
+      "value": "System default"
+    },
+    {
+      "name": "vesper_switching",
+      "value": "Switching…"
+    },
+    {
+      "name": "vesper_selected",
+      "value": "Selected"
+    },
+    {
+      "name": "vesper_selection_failed",
+      "value": "Could not switch. Your previous choice is kept."
+    },
+    {
+      "name": "vesper_selection_on_resume",
+      "value": "Applies when playback resumes."
+    },
+    {
+      "name": "vesper_adapt",
+      "value": "Adapt to the connection"
+    },
+    {
+      "name": "vesper_no_auto",
+      "value": "Automatic quality is unavailable for this video."
+    },
+    {
+      "name": "vesper_no_tracks",
+      "value": "No available tracks in this video"
+    },
+    {
+      "name": "vesper_unavailable_track",
+      "value": "This track cannot be selected on this device."
+    },
+    {
+      "name": "vesper_audio_track",
+      "value": "Audio track %d"
+    },
+    {
+      "name": "vesper_subtitle_track",
+      "value": "Subtitle track %d"
+    },
+    {
+      "name": "vesper_video_track",
+      "value": "Video track %d"
+    },
+    {
+      "name": "vesper_mute",
+      "value": "Mute audio"
+    },
+    {
+      "name": "vesper_unmute",
+      "value": "Unmute"
+    },
+    {
+      "name": "vesper_volume",
+      "value": "Volume"
+    },
+    {
+      "name": "vesper_brightness",
+      "value": "Window brightness"
+    },
+    {
+      "name": "vesper_pip",
+      "value": "Picture in Picture"
+    },
+    {
+      "name": "vesper_pip_unavailable",
+      "value": "Picture in Picture is unavailable in this host."
+    },
+    {
+      "name": "vesper_normal",
+      "value": "1× · Normal"
+    },
+    {
+      "name": "vesper_speed_vod",
+      "value": "Playback speed is available for on-demand video."
+    },
+    {
+      "name": "vesper_close",
+      "value": "Close"
+    },
+    {
+      "name": "vesper_retry",
+      "value": "Try again"
+    },
+    {
+      "name": "vesper_change_source",
+      "value": "Choose another video"
+    },
+    {
+      "name": "vesper_dismiss",
+      "value": "Dismiss"
+    },
+    {
+      "name": "vesper_refresh_source",
+      "value": "Reopen media"
+    },
+    {
+      "name": "vesper_details",
+      "value": "Technical details"
+    },
+    {
+      "name": "vesper_error_network",
+      "value": "The connection was interrupted. Try again when you are online."
+    },
+    {
+      "name": "vesper_error_unsupported",
+      "value": "This media or action is not supported on this device."
+    },
+    {
+      "name": "vesper_error_expired",
+      "value": "Access to this media has expired. Reopen it with current access."
+    },
+    {
+      "name": "vesper_error_source",
+      "value": "This media could not be opened. Check the source or choose another video."
+    },
+    {
+      "name": "vesper_error_capacity",
+      "value": "There is not enough space or capacity for this action."
+    },
+    {
+      "name": "vesper_error_in_use",
+      "value": "This item is still being used. Try after playback or sharing finishes."
+    },
+    {
+      "name": "vesper_error_not_ready",
+      "value": "Wait until the video is ready, then try this action."
+    },
+    {
+      "name": "vesper_error_playback",
+      "value": "This video could not be played. Choose another source."
+    },
+    {
+      "name": "vesper_error_cancelled",
+      "value": "The action was cancelled."
+    },
+    {
+      "name": "vesper_hold_speed",
+      "value": "2× playback"
+    },
+    {
+      "name": "vesper_gestures",
+      "value": "Double tap to play or pause. Hold for 2×. Swipe to seek, or adjust brightness on the left and volume on the right."
+    },
+    {
+      "name": "vesper_captions_style",
+      "value": "Caption appearance"
+    },
+    {
+      "name": "vesper_caption_size",
+      "value": "Caption size"
+    },
+    {
+      "name": "vesper_caption_background",
+      "value": "Caption background"
+    },
+    {
+      "name": "vesper_language_en",
+      "value": "English"
+    },
+    {
+      "name": "vesper_language_zh",
+      "value": "Chinese"
+    },
+    {
+      "name": "vesper_language_ja",
+      "value": "Japanese"
+    },
+    {
+      "name": "vesper_language_ko",
+      "value": "Korean"
+    },
+    {
+      "name": "vesper_language_fr",
+      "value": "French"
+    },
+    {
+      "name": "vesper_language_de",
+      "value": "German"
+    },
+    {
+      "name": "vesper_language_es",
+      "value": "Spanish"
+    },
+    {
+      "name": "vesper_language_pt",
+      "value": "Portuguese"
+    },
+    {
+      "name": "vesper_language_ru",
+      "value": "Russian"
+    },
+    {
+      "name": "vesper_language_it",
+      "value": "Italian"
+    },
+    {
+      "name": "vesper_language_ar",
+      "value": "Arabic"
+    }
+  ]
+}

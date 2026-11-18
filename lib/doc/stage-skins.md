@@ -1,8 +1,8 @@
 # Stage skins
 
 The Stage skin API applies the same presentation contract to
-Flutter `vesper_player_ui`, Android `vesper-player-kit-compose-ui`, and iOS
-`VesperPlayerKitUI`. Each UI module provides `VesperPlayerStageSkin`, native
+Flutter `vesper_player_ui`, Android `vesper-player-kit-compose-ui`, iOS
+`VesperPlayerKitUI`, and HarmonyOS `vesper-player-kit-arkui-ui`. Each UI module provides `VesperPlayerStageSkin`, native
 icon rendering, and reusable action buttons. A skin configures the controls
 rendered by that UI module; it does not cross Rust, FFI, JNI, or Flutter player
 channels.
@@ -322,3 +322,31 @@ accessibility nodes, HUD input, and surface retention with an inert test surface
 It supports Simulator and signed device execution. Compilation alone does not
 establish input behavior, and accessibility-tree assertions do not replace
 manual VoiceOver acceptance.
+
+## HarmonyOS
+
+The ArkUI UI HAR exposes `VesperPlayerStageSkin`, `VesperPlayerStageIcons`,
+`VesperStageMetrics` and eight `VesperStageButtonStyle` variants. Supply a partial
+system-resource icon map or a `WrappedBuilder<[VesperStageIconConfiguration]>`
+with explicit `customIconRoles`. Decorative replacements retain the action's
+SDK-owned accessible label, focus and minimum 44 vp hit target.
+
+Public `VesperStageIconButton`, `VesperStagePillButton` and
+`VesperStagePrimaryPlayButton` reuse those roles. Stage accepts `contentOverlay`
+and `expandedLeadingActions` builders; reserve the latter's width through
+`expandedLeadingWidth`. Native or branded settings palettes cover the complete
+sheet. Independent default skins and XComponent identities permit two Stages
+on a page. Replacing a skin, restoring defaults or changing presentation must
+retain source, playback epoch and Surface.
+
+Compact, expanded and classic standard layouts remain separate from fullscreen.
+Measured text/width determines shortcut overflow. Optional controlled
+`VesperStagePresentation` reports visibility, lock and settings pane through
+`onPresentationChange`; omitting it uses local state. Caption style is separately
+owned through `VesperSubtitleStyle`. None of these values crosses the player ABI.
+
+See the [ArkUI Stage guide](../harmony/vesper-player-kit-arkui-ui/README.md) and
+the HAR-only UI consumer in `fixtures/harmony/ui-consumer/`. Official ArkUI
+compilation verifies the builder contract; native input, screenshots and
+ownership checks verify rendered behavior. Physical accessibility remains a
+separate acceptance gate.

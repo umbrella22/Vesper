@@ -1,0 +1,1 @@
+{ "name": "@vesper/player-kit-arkui", "version": "0.9.1-harmony.0", "description": "Vesper ArkUI Surface and lifecycle binding.", "main": "Index.ets", "license": "Apache-2.0", "dependencies": { "@vesper/player-kit": "0.9.1-harmony.0" } }

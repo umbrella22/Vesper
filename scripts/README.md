@@ -38,6 +38,17 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 ./scripts/vesper android publish-maven-central vMAJOR.MINOR.PATCH --dry-run
 
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools doctor
+./scripts/vesper harmony audit-dependencies --offline
+./scripts/vesper harmony check-shared --offline
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-host-contracts
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-har --offline
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --ui
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --no-internet
+./scripts/vesper harmony --command-line-tools /path/to/command-line-tools kit-consumer --har target/harmony-kit/dist/vesper-player-kit.har --example
+./scripts/vesper harmony kit-verify --hap target/harmony-kit/dist/vesper-harmony-ui-consumer-unsigned.hap
+
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios bootstrap-bridge-shim
 ./scripts/vesper ios sync-bridge-shim
@@ -130,6 +141,19 @@ A directory-level `rustup override` takes precedence over the toolchain file.
 `rustup show active-toolchain` reports the selected toolchain and its source;
 `rustup override unset` from the repository root removes an obsolete override
 without changing the global default toolchain.
+
+Cargo 1.100 desktop plugin verification reads the selected `compiler-artifact`
+path from the build's JSON output. Custom target/build directories and target
+triples therefore follow Cargo's configuration. Explicit plugin-path environment
+overrides continue to select an existing artifact without rebuilding it.
+
+The repository configures a three-day minimum publication age for newly resolved
+registry dependencies. Existing lockfile entries remain usable. Registries must
+provide publication timestamps for this policy to apply; `cargo install` does
+not apply it. For a reviewed urgent update, use
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>`.
+The build toolchain enforces this resolver policy; the older MSRV is retained
+for source compatibility checks.
 
 ## Rust Plugin SDK Release
 

@@ -1,0 +1,5 @@
+{
+  "name": "libvesper_player_harmony_node.so",
+  "version": "0.9.1-harmony.0",
+  "types": "./index.d.ts"
+}

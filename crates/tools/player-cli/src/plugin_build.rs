@@ -440,6 +440,32 @@ where
     Ok(candidates)
 }
 
+pub(crate) fn resolve_cdylib_artifact(
+    output: &[u8],
+    target_name: &str,
+    library_name: &str,
+) -> Result<PathBuf, String> {
+    let mut matches = parse_cargo_output(output)?.into_iter().filter(|candidate| {
+        candidate.target_name == target_name
+            && candidate.path.file_name() == Some(std::ffi::OsStr::new(library_name))
+    });
+    let artifact = matches
+        .next()
+        .ok_or_else(|| format!("Cargo did not report a {library_name} cdylib artifact"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "Cargo reported multiple {library_name} cdylib artifacts"
+        ));
+    }
+    if !artifact.path.is_absolute() {
+        return Err(format!(
+            "Cargo reported a relative cdylib artifact path: {}",
+            artifact.path.display()
+        ));
+    }
+    Ok(artifact.path)
+}
+
 fn read_bounded_line<R>(reader: &mut R, maximum_bytes: usize) -> Result<Option<Vec<u8>>, String>
 where
     R: BufRead,

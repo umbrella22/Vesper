@@ -106,6 +106,20 @@ Release gate:
 
 ## Third-Party Runtime Tracking Requirements
 
+The HarmonyOS preview core HAR bundles the unmodified arm64
+`libc++_shared.so` supplied by HarmonyOS Command Line Tools 26.0.0 Release,
+Native SDK package `26.0.0.105`. It is dynamically linked by the official
+C++ Node-API bridge. The runtime is part of the
+[LLVM Project](https://llvm.org/), under Apache-2.0 WITH LLVM-exception and the
+additional notices reproduced in the SDK's `native/llvm/NOTICE`. The HAR
+preserves that complete file as `NOTICE-libcxx.txt`; distributors must retain
+it with the binary. `build-report.json` records the runtime SHA-256, approved
+dynamic dependencies and exact working source identity. The SDK runtime is
+copied without rebuilding or changing its configuration. The HarmonyOS
+artifacts delegate media execution to system AVPlayer and do not bundle FFmpeg.
+These notices describe locally staged previews; production signing and OHPM
+publication require their own release verification.
+
 The experimental `basic-player` desktop example embeds the unmodified Ubuntu
 Light font, copyright 2011 Canonical Ltd., under the Ubuntu Font Licence 1.0.
 The font and its full licence are in `examples/basic-player/assets/fonts/`.

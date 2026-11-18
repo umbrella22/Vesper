@@ -15,6 +15,7 @@ mod ffmpeg_apple;
 mod ffmpeg_source;
 mod flutter;
 mod gradle;
+mod harmony;
 mod ios;
 mod ios_core_release;
 mod ios_ffi;
@@ -105,6 +106,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Android(AndroidArgs),
+    /// Checks the experimental HarmonyOS mobile build prerequisites.
+    Harmony(harmony::HarmonyArgs),
     Ios(IosArgs),
     Ffmpeg(FfmpegArgs),
     Plugin(PluginArgs),
@@ -1373,6 +1376,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> CliResult<()> {
     match cli.command {
         Command::Android(arguments) => run_android(arguments),
+        Command::Harmony(arguments) => harmony::run(arguments),
         Command::Ios(arguments) => run_ios(arguments),
         Command::Ffmpeg(arguments) => run_ffmpeg(arguments),
         Command::Plugin(plugin) => match plugin.command {

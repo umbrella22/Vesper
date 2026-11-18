@@ -56,6 +56,22 @@ media fixtures, and release metadata. Those command groups are maintainer
 tools with platform toolchain and source-tree requirements. They are not a
 runtime API for applications that consume the Android, iOS, or Flutter SDKs.
 
+The preview `harmony` group provides `doctor`, `audit-dependencies`, and
+`check-shared` for toolchain and dependency checks; `kit-har`,
+`kit-host-contracts`, `kit-verify`, and `kit-consumer --har <artifact>` build and
+verify the three HarmonyOS host-kit packages and independent consumers.
+`kit-consumer --ui`, `--example`, and `--no-internet` select the Stage consumer,
+standalone example, and offline consumer respectively. `emulator-gate` runs one
+artifact-bound scenario on an already running official emulator. Pass
+`--command-line-tools <directory>` or set
+`VESPER_HARMONY_COMMAND_LINE_TOOLS`; no persistent PATH change is required.
+
+Reports distinguish host tests, native linking, HAR consumption, simulator execution,
+and physical-device acceptance. Packages are local previews, not published
+OHPM releases. See the
+[HarmonyOS preview guide](https://github.com/umbrella22/Vesper/tree/main/lib/harmony)
+for media profiles, capability limits, candidate freezing and the final matrix.
+
 ## Choose the Right Package
 
 Use `vesper-player-plugin` to write a Rust Native plugin, and
