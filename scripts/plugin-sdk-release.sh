@@ -440,6 +440,8 @@ publish_release() {
 
   (
     cd "$ACTIVE_SNAPSHOT_ROOT"
+    # Locked registry packaging must see same-release crates as soon as they are indexed.
+    export CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
     for package in "${PACKAGES[@]}"; do
       if crate_version_status "$package" "$version"; then
         echo "Verifying existing crate $package $version before resuming."
