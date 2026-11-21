@@ -998,3 +998,7 @@ jobs:
           git ls-remote --exit-code \
             "https://github.com/$repository.git" \
             "refs/tags/${RELEASE_TAG}"
+
+      - name: Resolve published SwiftPM consumer fixture
+        if: needs.release-checks.outputs.stable == 'true' && (vars.SPM_REPOSITORY == '' || vars.SPM_REPOSITORY == 'umbrella22/VesperPlayerKit')
+        run: swift package resolve --package-path fixtures/plugins/ios-spm-consumer

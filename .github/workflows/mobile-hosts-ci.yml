@@ -275,7 +275,21 @@ jobs:
           minimum-major: "16"
 
       - name: Resolve published SwiftPM consumer fixture
-        run: swift package resolve --package-path fixtures/plugins/ios-spm-consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="fixtures/plugins/ios-spm-consumer"
+          version="$(awk -F'"' '/^[[:space:]]*exact:/ { print $2; exit }' "$fixture/Package.swift")"
+          test -n "$version"
+          if git ls-remote --exit-code https://github.com/umbrella22/VesperPlayerKit.git "refs/tags/v$version" >/dev/null; then
+            swift package resolve --package-path "$fixture"
+          else
+            status=$?
+            if [[ "$status" != 2 ]]; then
+              exit "$status"
+            fi
+            echo "::notice::SwiftPM consumer validation will run after VesperPlayerKit v$version is published."
+          fi
 
       - name: Stage canonical optional iOS plugin XCFrameworks
         run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64

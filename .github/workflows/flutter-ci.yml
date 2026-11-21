@@ -155,7 +155,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Check whether the pinned Flutter package is published
+        id: hosted
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(awk '$1 == "vesper_player:" { print $2; exit }' fixtures/plugins/flutter-pub-consumer/pubspec.yaml)"
+          test -n "$version"
+          status="$(curl --silent --show-error --location --retry 2 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://pub.dev/api/packages/vesper_player/versions/$version")"
+          case "$status" in
+            200) echo 'available=true' >> "$GITHUB_OUTPUT" ;;
+            404) echo "::notice::Flutter consumer validation will run after vesper_player $version is published." ;;
+            *) echo "::error::pub.dev returned HTTP $status for vesper_player $version."; exit 1 ;;
+          esac
+
       - name: Set up current Flutter
+        if: steps.hosted.outputs.available == 'true'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.2"
@@ -163,17 +180,21 @@ jobs:
           cache: true
 
       - name: Show Flutter version
+        if: steps.hosted.outputs.available == 'true'
         run: flutter --version
 
       - name: Resolve published Flutter consumer fixture
+        if: steps.hosted.outputs.available == 'true'
         working-directory: fixtures/plugins/flutter-pub-consumer
         run: flutter pub get
 
       - name: Analyze published Flutter consumer fixture
+        if: steps.hosted.outputs.available == 'true'
         working-directory: fixtures/plugins/flutter-pub-consumer
         run: flutter analyze
 
       - name: Test published Flutter consumer fixture
+        if: steps.hosted.outputs.available == 'true'
         working-directory: fixtures/plugins/flutter-pub-consumer
         run: flutter test
 

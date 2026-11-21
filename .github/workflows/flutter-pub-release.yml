@@ -117,3 +117,11 @@ jobs:
           /tmp/vesper-flutter-pub-release
           "${VESPER_RELEASE_PUBLICATION_VERSION}"
           --include-optional-plugins
+
+      - name: Verify hosted Flutter package consumption
+        if: steps.version.outputs.stable == 'true'
+        working-directory: fixtures/plugins/flutter-pub-consumer
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test

@@ -64,7 +64,7 @@ unicode-casefold = "0.2.0"
 unicode-normalization = "0.1.26"
 url = "2.5.8"
 uuid = { version = "1.29.2", features = ["serde"] }
-wasmtime = { version = "50.0.1", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
+wasmtime = { version = "50.0.2", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
 wat = "1.263.0"
 wit-bindgen = { version = "0.63.0", default-features = false, features = ["macros", "realloc"] }
 wit-component = "0.263.0"

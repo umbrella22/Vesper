@@ -40,7 +40,7 @@
 
 ### Dependencies
 
-- Upgrade Wasmtime to 50.0.1, ZIP to 9.5.1, and rustix to 1.1.6. Refresh
+- Upgrade Wasmtime to 50.0.2, ZIP to 9.5.1, and rustix to 1.1.6. Refresh
   compatible Rust dependencies and all three tracked lockfiles without raising
   the workspace MSRV.
 - Update wit-bindgen to 0.63.0 and WIT parsing/component tools to 0.263.0.
@@ -89,7 +89,7 @@
 
 ### 依赖
 
-- 升级 Wasmtime 到 50.0.1、ZIP 到 9.5.1、rustix 到 1.1.6、wit-bindgen 到
+- 升级 Wasmtime 到 50.0.2、ZIP 到 9.5.1、rustix 到 1.1.6、wit-bindgen 到
   0.63.0，以及 WIT 解析与组件工具到 0.263.0。更新兼容的 Rust 依赖与三个锁文件，
   保留原有最低 Rust 版本。
 - 可选音频诊断插件升级到 wsola 0.3.0，适配非零采样率和声道数 API，保留音调和
