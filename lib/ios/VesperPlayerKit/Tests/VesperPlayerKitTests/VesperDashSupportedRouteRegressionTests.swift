@@ -66,6 +66,8 @@ final class VesperDashSupportedRouteRegressionTests: XCTestCase {
         let selected = try await session.selectedPlayableRepresentations(manifest: initial, variantPolicy: .all)
         let rendition = try healthUnwrap(selected.video.first?.renditionId)
         let url = session.mediaPlaylistURL(for: rendition)
+        // Keep the fixture's three manifest snapshots under the playlist caller's control.
+        await session.healthMarkRenditionPrefetched(rendition)
         let first = try await session.mediaPlaylistData(renditionId: rendition)
         let firstPlaylist = String(decoding: first, as: UTF8.self)
         try healthRequire(firstPlaylist.contains("#EXT-X-TARGETDURATION:2\n"), "first window must publish target 2")
@@ -90,6 +92,7 @@ final class VesperDashSupportedRouteRegressionTests: XCTestCase {
         try healthRequire(next.contains("#EXT-X-MEDIA-SEQUENCE:102\n"), "media sequence must advance")
         try healthRequire(next.contains("#EXT-X-TARGETDURATION:2\n"), "reload must keep the advertised target")
         try healthRequire(next.contains("#EXTINF:2.250,"), "a fitting variable-duration segment must be published")
+        try healthRequire(client.manifestRequestCount == 3, "initial, rejected, and corrected windows must each fetch once")
     }
 
     func testDirectNetworkRequestCancellationStopsURLSessionTask() async throws {
@@ -156,6 +159,10 @@ private func healthWait(_ predicate: () -> Bool) async throws {
 
 private extension VesperDashSession {
     func healthExpireManifest() { manifestLoadedAt = .distantPast }
+
+    func healthMarkRenditionPrefetched(_ renditionId: String) {
+        backgroundPrefetchRenditionIds.insert(renditionId)
+    }
 }
 
 private final class HealthDashClient: VesperDashNetworkClient {
