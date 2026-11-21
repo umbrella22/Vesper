@@ -15,7 +15,7 @@ tls = "none"
 forbid_network = true
 forbid_openssl = true
 
-# --- download-remux：宿主负责网络下载，FFmpeg 仅做本地文件 remux，不需要网络和 TLS ---
+# download-remux: The host downloads media and FFmpeg remuxes local files only.
 [profile.download-remux]
 extends = "base"
 demuxers = ["hls", "dash", "concat", "flv", "mov", "matroska", "mpegts", "aac"]

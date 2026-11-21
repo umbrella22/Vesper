@@ -56,16 +56,23 @@ export function parseWvtt(buffer: ArrayBuffer): SubtitleCue[] {
     const runs = boxes(traf.payload, traf.end).filter((box: Box) => box.kind === 'trun');
     if (runs.length < 1) { throw invalid(); }
     for (const trun of runs) {
-      const runFlags = u32(trun.payload) & 0xffffff; const count = u32(trun.payload + 4); cursor = trun.payload + 8;
-      if (runFlags & 1) { dataOffset = base + view.getInt32(cursor); cursor += 4; }
-      if (runFlags & 4) { cursor += 4; }
+      cursor = trun.payload;
+      const readRunWord = (signed: boolean = false): number => {
+        if (cursor + 4 > trun.end) { throw invalid(); }
+        const value = signed ? view.getInt32(cursor) : view.getUint32(cursor);
+        cursor += 4;
+        return value;
+      };
+      const runFlags = readRunWord() & 0xffffff;
+      const count = readRunWord();
+      if (runFlags & 1) { dataOffset = base + readRunWord(true); }
+      if (runFlags & 4) { readRunWord(); }
       if (samples + count > 4096) { throw invalid(); } samples += count;
       for (let index = 0; index < count; index++) {
-        const sampleDuration = runFlags & 0x100 ? u32(cursor) : duration; if (runFlags & 0x100) { cursor += 4; }
-        const sampleSize = runFlags & 0x200 ? u32(cursor) : size; if (runFlags & 0x200) { cursor += 4; }
-        if (runFlags & 0x400) { cursor += 4; }
-        const composition = runFlags & 0x800 ? bytes[trun.payload] === 1 ? view.getInt32(cursor) : u32(cursor) : 0;
-        if (runFlags & 0x800) { cursor += 4; }
+        const sampleDuration = runFlags & 0x100 ? readRunWord() : duration;
+        const sampleSize = runFlags & 0x200 ? readRunWord() : size;
+        if (runFlags & 0x400) { readRunWord(); }
+        const composition = runFlags & 0x800 ? readRunWord(bytes[trun.payload] === 1) : 0;
         if (sampleDuration < 1 || sampleSize < 8 || !top.some((box: Box) => box.kind === 'mdat' && dataOffset >= box.payload && dataOffset + sampleSize <= box.end)) { throw invalid(); }
         const startMs = (time + composition) * 1000 / timescale; const endMs = startMs + sampleDuration * 1000 / timescale;
         if (!Number.isSafeInteger(time + sampleDuration) || startMs < 0 || !Number.isFinite(endMs)) { throw invalid(); }

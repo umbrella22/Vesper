@@ -666,6 +666,9 @@ mod implementation {
             ])
             .env_remove("CARGO_TARGET_DIR")
             .stdin(Stdio::null());
+        if env::var_os("VESPER_IOS_RTSP_BRIDGE").is_some_and(|value| value == "1") {
+            command.args(["--features", "rtsp-bridge"]);
+        }
         if profile == IosFfiProfile::Release {
             command.arg("--release");
         }

@@ -1215,6 +1215,25 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "uses a stalled loopback origin and the production probe deadline"]
+    fn system_probe_times_out_on_a_stalled_origin() {
+        // Keep the listen socket open without answering the asset request.
+        let origin = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let source = MediaSource::new(format!(
+            "http://{}/fixture.m4v",
+            origin.local_addr().expect("origin address")
+        ));
+        let start = std::time::Instant::now();
+        let Err(error) = probe_source_with_avfoundation(&source) else {
+            panic!("stalled origin should fail the probe")
+        };
+        assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
+        assert_eq!(error.message(), "AVFoundation asset probe timed out");
+        assert!(start.elapsed() < Duration::from_secs(20));
+    }
+
     #[test]
     fn system_probe_reads_fixture_via_avfoundation() {
         if !cfg!(target_os = "macos") {

@@ -1,60 +1,46 @@
+use player_hls_playlist::{
+    DurationPrecision, Initialization, MediaPlaylistOptions, MediaSegment, PlaylistKind,
+    write_media_playlist,
+};
+
 use crate::{
     dash::{ByteRange, DashSegmentBase},
     error::{DashHlsError, DashHlsResult},
     hls::{
-        byte_range_attr, ensure_line_value,
+        media_playlist_error,
         model::{HlsMediaInput, HlsMediaSegment},
-        quoted_attr,
+        playlist_byte_range, vod_target_duration,
     },
     mp4::SidxBox,
 };
 
 pub fn build_hls_media_playlist(input: &HlsMediaInput) -> DashHlsResult<String> {
-    ensure_line_value(&input.uri, "media URI")?;
-    let init_range = byte_range_attr(&input.initialization, "initialization")?;
-    if input.segments.is_empty() {
-        return Err(DashHlsError::InvalidHlsInput(
-            "media playlist must contain at least one segment".to_owned(),
-        ));
-    }
-
-    let target_duration = target_duration(&input.segments)?;
-    let mut output = format!(
-        concat!(
-            "#EXTM3U\n",
-            "#EXT-X-VERSION:7\n",
-            "#EXT-X-TARGETDURATION:{}\n",
-            "#EXT-X-MEDIA-SEQUENCE:0\n",
-        ),
-        target_duration
-    );
-    if input.independent_segments {
-        output.push_str("#EXT-X-INDEPENDENT-SEGMENTS\n");
-    }
-    output.push_str("#EXT-X-PLAYLIST-TYPE:VOD\n");
-    output.push_str(&format!(
-        "#EXT-X-MAP:URI={},BYTERANGE=\"{}\"\n",
-        quoted_attr(&input.uri, "media URI")?,
-        init_range
-    ));
-
-    for segment in &input.segments {
-        if !segment.duration_seconds.is_finite() || segment.duration_seconds <= 0.0 {
-            return Err(DashHlsError::InvalidHlsInput(
-                "segment duration must be finite and positive".to_owned(),
-            ));
-        }
-        output.push_str(&format!("#EXTINF:{:.3},\n", segment.duration_seconds));
-        output.push_str(&format!(
-            "#EXT-X-BYTERANGE:{}\n",
-            byte_range_attr(&segment.byte_range, "media segment")?
-        ));
-        output.push_str(&input.uri);
-        output.push('\n');
-    }
-    output.push_str("#EXT-X-ENDLIST\n");
-
-    Ok(output)
+    let segments = input
+        .segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| MediaSegment {
+            duration_seconds: segment.duration_seconds,
+            uri: input.uri.as_str().into(),
+            byte_range: Some(playlist_byte_range(&segment.byte_range)),
+            discontinuity: false,
+            initialization: (index == 0).then(|| Initialization {
+                uri: input.uri.as_str().into(),
+                byte_range: Some(playlist_byte_range(&input.initialization)),
+            }),
+        });
+    write_media_playlist(
+        MediaPlaylistOptions {
+            kind: PlaylistKind::Vod,
+            target_duration: vod_target_duration(input.segments.iter().map(|s| s.duration_seconds)),
+            media_sequence: 0,
+            discontinuity_sequence: None,
+            independent_segments: input.independent_segments,
+            duration_precision: DurationPrecision::Milliseconds,
+        },
+        segments,
+    )
+    .map_err(media_playlist_error)
 }
 
 pub fn build_hls_media_input_from_sidx(
@@ -120,19 +106,6 @@ pub fn build_hls_media_input_from_sidx(
         segments,
         independent_segments: true,
     })
-}
-
-fn target_duration(segments: &[HlsMediaSegment]) -> DashHlsResult<u64> {
-    let mut max_duration = 0.0_f64;
-    for segment in segments {
-        if !segment.duration_seconds.is_finite() || segment.duration_seconds <= 0.0 {
-            return Err(DashHlsError::InvalidHlsInput(
-                "segment duration must be finite and positive".to_owned(),
-            ));
-        }
-        max_duration = max_duration.max(segment.duration_seconds);
-    }
-    Ok(max_duration.ceil().max(1.0) as u64)
 }
 
 #[cfg(test)]

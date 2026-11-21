@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-21
+
 ## 0.9.1 - 2026-10-12
 
 - Consume VesperPlayerKit 0.9.1 to retain the original DASH network failure,

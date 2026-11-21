@@ -549,7 +549,7 @@ mod windows_d3d11_presenter {
                     std::slice::from_ref(&stream),
                 )
             };
-            // `D3D11_VIDEO_PROCESSOR_STREAM` uses ManuallyDrop fields because
+            // SAFETY: `D3D11_VIDEO_PROCESSOR_STREAM` uses ManuallyDrop fields because
             // it mirrors the C ABI. Drop the COM references we placed inside
             // the stream after the synchronous blit returns.
             unsafe {
@@ -1222,17 +1222,11 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
 
 impl DesktopVideoSource for WindowsNativeFrameVideoSource {
     fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
-        loop {
-            match self.poll_frame(true)? {
-                DesktopVideoFramePoll::Ready(frame) => return Ok(Some(frame)),
-                DesktopVideoFramePoll::Pending => continue,
-                DesktopVideoFramePoll::EndOfStream => return Ok(None),
-            }
-        }
+        wait_for_windows_native_frame(std::time::Duration::from_secs(2), || self.poll_frame())
     }
 
     fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
-        self.poll_frame(false)
+        self.poll_frame()
     }
 
     fn seek_to(
@@ -1255,10 +1249,29 @@ impl DesktopVideoSource for WindowsNativeFrameVideoSource {
     fn set_prefetch_limit(&self, _limit: usize) {}
 }
 
+fn wait_for_windows_native_frame(
+    timeout: std::time::Duration,
+    mut poll: impl FnMut() -> anyhow::Result<DesktopVideoFramePoll>,
+) -> anyhow::Result<Option<DesktopVideoFrame>> {
+    let started = std::time::Instant::now();
+    loop {
+        match poll()? {
+            DesktopVideoFramePoll::Ready(frame) => return Ok(Some(frame)),
+            DesktopVideoFramePoll::EndOfStream => return Ok(None),
+            DesktopVideoFramePoll::Pending => {}
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            anyhow::bail!("Windows native decoder did not produce a frame before the timeout");
+        }
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)));
+    }
+}
+
 impl WindowsNativeFrameVideoSource {
-    fn poll_frame(&mut self, blocking: bool) -> anyhow::Result<DesktopVideoFramePoll> {
-        let mut packets_submitted = 0usize;
-        loop {
+    fn poll_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+        const MAX_SUBMISSIONS_PER_POLL: usize = 4;
+        for _ in 0..MAX_SUBMISSIONS_PER_POLL {
             match receive_windows_native_frame(self.session.as_mut(), &mut self.decoder_breaker)? {
                 DecoderReceiveNativeFrameOutput::Frame(frame) => {
                     return windows_native_frame_poll_with_presenter_protected(
@@ -1281,23 +1294,20 @@ impl WindowsNativeFrameVideoSource {
 
             match self.next_input_packet()? {
                 Some(packet) => {
-                    let accepted = self.send_packet(&packet)?;
-                    packets_submitted = packets_submitted.saturating_add(1);
-                    if accepted {
-                        self.pending_packet = None;
-                    } else {
+                    if !self.send_packet(&packet)? {
                         self.pending_packet = Some(packet);
-                    }
-                    if !blocking && packets_submitted >= 4 {
                         return Ok(DesktopVideoFramePoll::Pending);
                     }
                 }
                 None => {
-                    self.send_end_of_stream()?;
-                    self.end_of_input_sent = true;
+                    self.end_of_input_sent = self.send_end_of_stream()?;
+                    if !self.end_of_input_sent {
+                        return Ok(DesktopVideoFramePoll::Pending);
+                    }
                 }
             }
         }
+        Ok(DesktopVideoFramePoll::Pending)
     }
 
     fn next_input_packet(&mut self) -> anyhow::Result<Option<CompressedVideoPacket>> {
@@ -1315,7 +1325,7 @@ impl WindowsNativeFrameVideoSource {
         )
     }
 
-    fn send_end_of_stream(&mut self) -> anyhow::Result<()> {
+    fn send_end_of_stream(&mut self) -> anyhow::Result<bool> {
         send_windows_native_end_of_stream(
             self.session.as_mut(),
             &mut self.decoder_breaker,
@@ -1356,7 +1366,7 @@ fn send_windows_native_end_of_stream(
     session: &mut dyn NativeDecoderSession,
     breaker: &mut PluginBreakerState,
     stream_index: u32,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     windows_native_decoder_ensure_enabled(breaker, "sendDecoderPacket")?;
     match session
         .send_packet(
@@ -1367,12 +1377,12 @@ fn send_windows_native_end_of_stream(
             },
             &[],
         )
-        .map(|_| ())
+        .map(|result| result.accepted)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
     {
-        Ok(()) => {
+        Ok(accepted) => {
             breaker.record_success();
-            Ok(())
+            Ok(accepted)
         }
         Err(error) => {
             let _ = breaker.record_failure();
@@ -2827,6 +2837,39 @@ mod tests {
         assert!(packet.discontinuity);
         assert!(!packet.end_of_stream);
         assert_eq!(data, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn windows_native_frame_wait_returns_a_timeout_on_pending() {
+        let mut polls = 0;
+        let error = super::wait_for_windows_native_frame(Duration::ZERO, || {
+            polls += 1;
+            Ok(player_platform_desktop::DesktopVideoFramePoll::Pending)
+        })
+        .expect_err("pending must time out");
+        assert_eq!(polls, 1);
+        assert!(error.to_string().contains("did not produce a frame"));
+    }
+
+    #[test]
+    fn windows_native_decoder_eos_reports_backpressure_until_accepted() {
+        let mut decoder = BackpressureWindowsNativeSession {
+            accepted: false,
+            sent_packets: Vec::new(),
+        };
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy::default());
+        assert!(!super::send_windows_native_end_of_stream(&mut decoder, &mut breaker, 7).unwrap());
+        decoder.accepted = true;
+        assert!(super::send_windows_native_end_of_stream(&mut decoder, &mut breaker, 7).unwrap());
+        assert_eq!(decoder.sent_packets.len(), 2);
+        assert!(
+            decoder
+                .sent_packets
+                .iter()
+                .all(|(packet, data)| packet.end_of_stream
+                    && packet.stream_index == 7
+                    && data.is_empty())
+        );
     }
 
     #[test]

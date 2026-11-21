@@ -40,6 +40,7 @@ mod conversions;
 mod handles;
 mod native_frame_pipeline;
 mod plugin_registry;
+mod rtsp;
 mod sequence_ffi;
 mod types;
 
@@ -4565,6 +4566,29 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
         }
         PlayerFfiCallStatus::Ok
     })
+}
+
+/// Executes one private RTSP bridge command. Release the returned JSON with
+/// `player_ffi_dash_bridge_string_free`. A null result denotes a boundary failure.
+///
+/// # Safety
+/// `request_json` must be readable and NUL-terminated for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_rtsp_command(request_json: *const c_char) -> *mut c_char {
+    if request_json.is_null() {
+        return ptr::null_mut();
+    }
+    std::panic::catch_unwind(|| {
+        // SAFETY: caller supplies a readable, NUL-terminated string.
+        let Ok(request) = (unsafe { CStr::from_ptr(request_json) }).to_str() else {
+            return ptr::null_mut();
+        };
+        if request.len() > 32 * 1024 {
+            return ptr::null_mut();
+        }
+        into_c_string_ptr(rtsp::execute(request).to_string())
+    })
+    .unwrap_or(ptr::null_mut())
 }
 
 fn source_normalizer_mode_from_u32(value: u32) -> SourceNormalizerMode {

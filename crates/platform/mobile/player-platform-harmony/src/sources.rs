@@ -79,7 +79,7 @@ pub(crate) fn validate_descriptor(value: &Value) -> Result<()> {
     }
     if !matches!(
         value.get("protocol").and_then(Value::as_str),
-        Some("file" | "progressive" | "hls" | "dash")
+        Some("file" | "progressive" | "hls" | "dash" | "rtsp")
     ) {
         return Err(failure(
             "unsupported",

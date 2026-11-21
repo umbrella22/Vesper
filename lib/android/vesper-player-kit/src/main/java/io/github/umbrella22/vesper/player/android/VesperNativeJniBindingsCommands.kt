@@ -76,7 +76,7 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SourceCommandReadiness(
                         fail(error.toCommandFailure(commandId, sourceEpoch, "sourceCommandFailed"))
                         return
                     }
-                    val timeline = exoPlayer.commandReadyTimeline() ?: return
+                    val timeline = exoPlayer.commandReadyTimeline(liveOnly = isRtspBridgeActive) ?: return
                     settled = true
                     cleanup()
                     if (continuation.isActive) {
@@ -147,6 +147,16 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SeekCompletion(
 ): Long {
     check(Looper.myLooper() == Looper.getMainLooper()) {
         "seek completion must be awaited on the Android main looper"
+    }
+    if (isRtspBridgeActive) {
+        throw commandFailure(
+            message = "Seeking is unavailable for the RTSP bridge.",
+            code = VesperPlayerErrorCode.Unsupported,
+            category = VesperPlayerErrorCategory.Capability,
+            reason = "rtsp_seek_unsupported",
+            commandId = commandId,
+            sourceEpoch = sourceEpoch,
+        )
     }
     val exoPlayer = player ?: throw commandFailure(
         message = "Android system playback is not ready for seek.",
@@ -283,8 +293,8 @@ internal fun VesperNativeJniBindings.cancelPendingSeekCommandInternal(reason: St
     pendingSeekCommandCancellation?.invoke(reason)
 }
 
-private fun androidx.media3.exoplayer.ExoPlayer.commandReadyTimeline(): TimelineUiState? {
-    return currentTimelineSample().commandReadyTimeline(
+private fun androidx.media3.exoplayer.ExoPlayer.commandReadyTimeline(liveOnly: Boolean): TimelineUiState? {
+    return currentTimelineSample(liveOnly).commandReadyTimeline(
         playbackReady = playbackState == Player.STATE_READY,
         timelineEmpty = currentTimeline.isEmpty,
     )

@@ -86,23 +86,7 @@ impl PlayerRuntimeAdapter for MacosSourceNormalizerRuntimeGuard {
 impl Drop for MacosSourceNormalizerRuntimeGuard {
     fn drop(&mut self) {
         if let Some(session) = self.source_normalizer_packet_session.take() {
-            match session.lock() {
-                Ok(mut guard) => {
-                    if let Some(mut packet_session) = guard.take()
-                        && let Err(error) = packet_session.close()
-                    {
-                        tracing::warn!(
-                            error = %error,
-                            "source normalizer packet session close failed while dropping macOS runtime guard"
-                        );
-                    }
-                }
-                Err(_) => {
-                    tracing::error!(
-                        "source normalizer packet session mutex was poisoned while dropping macOS runtime guard"
-                    );
-                }
-            }
+            session.close();
         }
     }
 }
@@ -364,8 +348,84 @@ pub(crate) fn should_bypass_source_normalizer_for_native_adaptive(source: &Media
     )
 }
 
+enum PacketSessionState {
+    Available(Box<dyn SourceNormalizerPacketSession>),
+    InUse,
+    Closed,
+}
+
+pub(crate) struct SourceNormalizerPacketSessionSlot(Mutex<PacketSessionState>);
+
+impl SourceNormalizerPacketSessionSlot {
+    pub(crate) fn new(session: Box<dyn SourceNormalizerPacketSession>) -> Self {
+        Self(Mutex::new(PacketSessionState::Available(session)))
+    }
+
+    pub(crate) fn with_session<T>(
+        &self,
+        operation: impl FnOnce(&mut dyn SourceNormalizerPacketSession) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let mut session = {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            match &*state {
+                PacketSessionState::Closed => {
+                    anyhow::bail!("source normalizer packet session is closed")
+                }
+                PacketSessionState::InUse => {
+                    anyhow::bail!("source normalizer packet session is busy")
+                }
+                PacketSessionState::Available(_) => {}
+            }
+            let PacketSessionState::Available(session) =
+                std::mem::replace(&mut *state, PacketSessionState::InUse)
+            else {
+                anyhow::bail!("source normalizer packet session is unavailable");
+            };
+            session
+        };
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(session.as_mut())
+        })) {
+            Ok(result) => result,
+            Err(panic) => {
+                // A partially executed packet operation cannot safely be retried on this session.
+                self.close();
+                Self::close_session(session.as_mut());
+                std::panic::resume_unwind(panic);
+            }
+        };
+        {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(*state, PacketSessionState::InUse) {
+                *state = PacketSessionState::Available(session);
+                return result;
+            }
+        }
+        // A concurrent close retires the slot. The current owner closes it
+        // after the plugin returns and never publishes the stale result.
+        Self::close_session(session.as_mut());
+        anyhow::bail!("source normalizer packet session is closed")
+    }
+
+    pub(crate) fn close(&self) {
+        let old = {
+            let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            std::mem::replace(&mut *state, PacketSessionState::Closed)
+        };
+        if let PacketSessionState::Available(mut session) = old {
+            Self::close_session(session.as_mut());
+        }
+    }
+
+    fn close_session(session: &mut dyn SourceNormalizerPacketSession) {
+        if let Err(error) = session.close() {
+            tracing::warn!(error = %error, "source normalizer packet session close failed");
+        }
+    }
+}
+
 pub(crate) struct ReadySourceNormalizerPacketSession {
-    pub(crate) session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+    pub(crate) session: SharedSourceNormalizerPacketSession,
     pub(crate) stream_info: player_plugin::SourceNormalizerPacketStreamInfo,
     pub(crate) selected_profile: Option<String>,
     pub(crate) plugin_name: Option<String>,
@@ -425,7 +485,7 @@ pub(crate) fn open_source_normalizer_packet_session(
             .or_else(|| Some(factory.name().to_owned())),
         ready_latency: started.elapsed(),
         stream_info,
-        session: Arc::new(Mutex::new(Some(session))),
+        session: Arc::new(SourceNormalizerPacketSessionSlot::new(session)),
     })
 }
 
@@ -815,11 +875,8 @@ pub(crate) fn mark_source_normalizer_packet_stream_participated(
 pub(crate) fn drop_source_normalizer_packet_session(
     normalization: &mut MacosSourceNormalizationOutcome,
 ) {
-    if let Some(packet_session) = normalization.packet_session.take()
-        && let Ok(mut guard) = packet_session.lock()
-        && let Some(mut session) = guard.take()
-    {
-        let _ = session.close();
+    if let Some(packet_session) = normalization.packet_session.take() {
+        packet_session.close();
     }
     normalization.packet_stream_info = None;
 }

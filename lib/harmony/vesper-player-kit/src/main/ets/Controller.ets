@@ -7,12 +7,13 @@ import { VesperPlayerError, VesperPlayerSnapshot, VesperPlayerEvent, VesperTrack
 import { OperationScope, VesperCancellationToken, monotonicMs, nativeError } from './Operation';
 import { NativeResourceLoader, NetworkResourceProvider, FileResourceProvider, ResourceProvider } from './ResourceLoader';
 import { NativeResourceServer } from './ResourceServer';
+import { RtspSession } from './RtspSession';
 import { Transport } from './Transport';
 import { AssetPins } from './FileStore';
 import { boundedText } from './FileStore';
 import { util } from '@kit.ArkTS';
 import { SubtitleCue, parseSubtitles, subtitleAt } from './Subtitles';
-import { DashAudioHeader, loadDashText } from './DashText';
+import { loadDashText } from './DashText';
 import { DashLiveResourceProvider, DashPlaybackPreparation, prepareDashPlayback } from './DashLive';
 import { VesperPlaybackPolicy, VesperPlaybackPolicyResult, VesperNativeBufferingPreferences, resolvePolicy, bufferingStrategy } from './Policy';
 import { common } from '@kit.AbilityKit';
@@ -35,6 +36,8 @@ class PlaybackInstance {
   loader?: NativeResourceLoader | NativeResourceServer;
   provider?: NetworkResourceProvider;
   live?: DashLiveResourceProvider;
+  rtsp?: RtspSession;
+  rtspHealthTimer?: number;
   releaseAsset?: () => void;
   subtitles: fs.File[] = [];
   subtitlePaths: string[] = [];
@@ -49,7 +52,6 @@ class PlaybackInstance {
   selectedSidecar: number = -1;
   nativeTextEnabled: boolean = true;
   deferredAudio?: VesperTrackSelection;
-  dashAudioHeaders: DashAudioHeader[] = [];
   subtitleTimer?: number;
   subtitleEnd: number = 0;
   closed: boolean = false;
@@ -118,7 +120,7 @@ export class VesperPlayerController {
   }
   exportDiagnosticReport(options: VesperDiagnosticReportOptions = {}): string { return JSON.stringify(this.diagnosticReport(options)); }
   playbackView(): VesperPlaybackView {
-    return resolvePlaybackView(this.snapshot(), this.capabilities(), this.current?.lease.descriptor.protocol ?? 'unknown');
+    return resolvePlaybackView(this.snapshot(), this.current?.lease.descriptor.protocol ?? 'unknown');
   }
   setPlaybackPolicy(policy: VesperPlaybackPolicy): Promise<VesperPlaybackPolicyResult> {
     try {
@@ -131,43 +133,38 @@ export class VesperPlayerController {
   /** Samples the current epoch. Loopback throughput and upstream transport totals are distinct. */
   refreshDiagnostics(): Promise<VesperPlaybackDiagnostics> {
     let result: VesperPlaybackDiagnostics = { playbackEpoch: '', sampledAtMonotonicMs: 0,
-      buffer: { status: 'unavailable' }, metrics: { status: 'unsupported', unrecognizedKeys: [] },
+      buffer: { status: 'unavailable' }, metrics: { status: 'unavailable', unrecognizedKeys: [] },
+      positionStatus: 'unavailable', presentationTimestampStatus: 'unavailable', timeRangesStatus: 'unavailable',
       nativeDownloadScope: 'unknown', upstreamRequestsSinceControllerCreation: 0,
       upstreamBytesSinceControllerCreation: 0, decoderExecutionEvidence: 'unknown' };
     return this.command(async (entry, player, scope): Promise<void> => {
       result.playbackEpoch = entry.epoch; result.sampledAtMonotonicMs = monotonicMs();
-      result.nativeDownloadScope = entry.loader instanceof NativeResourceServer ? 'loopback' :
+      result.nativeDownloadScope = entry.rtsp !== undefined || entry.loader instanceof NativeResourceServer ? 'loopback' :
         entry.lease.descriptor.protocol === 'file' ? 'local-file' : 'resource-loader';
       if (['prepared', 'playing', 'paused'].includes(player.state)) {
         try { playbackInfoObservation(await this.owned(entry, player.getPlaybackInfo(), scope), result); }
         catch (error) { scope.check(); result.buffer = { status: 'unavailable', errorCode: nativeError(error, 'playback info').code }; }
       }
-      if (Platform.capabilities().runtimeApi >= 23) {
-        result.metrics = { status: 'unavailable', unrecognizedKeys: [] };
-        if (['prepared', 'playing', 'paused', 'completed', 'stopped'].includes(player.state)) {
-          try { result.metrics = playbackMetricsObservation(await this.owned(entry, player.getPlaybackStatisticMetrics(), scope)); }
-          catch (error) { scope.check(); result.metrics = { status: 'unavailable', errorCode: nativeError(error, 'playback metrics').code, unrecognizedKeys: [] }; }
-        }
+      if (['prepared', 'playing', 'paused', 'completed', 'stopped'].includes(player.state)) {
+        try { result.metrics = playbackMetricsObservation(await this.owned(entry, player.getPlaybackStatisticMetrics(), scope)); }
+        catch (error) { scope.check(); result.metrics = { status: 'unavailable', errorCode: nativeError(error, 'playback metrics').code, unrecognizedKeys: [] }; }
       }
-      if (Platform.capabilities().runtimeApi >= 26) {
-        result.positionStatus = 'unavailable'; result.presentationTimestampStatus = 'unavailable'; result.timeRangesStatus = 'unavailable';
-        if (['prepared', 'playing', 'paused', 'completed'].includes(player.state)) {
-          try { result.nativePositionMs = player.getPlaybackPosition(); result.positionStatus = 'observed'; }
-          catch (error) { scope.check(); }
-        }
-        // Querying PTS in prepared emits a native error callback and can fail later commands.
-        if (['playing', 'paused', 'completed'].includes(player.state)) {
-          try { result.presentationTimestampUs = player.getCurrentPresentationTimestamp(); result.presentationTimestampStatus = 'observed'; }
-          catch (error) { scope.check(); }
-        }
-        if (['prepared', 'playing', 'paused', 'completed'].includes(player.state)) {
-          try {
-            const loaded = Platform.ranges(await this.owned(entry, player.getLoadedTimeRanges(), scope));
-            const seekable = Platform.ranges(await this.owned(entry, player.getSeekableTimeRanges(), scope));
-            this.value.timeRanges = { loaded: loaded, seekable: seekable }; result.timeRangesStatus = 'observed';
-          } catch (error) { scope.check(); }
-        }
-      } else { result.positionStatus = 'unsupported'; result.presentationTimestampStatus = 'unsupported'; result.timeRangesStatus = 'unsupported'; }
+      if (['prepared', 'playing', 'paused', 'completed'].includes(player.state)) {
+        try { result.nativePositionMs = player.getPlaybackPosition(); result.positionStatus = 'observed'; }
+        catch (error) { scope.check(); }
+      }
+      // Querying PTS in prepared emits a native error callback and can fail later commands.
+      if (['playing', 'paused', 'completed'].includes(player.state)) {
+        try { result.presentationTimestampUs = player.getCurrentPresentationTimestamp(); result.presentationTimestampStatus = 'observed'; }
+        catch (error) { scope.check(); }
+      }
+      if (['prepared', 'playing', 'paused', 'completed'].includes(player.state)) {
+        try {
+          const loaded = Platform.ranges(await this.owned(entry, player.getLoadedTimeRanges(), scope));
+          const seekable = Platform.ranges(await this.owned(entry, player.getSeekableTimeRanges(), scope));
+          this.value.timeRanges = { loaded: loaded, seekable: seekable }; result.timeRangesStatus = 'observed';
+        } catch (error) { scope.check(); }
+      }
       if (!this.accepts(entry)) { throw new VesperPlayerError('stale_epoch', 'Diagnostic sample belongs to a retired playback'); }
       result.upstreamRequestsSinceControllerCreation = this.transport.requests;
       result.upstreamBytesSinceControllerCreation = this.transport.bytesReceived;
@@ -325,6 +322,14 @@ export class VesperPlayerController {
         scope.check(); player.fdSrc = { fd: file.fd, offset: 0, length: stat.size };
         this.value.nativeBuffering = { playbackEpoch: entry.epoch, requested: entry.buffering, status: 'unsupported',
           reason: 'Local fdSrc does not accept a MediaSource playback strategy' };
+      } else if (descriptor.protocol === 'rtsp') {
+        if (descriptor.kind !== 'remote' || (descriptor.headers !== undefined && Object.keys(descriptor.headers).length > 0)) {
+          throw new VesperPlayerError('rtsp_unsupported_input', 'RTSP requires a remote source without HTTP headers.');
+        }
+        const session = new RtspSession(descriptor.uri);
+        entry.rtsp = session;
+        const uri = await this.owned(entry, session.playlist(scope), scope);
+        entry.mediaSource = media.createMediaSourceWithUrl(uri, {});
       } else {
         const local = descriptor.kind === 'local' ? new FileResourceProvider(descriptor.uri) : undefined;
         const network = local === undefined ? new NetworkResourceProvider(this.transport, lease.startupCache(), descriptor.headers ?? {}, descriptor.uri) : undefined;
@@ -340,7 +345,7 @@ export class VesperPlayerController {
             if (network === undefined) { throw new VesperPlayerError('unsupported', 'Dynamic DASH requires a remote source'); }
             provider = prepared.live; sourceUri = prepared.live.nativeUrl; network.timeline = 'live';
           } else {
-            const textTracks = await this.owned(entry, loadDashText(provider, sourceUri, scope, entry.dashAudioHeaders, prepared.snapshot), scope);
+            const textTracks = await this.owned(entry, loadDashText(provider, sourceUri, scope, prepared.snapshot), scope);
             entry.embeddedText = textTracks.length > 0;
             for (const track of textTracks) { entry.sidecars.push(track.cues); entry.sidecarLanguages.push(track.language); entry.sidecarSources.push(undefined); }
           }
@@ -361,20 +366,26 @@ export class VesperPlayerController {
         // native player still needs them. Keep it through physical release.
         entry.mediaSource = source;
         if (delegate !== undefined) { source.setMediaResourceLoaderDelegate(delegate.delegate()); }
-        // Remote HLS defaults to a two-second preference; explicit preferences
+      }
+      let strategy: media.PlaybackStrategy | undefined;
+      if (entry.mediaSource !== undefined) {
+        // Remote HLS defaults to a two-second preference. Explicit preferences
         // are frozen for this activation and never masquerade as strict limits.
-        const strategy = bufferingStrategy(entry.buffering, network !== undefined && (descriptor.protocol === 'hls' || entry.live !== undefined));
-        const sourceWork = player.setMediaSource(source, strategy);
-        // API 20's native implementation returns undefined despite the SDK's
-        // Promise declaration. The initialized callback is the readiness fence.
+        const remoteHls = descriptor.kind === 'remote' &&
+          (entry.rtsp !== undefined || descriptor.protocol === 'hls' || entry.live !== undefined);
+        strategy = bufferingStrategy(entry.buffering, remoteHls);
+        // AVPlayer can return void on API 26. Native state confirms readiness.
+        const sourceWork = player.setMediaSource(entry.mediaSource, strategy);
         await this.owned(entry, Promise.resolve(sourceWork), scope);
-        await scope.until(() => player.state === 'initialized');
+      }
+      await scope.until(() => player.state === 'initialized');
+      scope.check();
+      if (entry.mediaSource !== undefined) {
         this.value.nativeBuffering = { playbackEpoch: entry.epoch, requested: entry.buffering, status: strategy === undefined ? 'systemDefault' : 'accepted',
           submitted: strategy === undefined ? undefined : { preferredBufferDurationMs: strategy.preferredBufferDuration === undefined ? undefined : strategy.preferredBufferDuration * 1000,
             preferredBufferDurationForPlayingMs: strategy.preferredBufferDurationForPlaying === undefined ? undefined : strategy.preferredBufferDurationForPlaying * 1000 },
           reason: 'MediaSource initialized; submitted hints have no native effective-threshold readback' };
       }
-      await scope.until(() => player.state === 'initialized');
       phase = 'Surface attachment';
       if (this.surface.length > 0) { player.surfaceId = this.surface; }
       phase = 'external subtitles';
@@ -385,8 +396,8 @@ export class VesperPlayerController {
       phase = 'native playback configuration';
       player.videoScaleType = media.VideoScaleType.VIDEO_SCALE_TYPE_SCALED_ASPECT;
       player.audioInterruptMode = audio.InterruptMode.INDEPENDENT_MODE;
-      this.value.durationMs = player.duration > 0 ? player.duration : undefined;
-      this.value.timeline = entry.live !== undefined ? 'live' : player.duration > 0 ? 'vod' : 'unknown';
+      this.value.durationMs = entry.rtsp === undefined && player.duration > 0 ? player.duration : undefined;
+      this.value.timeline = entry.rtsp !== undefined || entry.live !== undefined ? 'live' : player.duration > 0 ? 'vod' : 'unknown';
       this.value.width = player.width; this.value.height = player.height;
       await this.owned(entry, this.refreshTracks(entry), scope);
       await this.applyPreferencesEntry(entry, player, scope);
@@ -399,6 +410,16 @@ export class VesperPlayerController {
       }
       scope.check(); lease.validateActivation();
       if (!this.accepts(entry)) { throw new VesperPlayerError('superseded', 'Activation is no longer current'); }
+      if (entry.rtsp !== undefined) {
+        entry.rtspHealthTimer = setInterval((): void => {
+          if (!this.accepts(entry)) { return; }
+          try { entry.rtsp?.checkHealth(); }
+          catch (error) {
+            if (entry.rtspHealthTimer !== undefined) { clearInterval(entry.rtspHealthTimer); entry.rtspHealthTimer = undefined; }
+            this.failEntry(entry, nativeError(error, 'RTSP bridge status'));
+          }
+        }, 500);
+      }
       scope.close(); this.publish('activationCommitted');
       return { sourceId: lease.sourceId, sessionId: lease.sessionId, activationId: entry.activationId, playbackEpoch: entry.epoch };
     } catch (error) {
@@ -465,7 +486,6 @@ export class VesperPlayerController {
     if (text !== this.value.subtitle) { this.value.subtitle = text; this.publish('subtitle'); }
   }
   setTrackConstraints(constraints: VesperTrackConstraints, cancellation?: VesperCancellationToken, timeoutMs: number = 10000): Promise<VesperTrackConstraints> {
-    Platform.advanced();
     let copy: VesperTrackConstraints;
     try { copy = validateTrackConstraints(constraints); } catch (error) { return Promise.reject(error); }
     this.advanceIntent();
@@ -488,7 +508,7 @@ export class VesperPlayerController {
     }, cancellation, timeoutMs).then(() => JSON.parse(JSON.stringify(effective)) as VesperTrackConstraints);
   }
   timeRanges(): Promise<VesperTimeRanges> {
-    Platform.advanced(); let ranges: VesperTimeRanges = { loaded: [], seekable: [] };
+    let ranges: VesperTimeRanges = { loaded: [], seekable: [] };
     return this.command(async (entry, player, scope): Promise<void> => {
       const loaded = Platform.ranges(await this.owned(entry, player.getLoadedTimeRanges(), scope));
       const seekable = Platform.ranges(await this.owned(entry, player.getSeekableTimeRanges(), scope));
@@ -497,7 +517,7 @@ export class VesperPlayerController {
     }).then(() => ranges);
   }
   seekToDefaultPosition(): Promise<void> {
-    Platform.advanced(); return this.command(async (entry, player, scope): Promise<void> => {
+    return this.command(async (entry, player, scope): Promise<void> => {
       if (this.value.timeline === 'live') {
         throw new VesperPlayerError('unsupported', 'Live default-position seeking is not supported on the resource-loader route');
       }
@@ -546,7 +566,8 @@ export class VesperPlayerController {
       if (!this.accepts(entry)) { return; } this.value.positionMs = Math.max(0, position); this.updateSubtitle(entry); this.publish('position');
     });
     player.on('durationUpdate', (duration: number): void => {
-      if (!this.accepts(entry)) { return; } this.value.durationMs = duration > 0 ? duration : undefined;
+      if (!this.accepts(entry) || entry.lease.descriptor.protocol === 'rtsp') { return; }
+      this.value.durationMs = duration > 0 ? duration : undefined;
     });
     player.on('videoSizeChange', (width: number, height: number): void => {
       if (!this.accepts(entry)) { return; } this.value.width = width; this.value.height = height; this.publish('videoSizeChanged');
@@ -679,13 +700,13 @@ export class VesperPlayerController {
     this.value.tracks = descriptions.map((description: media.MediaDescription): VesperTrack => {
       const type = numeric(description, 'track_type', -1);
       const id = numeric(description, 'track_index', -1);
-      const fixedHlsVideo = type === 1 && entry.lease.descriptor.protocol === 'hls' && Platform.capabilities().runtimeApi < 24;
+      const selectionSupported = [0, 1, 2].includes(type);
       const width = numeric(description, 'width', 0); const height = numeric(description, 'height', 0); const bitrate = numeric(description, 'bitrate', 0);
       return { id: id, nativeType: type, kind: type === 0 ? 'audio' : type === 1 ? 'video' : type === 2 ? 'subtitle' : `unknown:${type}`,
         mimeType: textual(description, 'codec_mime'), language: textual(description, 'language'), selected: selected.includes(id),
         width: width > 0 ? width : undefined, height: height > 0 ? height : undefined, bitrate: bitrate > 0 ? bitrate : undefined,
-        selectionSupported: !fixedHlsVideo && [0, 1, 2].includes(type),
-        selectionReason: fixedHlsVideo ? 'Fixed HLS video tracks require API 24; use video bitrate or auto' : [0, 1, 2].includes(type) ? undefined : `Unknown native track type ${type}` };
+        selectionSupported: selectionSupported,
+        selectionReason: selectionSupported ? undefined : `Unknown native track type ${type}` };
     });
     entry.selectedNativeSubtitles = this.value.tracks.filter((track: VesperTrack) => track.kind === 'subtitle' && track.selected).map((track: VesperTrack) => track.id);
     if (entry.embeddedText) { this.value.tracks = this.value.tracks.filter((track: VesperTrack) => track.kind !== 'subtitle'); }
@@ -840,9 +861,6 @@ export class VesperPlayerController {
       const track = this.value.tracks.find((item: VesperTrack) => item.id === selection.trackId && item.kind === selection.kind);
       if (track === undefined) { throw new VesperPlayerError('invalid_argument', 'Track does not belong to the current epoch'); }
       if (track.selectionSupported === false) { throw new VesperPlayerError('unsupported', track.selectionReason ?? 'Track selection is unavailable'); }
-      if (selection.kind === 'video' && entry.lease.descriptor.protocol === 'hls' && Platform.capabilities().runtimeApi < 24) {
-        throw new VesperPlayerError('unsupported', 'HLS video track switching requires API 24; use available bitrate selection');
-      }
       if (selection.kind === 'audio' && !track.selected && player.state === 'paused' && this.value.timeline === 'vod') {
         entry.deferredAudio = selection; this.publish('selectionDeferred'); return;
       }
@@ -855,18 +873,6 @@ export class VesperPlayerController {
         entry.nativeTextEnabled = false; entry.selectedSidecar = -2 - track.id; this.updateSubtitle(entry);
       } else {
         if (selection.kind === 'subtitle') { entry.nativeTextEnabled = true; entry.selectedSidecar = -1; this.value.subtitle = ''; }
-        if (selection.kind === 'audio' && !track.selected && entry.provider !== undefined && Platform.capabilities().runtimeApi === 20) {
-          // API 20 retains only one second of old DASH audio during a switch.
-          // Prime initialization/SIDX before native selection can stop that reader.
-          const token = new VesperCancellationToken(); const remove = scope.onFailure(() => { token.cancel(); });
-          try {
-            for (const header of entry.dashAudioHeaders) {
-              if (header.language.toLowerCase() === track.language.toLowerCase()) {
-                await this.owned(entry, entry.provider.prime(header.uri, header.bytes, token), scope);
-              }
-            }
-          } finally { remove(); }
-        }
         if (selection.kind !== 'audio' || !track.selected) { await this.owned(entry, player.selectTrack(track.id), scope); }
       }
     } else if (selection.kind === 'subtitle' && selection.mode === 'off') {
@@ -905,6 +911,7 @@ export class VesperPlayerController {
     if (entry.releaseWork !== undefined) { return entry.releaseWork; }
     entry.closed = true;
     entry.live?.cancel();
+    if (entry.rtspHealthTimer !== undefined) { clearInterval(entry.rtspHealthTimer); entry.rtspHealthTimer = undefined; }
     entry.deferredAudio = undefined;
     if (entry.subtitleTimer !== undefined) { clearInterval(entry.subtitleTimer); entry.subtitleTimer = undefined; }
     this.retired.add(entry);
@@ -912,6 +919,8 @@ export class VesperPlayerController {
       await this.releaseBarrier;
       if (entry.player !== undefined) { await entry.player.release(); entry.player = undefined; }
       entry.mediaSource = undefined;
+      entry.rtsp?.close();
+      entry.rtsp = undefined;
       await entry.loader?.dispose();
       await entry.live?.dispose();
       if (entry.file !== undefined) { await fs.close(entry.file); entry.file = undefined; }

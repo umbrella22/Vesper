@@ -78,7 +78,7 @@ export struct DiagnosticsPanel {
         ExampleHeading({ title: this.text('platform'), palette: this.palette })
         ExampleValue({ label: this.text('runtime_api'), value: `${this.model.binding.controller.capabilities().runtimeApi}`, palette: this.palette })
         ExampleValue({ label: this.text('native_player'), value: 'AVPlayer', palette: this.palette })
-        ExampleValue({ label: this.text('track_constraints'), value: this.model.binding.controller.capabilities().advancedTrackConstraints ? 'Available' : 'Requires API 26', palette: this.palette })
+        ExampleValue({ label: this.text('track_constraints'), value: 'Available', palette: this.palette })
         ExampleValue({ label: this.text('decoder_guarantee'), value: this.model.binding.controller.capabilities().decoderGuarantee, palette: this.palette })
         ExampleValue({ label: this.text('decoder_preflight'), value: JSON.stringify(this.model.decoderCapability ?? {}), palette: this.palette })
         ExampleValue({ label: this.text('hdr_evidence'), value: this.model.binding.controller.capabilities().hdrEvidence, palette: this.palette })

@@ -6,7 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+rtsp-bridge = ["dep:player-rtsp-hls-bridge"]
+
 [dependencies]
+player-rtsp-hls-bridge = { path = "../../../core/player-rtsp-hls-bridge", optional = true }
 player-platform-mobile = { path = "../../common/player-platform-mobile" }
 player-dash-hls-bridge = { path = "../../../core/player-dash-hls-bridge" }
 player-download = { path = "../../../core/player-download" }

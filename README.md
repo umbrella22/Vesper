@@ -297,7 +297,7 @@ scaffold templates, then use the Rust CLI for the complete local workflow.
 Install the versioned CLI from crates.io:
 
 ```sh
-cargo install vesper-player-cli --version 0.9.1 --locked
+cargo install vesper-player-cli --version 0.10.0 --locked
 vesper --version
 ```
 
@@ -306,7 +306,7 @@ short Rust dependency and import name:
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.9.1" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.10.0" }
 ```
 
 ```rust
@@ -315,7 +315,7 @@ use player_plugin::{Plugin, PluginBuildError};
 
 For a WASM Component guest, use
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.9.1" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+"=0.10.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
 on the left defines the Rust import name, while `package` selects the published
 crates.io identity. All Vesper plugin SDK crates are released at one version so
 author projects can pin the complete contract exactly.
@@ -736,7 +736,7 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The workspace and package metadata identify the `0.9.1` published release. The
+The workspace and package metadata identify the `0.10.0` release. The
 [changelog](CHANGELOG.md) records source changes and current release limitations.
 Published source and package artifacts are tracked by the release checklist. The
 [plugin author and host API contracts](lib/doc/plugin-author-api.md) identify

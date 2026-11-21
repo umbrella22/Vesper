@@ -766,6 +766,7 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
     let mut previous_segment_range_end = 0_u64;
     let mut sequence = 0_u64;
     let mut current_map_index = None;
+    let mut pending_map = None;
     let mut pending_discontinuity = false;
     validate_hls_encryption(manifest)?;
 
@@ -810,8 +811,7 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             let byte_range = attributes
                 .get("BYTERANGE")
                 .and_then(|value| parse_hls_byte_range(value, &mut previous_map_range_end));
-            current_map_index = Some(maps.len());
-            maps.push(HlsMap {
+            pending_map = Some(HlsMap {
                 uri: resolve_uri(manifest_uri, uri),
                 byte_range,
             });
@@ -837,6 +837,12 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             continue;
         }
         ensure_segment_capacity(segments.len())?;
+        // Only retain maps used by a segment. Parse all map ranges above so that
+        // a superseded map still advances the implicit byte-range offset.
+        if let Some(map) = pending_map.take() {
+            current_map_index = Some(maps.len());
+            maps.push(map);
+        }
         segments.push(HlsSegment {
             uri: resolve_uri(manifest_uri, line),
             duration: pending_duration.take(),
@@ -2012,14 +2018,16 @@ fn resolve_uri(base: &str, reference: &str) -> String {
 }
 
 fn extension_from_uri(uri: &str, default_extension: &str) -> String {
-    let path = uri
-        .split_once('?')
-        .map(|(path, _)| path)
-        .unwrap_or(uri)
-        .split_once('#')
-        .map(|(path, _)| path)
-        .unwrap_or(uri);
-    path.rsplit_once('.')
+    let locator = uri.split(['?', '#']).next().unwrap_or_default();
+    let path = match locator.split_once("://") {
+        Some((_, authority_and_path)) => authority_and_path
+            .split_once('/')
+            .map_or("", |(_, path)| path),
+        None => locator,
+    };
+    let filename = path.rsplit(['/', '\\']).next().unwrap_or_default();
+    filename
+        .rsplit_once('.')
         .map(|(_, extension)| extension)
         .filter(|extension| {
             !extension.is_empty()

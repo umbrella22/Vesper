@@ -1498,9 +1498,9 @@ fn macos_source_normalizer_packet_stream_is_participated_after_decoder_handoff()
     assert!(no_audio_summary.contains("audioDecoderPluginReady=false"));
     let mut normalization = MacosSourceNormalizationOutcome {
         source: MediaSource::new("/tmp/normalized.mp4"),
-        packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
+        packet_session: Some(Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
             FakeSourceNormalizerPacketSession::new(stream_info.clone()),
-        ))))),
+        )))),
         packet_stream_info: Some(stream_info.clone()),
         diagnostics: vec![PlayerPluginDiagnostic {
             path: String::new(),
@@ -1600,9 +1600,9 @@ fn macos_source_normalizer_session_guard_keeps_runtime_source() {
         bootstrap,
         MacosSourceNormalizationOutcome {
             source: MediaSource::new("/tmp/normalized.mp4"),
-            packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
-                FakeSourceNormalizerPacketSession::new(stream_info),
-            ))))),
+            packet_session: Some(Arc::new(super::SourceNormalizerPacketSessionSlot::new(
+                Box::new(FakeSourceNormalizerPacketSession::new(stream_info)),
+            ))),
             packet_stream_info: None,
             diagnostics: Vec::new(),
             selected_profile: Some("fixture".to_owned()),
@@ -1623,9 +1623,9 @@ fn macos_source_normalizer_packet_decoder_requires_strict_decoder_inputs() {
     let stream_info = fake_source_normalizer_packet_stream_info("H264");
     let normalization = MacosSourceNormalizationOutcome {
         source: MediaSource::new("file:///tmp/original.mp4"),
-        packet_session: Some(Arc::new(Mutex::new(Some(Box::new(
-            FakeSourceNormalizerPacketSession::new(stream_info.clone()),
-        ))))),
+        packet_session: Some(Arc::new(super::SourceNormalizerPacketSessionSlot::new(
+            Box::new(FakeSourceNormalizerPacketSession::new(stream_info.clone())),
+        ))),
         packet_stream_info: Some(stream_info),
         diagnostics: Vec::new(),
         selected_profile: Some("fixture-packet".to_owned()),
@@ -3635,12 +3635,85 @@ fn native_frame_source_sends_eof_once_and_keeps_terminal_eof() {
 }
 
 #[test]
+fn source_normalizer_unwind_retires_the_slot() {
+    let slot = super::SourceNormalizerPacketSessionSlot::new(Box::new(
+        FakeSourceNormalizerPacketSession::new(fake_source_normalizer_packet_stream_info("H264")),
+    ));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = slot.with_session::<()>(|_| panic!("interrupted packet operation"));
+    }));
+    assert!(caught.is_err());
+    let error = slot.with_session(|_| Ok(())).expect_err("slot must retire");
+    assert!(error.to_string().contains("closed"));
+    slot.close();
+}
+
+#[test]
+fn source_normalizer_close_retires_a_checked_out_session() {
+    let slot = super::SourceNormalizerPacketSessionSlot::new(Box::new(
+        FakeSourceNormalizerPacketSession::new(fake_source_normalizer_packet_stream_info("H264")),
+    ));
+    let error = slot
+        .with_session(|_| {
+            let busy = slot
+                .with_session(|_| Ok(()))
+                .expect_err("session checked out");
+            assert!(busy.to_string().contains("busy"));
+            slot.close();
+            Ok(())
+        })
+        .expect_err("late result must be discarded");
+    assert!(error.to_string().contains("closed"));
+    slot.close();
+    assert!(
+        slot.with_session(|_| Ok(()))
+            .expect_err("closed slot")
+            .to_string()
+            .contains("closed")
+    );
+}
+
+#[test]
+fn source_normalizer_packet_source_yields_during_a_run_of_audio_packets() {
+    let mut packets: Vec<_> = (0..40)
+        .map(|_| fake_source_normalizer_audio_packet())
+        .collect();
+    packets.push(fake_source_normalizer_video_packet());
+    let released = Arc::new(Mutex::new(Vec::new()));
+    let slot = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
+        FakeSourceNormalizerPacketSession::with_release_log(
+            fake_source_normalizer_packet_stream_info("H264"),
+            packets,
+            released.clone(),
+        ),
+    )));
+    let mut source = super::SourceNormalizerPacketSource::new(slot);
+    let state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
+    let decoder: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: state.clone(),
+        })));
+    assert_eq!(
+        source.send_next_packet(&decoder).unwrap(),
+        MacosNativeFramePacketSendStatus::NeedMoreData
+    );
+    assert!((1..=32).contains(&released.lock().unwrap().len()));
+    assert!(state.lock().unwrap().sent_packets.is_empty());
+    let sent = (0..40).any(|_| {
+        source.send_next_packet(&decoder).unwrap() == MacosNativeFramePacketSendStatus::Sent
+    });
+    assert!(sent);
+    assert_eq!(released.lock().unwrap().len(), 41);
+    assert_eq!(state.lock().unwrap().sent_packets.len(), 1);
+}
+
+#[test]
 fn source_normalizer_packet_source_preserves_metadata_and_releases_packet() {
     let stream_info = fake_source_normalizer_packet_stream_info("H264");
-    let session = Arc::new(Mutex::new(Some(
-        Box::new(FakeSourceNormalizerPacketSession::new(stream_info))
-            as Box<dyn SourceNormalizerPacketSession>,
-    )));
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
+        FakeSourceNormalizerPacketSession::new(stream_info),
+    )
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
     let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
     let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
@@ -3734,7 +3807,7 @@ fn source_normalizer_packet_source_skips_non_video_packets() {
         time_base_den: Some(48_000),
     });
     let released_handles = Arc::new(Mutex::new(Vec::new()));
-    let session = Arc::new(Mutex::new(Some(Box::new(
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
         FakeSourceNormalizerPacketSession::with_release_log(
             stream_info,
             vec![
@@ -3744,7 +3817,7 @@ fn source_normalizer_packet_source_skips_non_video_packets() {
             released_handles.clone(),
         ),
     )
-        as Box<dyn SourceNormalizerPacketSession>)));
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
     let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
     let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
@@ -3802,14 +3875,14 @@ fn source_normalizer_packet_source_skips_unselected_video_stream() {
     unselected_packet.pts_us = Some(41_667);
     let selected_packet = fake_source_normalizer_video_packet();
     let released_handles = Arc::new(Mutex::new(Vec::new()));
-    let session = Arc::new(Mutex::new(Some(Box::new(
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
         FakeSourceNormalizerPacketSession::with_release_log(
             stream_info,
             vec![unselected_packet, selected_packet],
             released_handles.clone(),
         ),
     )
-        as Box<dyn SourceNormalizerPacketSession>)));
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
     let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
     let decoder_session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
@@ -3841,14 +3914,14 @@ fn source_normalizer_packet_source_seek_flushes_packet_session() {
     let stream_info = fake_source_normalizer_packet_stream_info("H264");
     let events = Arc::new(Mutex::new(Vec::new()));
     let seek_positions = Arc::new(Mutex::new(Vec::new()));
-    let session = Arc::new(Mutex::new(Some(Box::new(
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
         FakeSourceNormalizerPacketSession::with_seek_log(
             stream_info,
             events.clone(),
             seek_positions.clone(),
         ),
     )
-        as Box<dyn SourceNormalizerPacketSession>)));
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session);
 
     packet_source
@@ -3879,14 +3952,14 @@ fn source_normalizer_packet_source_seek_drops_pending_packet_before_resume() {
     first_packet.pts_us = Some(100_000);
     let mut second_packet = fake_source_normalizer_video_packet();
     second_packet.pts_us = Some(500_000);
-    let session = Arc::new(Mutex::new(Some(Box::new(
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
         FakeSourceNormalizerPacketSession::with_release_log(
             stream_info,
             vec![first_packet, second_packet],
             released_handles.clone(),
         ),
     )
-        as Box<dyn SourceNormalizerPacketSession>)));
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
     let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
     if let Ok(mut state) = session_state.lock() {
@@ -3936,14 +4009,14 @@ fn source_normalizer_packet_source_seek_drops_pending_packet_before_resume() {
 fn source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_lease() {
     let stream_info = fake_source_normalizer_packet_stream_info("H264");
     let released_handles = Arc::new(Mutex::new(Vec::new()));
-    let session = Arc::new(Mutex::new(Some(Box::new(
+    let session = Arc::new(super::SourceNormalizerPacketSessionSlot::new(Box::new(
         FakeSourceNormalizerPacketSession::with_release_log(
             stream_info,
             vec![fake_source_normalizer_video_packet()],
             released_handles.clone(),
         ),
     )
-        as Box<dyn SourceNormalizerPacketSession>)));
+        as Box<dyn SourceNormalizerPacketSession>));
     let mut packet_source = super::SourceNormalizerPacketSource::new(session.clone());
     let session_state = RecordingNativeDecoderState::shared(Arc::new(Mutex::new(Vec::new())));
     if let Ok(mut state) = session_state.lock() {
@@ -3973,19 +4046,10 @@ fn source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_le
         vec![1],
         "packet lease should already be released before pending copied packet data is dropped"
     );
-    let mut guard = session
-        .lock()
-        .expect("source normalizer session mutex should not be poisoned");
-    let session = guard
-        .as_mut()
-        .expect("source normalizer session should remain available");
-    let eof = session
-        .read_packet()
+    let status = session
+        .with_session(|session| Ok(session.read_packet()?.metadata.status))
         .expect("drop after backpressure should leave no outstanding packet lease");
-    assert_eq!(
-        eof.metadata.status,
-        SourceNormalizerReadPacketStatus::EndOfStream
-    );
+    assert_eq!(status, SourceNormalizerReadPacketStatus::EndOfStream);
 }
 
 #[test]

@@ -391,6 +391,10 @@ and HTTP-FLV direct playback remain explicit capability errors on iOS. HTTP
 `.flv` URLs infer progressive VOD unless callers set the live protocol
 explicitly.
 
+A resolver built with `VESPER_IOS_RTSP_BRIDGE=1` accepts supported live RTSP
+sources and supplies an in-process HLS item to AVPlayer. See the
+[RTSP runbook](../../../scripts/rtsp/README.md) for input limits and validation.
+
 ## Download Manager
 
 `VesperDownloadManager` supports single-file and segmented downloads. For remote

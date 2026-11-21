@@ -97,7 +97,7 @@ export async function runParityChecks(context: common.UIAbilityContext, surface:
     system.updateMetadata(identity, { title: 'Current media', artist: 'Vesper fixture' });
     await until(() => system?.snapshot().metadataState === 'published' || system?.snapshot().metadataState === 'failed', 'metadata');
     if (system.snapshot().metadataState !== 'published') { throw new Error(JSON.stringify(system.snapshot())); }
-    if (controller.capabilities().runtimeApi >= 26) {
+    {
       const native = await avSession.getAVSession(context); const observer = await native.getController();
       try {
         const published = await observer.getAVMetadata();
@@ -112,7 +112,7 @@ export async function runParityChecks(context: common.UIAbilityContext, surface:
         if (commands.includes('play') || commands.includes('seek') || commands.includes('setSpeed') || !commands.includes('pause')) { throw new Error('Disabled native system commands remained registered'); }
         results.push(JSON.stringify({ nativeMetadata: published, nativeCleared: cleared, nativeCommands: commands }));
       } finally { await observer.destroy(); }
-    } else { results.push(JSON.stringify({ nativeMetadataReadback: 'API 22 getAVSession unavailable', system: system.snapshot() })); }
+    }
     stage = 'stale-metadata';
     publishHostMetadata = true;
     const replacement = sources.register({ kind: 'remote', protocol: 'progressive', uri: 'http://127.0.0.1:18765/portrait.mp4', label: 'New source' });
@@ -122,7 +122,7 @@ export async function runParityChecks(context: common.UIAbilityContext, surface:
     if (stale !== 'stale_epoch') { throw new Error('Late host metadata crossed source identity'); }
     const current = controller.snapshot();
     await until(() => system?.snapshot().metadataState === 'published' && system?.snapshot().metadataSourceId === current.sourceId, 'ordered host metadata');
-    if (controller.capabilities().runtimeApi >= 26) {
+    {
       const native = await avSession.getAVSession(context); const observer = await native.getController();
       try {
         const published = await observer.getAVMetadata();

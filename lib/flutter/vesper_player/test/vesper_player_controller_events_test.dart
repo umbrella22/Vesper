@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
 
@@ -20,6 +21,104 @@ void main() {
     await controller?.dispose();
     await platform.close();
     VesperPlayerPlatform.instance = previousPlatform;
+  });
+
+  test('command failure retains structured diagnostics before refresh',
+      () async {
+    final player = controller = await VesperPlayerController.create();
+    const failure = VesperPlayerCommandException(
+      message: 'The RTSP origin did not respond.',
+      code: VesperPlayerErrorCode.timeout,
+      category: VesperPlayerErrorCategory.network,
+      retriable: true,
+      codeRawValue: 'timeout',
+      categoryRawValue: 'network',
+      platformCode: 'vesper_operation_failed',
+      details: <String, Object?>{
+        'reason': 'rtsp_origin_unavailable',
+        'commandReason': 'failed',
+        'commandId': 7,
+        'sourceEpoch': 2,
+      },
+    );
+    platform.initializeError = failure;
+
+    final published =
+        await _expectOperationFailure(player, player.initialize, failure);
+    expect(published.message, failure.message);
+    expect(published.code, failure.code);
+    expect(published.category, failure.category);
+    expect(published.retriable, isTrue);
+    expect(published.codeRawValue, failure.codeRawValue);
+    expect(published.categoryRawValue, failure.categoryRawValue);
+    expect(published.details, {
+      ...failure.details,
+      'platformCode': failure.platformCode,
+    });
+  });
+
+  test('fixed-track failure retains revision evidence before refresh',
+      () async {
+    final player = controller = await VesperPlayerController.create();
+    final failure = VesperFixedTrackSelectionException(
+      message: 'The native catalog rejected the selection.',
+      codeRawValue: 'futureTrackDecision',
+      trackId: 'video:720p',
+      expectedCatalogRevision: 4,
+      actualCatalogRevision: 5,
+      platformCode: 'vesper_fixed_track_error',
+      platformDetails: const {'nativeReason': 'catalogChanged'},
+    );
+    platform.abrError = failure;
+
+    final published = await _expectOperationFailure(
+      player,
+      () => player.setAbrPolicy(
+        const VesperAbrPolicy.fixedTrack('video:720p'),
+        expectedCatalogRevision: 4,
+      ),
+      failure,
+    );
+    expect(published.message, failure.message);
+    expect(published.code, VesperPlayerErrorCode.unsupported);
+    expect(published.category, VesperPlayerErrorCategory.capability);
+    expect(published.retriable, isFalse);
+    expect(published.details, {
+      'domain': 'fixedTrack',
+      'code': 'futureTrackDecision',
+      'trackId': 'video:720p',
+      'expectedCatalogRevision': 4,
+      'actualCatalogRevision': 5,
+      'platformCode': 'vesper_fixed_track_error',
+      'nativeReason': 'catalogChanged',
+    });
+  });
+
+  test('obsolete command failure only reaches the command future', () async {
+    final player = controller = await VesperPlayerController.create();
+    final baseline = player.snapshot;
+    const failure = VesperPlayerCommandException(
+      message: 'Source changed.',
+      code: VesperPlayerErrorCode.cancelled,
+      category: VesperPlayerErrorCategory.source,
+      retriable: false,
+      details: <String, Object?>{
+        'obsolete': true,
+        'commandId': 7,
+        'sourceEpoch': 2,
+      },
+    );
+    platform.initializeError = failure;
+    final received = <VesperPlayerEvent>[];
+    final subscription = player.events.listen(received.add);
+    addTearDown(subscription.cancel);
+    final reports = _captureOperationReports();
+
+    await expectLater(player.initialize(), throwsA(same(failure)));
+    expect(player.snapshot, same(baseline));
+    await Future<void>.delayed(Duration.zero);
+    expect(received, isEmpty);
+    expect(reports, isEmpty);
   });
 
   test('playback warning follows its snapshot and rejects superseded epochs',
@@ -252,12 +351,45 @@ VesperPlayerPipelineEventHookReportsEvent _reportsEvent(String eventName) {
   );
 }
 
+List<Object> _captureOperationReports() {
+  final reports = <Object>[];
+  final previousHandler = FlutterError.onError;
+  FlutterError.onError = (details) => reports.add(details.exception);
+  addTearDown(() => FlutterError.onError = previousHandler);
+  return reports;
+}
+
+Future<VesperPlayerError> _expectOperationFailure(
+  VesperPlayerController player,
+  Future<void> Function() operation,
+  Object failure,
+) async {
+  final received = <VesperPlayerErrorEvent>[];
+  final subscription = player.events.listen((event) {
+    if (event is VesperPlayerErrorEvent) received.add(event);
+  });
+  addTearDown(subscription.cancel);
+  final reports = _captureOperationReports();
+
+  await expectLater(operation(), throwsA(same(failure)));
+  final published = player.snapshot.lastError;
+  expect(published, isNotNull);
+  await Future<void>.delayed(Duration.zero);
+  expect(received, hasLength(1));
+  expect(received.single.error, same(published));
+  expect(received.single.snapshot?.lastError, same(published));
+  expect(reports, [failure]);
+  return published!;
+}
+
 final class _EventTestPlatform extends VesperPlayerPlatform {
   static const String playerId = 'event-test-player';
 
   final StreamController<VesperPlayerEvent> _events =
       StreamController<VesperPlayerEvent>.broadcast(sync: true);
   VesperPlayerEvent? eventOnDispose;
+  Object? initializeError;
+  Object? abrError;
   int initializeCalls = 0;
   int playCalls = 0;
 
@@ -296,6 +428,16 @@ final class _EventTestPlatform extends VesperPlayerPlatform {
   @override
   Future<void> initialize(String playerId) async {
     initializeCalls += 1;
+    if (initializeError case final error?) throw error;
+  }
+
+  @override
+  Future<void> setAbrPolicy(
+    String playerId,
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  }) async {
+    if (abrError case final error?) throw error;
   }
 
   @override

@@ -2,8 +2,23 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-21
+
+<!-- release-notes:en -->
+
+### Added
+
+- Add an opt-in live RTSP preview for Android, iOS, and HarmonyOS host-kit
+  builds. The Rust bridge remuxes supported H.264 or HEVC and optional AAC-LC
+  into loopback HLS for Media3 or AVPlayer. Flutter uses the corresponding
+  Android and iOS kits. The default release kits leave this feature disabled.
+  See the [RTSP runbook](scripts/rtsp/README.md) for supported inputs and build
+  flags.
+
 ### Changed
 
+- Raise the HarmonyOS preview runtime floor to API 26 on arm64 and remove the
+  pre-26 compatibility paths.
 - Pin the build toolchain to Rust 1.100.0 while retaining the Rust 1.99.0 MSRV.
 - Resolve desktop verification plugins from Cargo's reported cdylib artifacts,
   supporting custom build layouts and rejecting missing or ambiguous outputs.
@@ -11,6 +26,17 @@
   versions; preserve existing lockfile selections and allow reviewed overrides.
 - Remove unused model/runtime dependencies and restrict the WASM guest allocator
   dependency to its `wasm32-wasip2` execution target.
+
+### Fixed
+
+- Share URI and attribute validation across DASH-to-HLS and offline HLS
+  planning. Reject malformed inputs before writing a playback playlist or
+  planning a download.
+- Harden native source replacement, cancellation, relay cleanup, and plugin
+  session teardown across the host and FFI boundaries.
+- Validate desktop offline resource paths before queueing a download and bound
+  subprocess diagnostics during transfer. Reject truncated HarmonyOS WebVTT
+  fragments at the parser boundary.
 
 ### Dependencies
 
@@ -20,8 +46,62 @@
 - Update wit-bindgen to 0.63.0 and WIT parsing/component tools to 0.263.0.
 - Upgrade the optional diagnostic audio plugin to wsola 0.3.0 and adapt its
   nonzero sample-rate and channel-count API while preserving pitch/rate behavior.
+- Replace the desktop overlay's font parser with skrifa 0.50.0 and use winit's
+  crossfont backend for Wayland window titles, removing the unmaintained
+  ttf-parser dependency. Preserve existing text metrics, system font fallback,
+  and coverage rasterization; Linux desktop builds now require Fontconfig and
+  FreeType development packages.
 - Adapt archive readers to ZIP's fallible filename API and propagate decoding
   errors through the existing package and Android FFmpeg validation errors.
+- Audit workspace and standalone plugin lockfiles in desktop CI, rejecting
+  known vulnerabilities, unsound dependencies, and yanked crate versions.
+- Refresh desktop FFmpeg source selection before reusing local builds. Rebuild
+  when the selected version, source URL, or archive digest changes, retaining
+  the previous installation if the replacement build fails. Ordinary native
+  dependency builds continue to select patches within their configured series;
+  optional OpenSSL builds stay on the 3.5 LTS series.
+
+<!-- release-notes:zh-CN -->
+
+### 新增
+
+- Android、iOS 和 HarmonyOS 宿主可在构建时启用 RTSP 直播预览。Rust bridge 将
+  支持的 H.264 或 HEVC 及可选 AAC-LC 转封装为本地回环 HLS，由 Media3 或
+  AVPlayer 播放。Flutter 使用对应的 Android 和 iOS 套件。默认发行包关闭该功能。
+  输入限制和构建参数见 [RTSP 验证手册](scripts/rtsp/README.md)。
+
+### 变更
+
+- HarmonyOS 预览将最低运行版本提高到 arm64 API 26，移除旧版兼容路径。
+- 构建工具链固定为 Rust 1.100.0，最低支持版本仍为 Rust 1.99.0。
+- 桌面验证通过 Cargo 报告的 cdylib 产物定位插件，支持自定义构建目录，并拒绝
+  缺失或不明确的结果。
+- 解析新依赖版本时采用三天发布冷却期，保留现有锁文件选择，并允许审查后的覆盖。
+- 移除 model 和 runtime 未使用的依赖，将 WASM guest 分配器限制到 `wasm32-wasip2`。
+
+### 修复
+
+- DASH 转 HLS 与离线 HLS 规划共享 URI 和属性校验。在生成播放列表或规划下载前
+  拒绝格式错误的输入。
+- 完善宿主与 FFI 边界上的来源替换、取消、中继清理和插件会话关闭流程。
+- 桌面离线下载入队前校验资源路径，限制传输子进程的诊断数据。HarmonyOS 在解析
+  阶段拒绝截断的 WebVTT 片段。
+
+### 依赖
+
+- 升级 Wasmtime 到 50.0.1、ZIP 到 9.5.1、rustix 到 1.1.6、wit-bindgen 到
+  0.63.0，以及 WIT 解析与组件工具到 0.263.0。更新兼容的 Rust 依赖与三个锁文件，
+  保留原有最低 Rust 版本。
+- 可选音频诊断插件升级到 wsola 0.3.0，适配非零采样率和声道数 API，保留音调和
+  播放速率行为。
+- 桌面叠层字体改用 skrifa 0.50.0，Wayland 窗口标题使用 winit 的 crossfont
+  后端，移除不再维护的 ttf-parser，保留文字度量、系统字体回退和覆盖率栅格化。
+  Linux 桌面构建需要 Fontconfig 与 FreeType 开发包。
+- 适配 ZIP 的可失败文件名解码，通过现有包验证和 Android FFmpeg 校验错误返回。
+- 桌面 CI 审计工作区与独立插件锁文件，拒绝存在已知漏洞、不健全或被撤回的依赖版本。
+- 重用本地桌面 FFmpeg 构建前刷新源码选择。在版本、来源 URL 或归档摘要变化时
+  重建，失败时保留原安装。普通原生依赖跟随配置系列内的补丁，可选 OpenSSL
+  构建仍使用 3.5 LTS 系列。
 
 ## 0.9.1 - 2026-10-12
 

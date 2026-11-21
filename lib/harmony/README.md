@@ -2,14 +2,14 @@
 
 The HarmonyOS preview provides native Media Kit AVPlayer playback with shared
 Rust source, sequence, DASH planning, download and lifecycle semantics. The
-candidate version is `0.9.1-harmony.0`, for API 20+ arm64 phones and tablets.
+candidate version is `0.9.1-harmony.0`, for API 26+ arm64 phones and tablets.
 The [artifact workflow](CI.md) builds three HARs, an unsigned example HAP and a
 portable example project with local HAR dependencies. The [testing guide](TESTING.md)
 covers downloading a build, device signing and diagnostic issue reports.
 OHPM publication is deferred; the [registry release process](RELEASING.md) covers
 later account/namespace setup and independent registry-consumer verification.
 
-Development evidence uses official API 20 and API 26 arm64 phone simulators.
+Runtime verification targets the official API 26 arm64 phone simulator.
 Physical phone/tablet acceptance, audible output, decoder identity, HDR,
 telephony/Bluetooth and power remain unverified. These observations do not block
 distribution of the scoped preview. Production signing and registry consumption
@@ -107,14 +107,14 @@ Failed physical cleanup remains reachable and can be retried.
 | HTTP(S) progressive | Exact Range; ignored-Range fallback requires a complete body within 1 MiB |
 | HLS | Unencrypted VOD and rolling live; live numeric rate rejected |
 | DASH playback | Static single Period without explicit Period start; H.264/AAC SegmentBase, SegmentTemplate and SegmentTimeline. Template presentation offsets are preserved; unrepresented SegmentBase offsets, protected/multi-Period and unsupported text profiles are rejected |
-| Dynamic DASH playback | Public activation returns `unsupported`; an internal bounded DASH-to-HLS prototype failed native independent-audio acceptance on API 20/26 |
+| Dynamic DASH playback | Public activation returns `unsupported` after the bounded DASH-to-HLS prototype failed independent-audio validation |
 | DASH preload | Static single Period SegmentBase only; download expansion does not change startup-cache admission |
 | DASH download | Finite static single Period SegmentBase or SegmentTemplate, including finite SegmentTimeline and Time addressing; no SegmentList or live recording |
 | External captions | UTF-8 SRT/WebVTT; sandbox path or bounded HTTP(S) source |
 | Embedded DASH captions | Separate finite unencrypted SegmentBase `wvtt` rendition without edit lists; one fragmented text track, at most 256 KiB and sixteen renditions |
-| Filter/ranges | API 26 only; actual native values reported |
-| Default-position seek | API 26 VOD; live/DVR activation and live-edge routing remain outside the accepted preview profile |
-| HLS fixed video track | API 24+; API 20 uses available bitrate/auto selection |
+| Filter/ranges | Reports native filter readback, loaded ranges and seekable ranges |
+| Default-position seek | Available for VOD with a native seekable access point |
+| HLS fixed video track | Available when AVPlayer exposes selectable video tracks |
 | DRM, remux, casting, plugins | Outside this preview; recognized protected descriptors/manifests rejected before ordinary cache/download |
 | Decoder/HDR | Hardware capability preflight is available; actual AVPlayer decoder identity/enforcement and HDR evidence remain `unknown` |
 
@@ -131,10 +131,9 @@ offline playback does not acquire an INTERNET permission requirement.
 The remote adaptive playback projection selects the preview's MP4/TS AVC/AAC
 profile before native rendition selection. It retains supported video ladders,
 AAC languages and supported text renditions, and records excluded codec
-declarations in bounded diagnostics. I-frame-only trick-play entries are omitted
-from the normal playback ladder because API 20 can otherwise select them as
-ordinary video variants and fail to prepare. Genuine audio-only variants remain
-eligible. Absent or empty codec declarations remain subject to native validation;
+declarations in bounded diagnostics. The projection omits I-frame trick-play
+renditions from the full-media ladder and retains eligible audio-only variants.
+Absent or empty codec declarations remain subject to native validation;
 unrecognized nonempty declarations are excluded by this playback profile. This
 profile does not describe the system's full codec support. Resource references resolve against their original remote
 base before receiving a local capability prefix. Parallel DASH BaseURL
@@ -149,16 +148,8 @@ promise. New codec/container/protocol combinations require acceptance evidence.
 TLS validation remains the platform default; localhost HTTP tests do not prove
 a deployed HTTPS origin's behavior.
 
-| Feature | API 20 | API 24–25 | API 26+ |
-| --- | --- | --- | --- |
-| VOD play/pause/seek/rate and explicit audio/subtitle selection | Available | Available | Available |
-| HLS fixed native video track | Unsupported; bitrate/auto when exposed | Available when catalog permits | Available when catalog permits |
-| Advanced track constraints and native loaded/seekable ranges | Unsupported | Unsupported | Available, native values only |
-| VOD default-position seek | Unsupported | Unsupported | Available |
-| Live numeric seek/rate and resource-loader live-edge seek | Unsupported | Unsupported | Unsupported |
-
-These are implemented API gates, not acceptance on every intervening OS version.
-Native rendering evidence must identify its API, source and artifact. Buffering
+Live numeric seek/rate and resource-loader live-edge seek remain unsupported.
+Native rendering evidence identifies the API, source and artifact. Buffering
 percentage never fills the timeline's loaded ranges. VOD/unknown/live semantics,
 selection requests, native confirmation and observed output remain separate.
 
@@ -181,8 +172,7 @@ playback does not change that instance or claim an immediate effect. Local
 the submitted hints, but exposes no effective-threshold readback or guarantee of
 an exact buffered duration. Buffer callbacks and loaded ranges remain separate
 observations. Independent `minBufferMs`, `maxBufferMs`, `bufferForPlaybackMs` and
-`bufferForPlaybackAfterRebufferMs` remain unsupported; they are not equivalent to
-the native preferences. The native fields predate the API 20 preview floor.
+`bufferForPlaybackAfterRebufferMs` remain unsupported.
 
 `retry.maxAttempts` accepts one to three attempts for future
 controller resource requests; it does not configure native reconnection or
@@ -194,12 +184,13 @@ combined requests do not partially update the transport policy.
 native duration/start preferences of 2000/500, 5000/1000 and 15000/3000 ms.
 These are named hints for the next activation, with no measured performance
 guarantee or independent initial/rebuffer thresholds. `refreshDiagnostics()`
-samples `getPlaybackInfo()` on API 20 and playback statistics on API 23+ through
-the controller's serialized native command queue. It preserves unavailable
-sentinels, reports buffer duration in milliseconds and download rates in bits/s,
-and fences samples by playback epoch. Native download statistics identify their
-loopback, resource-loader or local-file scope; separate upstream counters cover
-the controller lifetime. Statistics do not read back effective buffer waterlines.
+samples `getPlaybackInfo()` and `getPlaybackStatisticMetrics()` through the
+controller's serialized native command queue when the player state allows each
+query. It preserves unavailable sentinels, reports buffer duration in milliseconds
+and download rates in bits/s, and fences samples by playback epoch. Native download
+statistics identify their loopback, resource-loader or local-file scope. Separate
+upstream counters cover the controller lifetime. Statistics do not read back
+effective buffer waterlines.
 
 `queryVideoDecoderCapability({ mimeType, width?, height?, profile?, level? })`
 queries the system hardware capability catalog without creating a decoder.
@@ -240,25 +231,22 @@ At most two consecutive transient refresh failures may reuse a coherent window,
 for less than ten seconds. Source replacement cancels refreshes and joins physical
 HTTP work before releasing the bridge and source lease.
 
-Native validation did not accept this profile: API 20 did not request its separate
-audio playlist; API 26 loaded that playlist once, then stalled at the initial
-audio tail while the video playlist and segment requests continued. A direct
-AVPlayer HTTP comparison reproduced the missing audio refresh without the SDK
-loopback server. This is evidence about the tested independent fMP4 profile,
-not every possible HLS audio format. The internal host-test opt-in is not a public
-playback option. No live DVR/rate contract is enabled. On the tested API 26 runtime, direct native HLS
+On the tested API 26 simulator, AVPlayer loaded the separate audio playlist once,
+then stalled at the initial audio tail while the video playlist and segment
+requests continued. A direct AVPlayer HTTP comparison reproduced the missing
+audio refresh without the SDK loopback server. Live DVR remains unsupported.
+On the tested API 26 runtime, direct native HLS
 default-position seeking reports 5400102 (not in live seek mode), and seekable
 ranges differ from playback-position coordinates; live seeking stays unsupported.
 
-On API 26, `setTrackConstraints()` additionally accepts `maxVideoResolution` and
-`minVideoResolution` as positive integer `{ width, height }` pairs, and
+`setTrackConstraints()` accepts `maxVideoResolution` and `minVideoResolution`
+as positive integer `{ width, height }` pairs, and
 `preferredAudioLanguages` / `preferredSubtitleLanguages` as priority lists of up
 to eight BCP 47 language tags. Empty language lists remove that preference.
 Bitrate and frame-rate constraints retain their existing names. `{}` clears the
 native filter. Inputs are copied before queuing; invalid requests never reach
-the native player. API 20–25 reject the operation before calling a higher API.
-The return value is native filter readback, including zero/unrestricted native
-sentinels. `snapshot().trackConstraints` records requested and accepted values
+the native player. The return value is native filter readback, including native
+sentinels for zero or unrestricted values. `snapshot().trackConstraints` records requested and accepted values
 with a playback epoch; replacement activation clears them. Neither readback nor
 language order proves an actual rendition switch. Actual dimensions, selected
 track language and selection events must be observed for each source. Native
@@ -307,10 +295,6 @@ current epoch. The preceding track remains selected until playback resumes;
 deadline. Choosing the currently selected audio track cancels a pending choice.
 Source replacement and disposal discard it. Queuing a choice does not seek or
 resume playback.
-API 20 SegmentBase audio selection prepares the target language's bounded
-initialization/SIDX data before invoking the native switch. Preparation shares
-the command deadline and source access context; a preparation failure preserves
-the preceding native track.
 
 Every `externalSubtitles` descriptor requires a unique, source-local `id` (1–256
 UTF-8 bytes, without control characters) and a display `label`. Optional
@@ -482,7 +466,7 @@ export VESPER_HARMONY_COMMAND_LINE_TOOLS=/path/to/command-line-tools
 `--offline` controls Cargo resolution. OHPM/Hvigor use bundled tools and local
 HAR overrides. Each fresh retained consumer uses Release optimization and copied
 HARs, without rebuilding Rust/library sources. Native HAR/HAP bytes must match.
-The runtime floor is packed API `60000020`, target `260000026`. Hvigor can warn
+The minimum and target SDK are `26.0.0` (packed API `260000026`). Hvigor can warn
 about the major-zero/prerelease version; the version remains a preview.
 
 Outputs are in `target/harmony-kit/dist`, debug information in
@@ -493,7 +477,7 @@ Build-input fingerprints exclude generated outputs and the non-build
 a separate inventory. Source, configuration, resources, artifacts and media
 remain strict inputs; older candidate fingerprints are never reinterpreted or
 rewritten when this inventory changes.
-`final-acceptance.py` checks that identity around the API 20/26 matrix, real
+`final-acceptance.py` checks that identity around the API 26 matrix, real
 force-stop and no-INTERNET offline restore, Stage/PiP and a 100-cycle batch.
 Reference simulator observations do not satisfy physical performance/long-play
 gates. CI separates Ubuntu Rust/Python contracts and hosted macOS artifact builds;

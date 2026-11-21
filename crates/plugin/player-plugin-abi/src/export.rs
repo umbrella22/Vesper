@@ -333,7 +333,7 @@ struct ExportContext {
     table: RawTable,
 }
 
-type PacketBuffers = HashMap<(VesperSessionId, VesperLeaseId), Box<[u8]>>;
+type PacketBuffers = HashMap<(VesperSessionId, VesperLeaseId), Vec<u8>>;
 
 // SAFETY: `table` is immutable after construction, the interface is `Send +
 // Sync`, and poisoning uses an atomic flag. Raw context pointers only point
@@ -1264,11 +1264,19 @@ unsafe fn invoke_packet(
                 drop(buffers);
                 return poison_for_contract_violation(context);
             }
-            let data = data.into_boxed_slice();
-            let borrowed_data = byte_slice(&data);
-            buffers.insert((session_id, lease_id), data);
+            // Moving a Vec when the map grows leaves its allocation intact.
+            let mut data = data;
+            data.shrink_to_fit();
+            let stored = buffers.entry((session_id, lease_id)).or_insert(data);
             out.metadata = VesperOwnedBytes::from_vec(metadata);
-            out.data = borrowed_data;
+            out.data = if stored.is_empty() {
+                VesperByteSlice::empty()
+            } else {
+                VesperByteSlice {
+                    data: stored.as_ptr(),
+                    len: stored.len() as u64,
+                }
+            };
             out.lease_id = lease_id;
             status::OK
         }

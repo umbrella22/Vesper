@@ -1661,7 +1661,8 @@ pub(crate) fn dash_bridge_error_to_ffi(
             player_dash_hls_bridge::DashHlsError::UnsupportedMp4(_) => {
                 ("dash_mp4_unsupported", "resource")
             }
-            player_dash_hls_bridge::DashHlsError::InvalidHlsInput(_) => {
+            player_dash_hls_bridge::DashHlsError::InvalidHlsInput(_)
+            | player_dash_hls_bridge::DashHlsError::TargetDurationExceeded { .. } => {
                 ("dash_hls_input_invalid", "manifest")
             }
             player_dash_hls_bridge::DashHlsError::Subtitle { .. } => ("dash_error", "unknown"),

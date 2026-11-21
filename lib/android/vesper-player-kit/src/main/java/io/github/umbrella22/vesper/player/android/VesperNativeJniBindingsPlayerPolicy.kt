@@ -211,7 +211,7 @@ internal fun exoPlaybackStateOrdinal(playbackState: Int): Int =
         else -> 0
     }
 
-internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
+internal fun buildMediaItem(source: VesperPlayerSource, rtspPlaylistUri: String? = null): MediaItem {
     val builder = MediaItem.Builder()
         .setUri(source.uri)
 
@@ -234,15 +234,14 @@ internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
                 "protocol" to "rtmp",
             ),
         )
-        VesperPlayerSourceProtocol.Rtsp -> throw VesperPlayerUnsupportedOperation(
-            "RTSP playback requires the optional media3-exoplayer-rtsp extension. " +
-                "Add it to your app's dependencies; Vesper does not bundle it by default.",
-            mapOf(
-                "reason" to "rtspExtensionRequired",
-                "route" to "direct",
-                "protocol" to "rtsp",
-            ),
-        )
+        VesperPlayerSourceProtocol.Rtsp -> {
+            if (rtspPlaylistUri == null) {
+                throw rtspBridgeFailure("rtsp_bridge_not_bundled", "RTSP playback requires the optional Vesper RTSP bridge.")
+            }
+            builder.setUri(rtspPlaylistUri)
+                .setMimeType(MimeTypes.APPLICATION_M3U8)
+                .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(3_000L).build())
+        }
         else -> Unit
     }
 

@@ -14,6 +14,7 @@ use crate::external_process::run_interruptible_capture_with_timeout;
 mod kit;
 
 const TARGET: &str = "aarch64-unknown-linux-ohos";
+const MINIMUM_RUNTIME_API: u32 = 26;
 const SHARED_PACKAGES: &[&str] = &[
     "player-model",
     "player-runtime",
@@ -27,7 +28,7 @@ const MAX_CARGO_BYTES: usize = 8 * 1024 * 1024;
 const UNVERIFIED: &[&str] = &[
     "Release native linking and dynamic dependencies",
     "Node-API, HAR packaging and independent consumer loading",
-    "API 20 and API 26 physical-device playback and resource-loader reuse",
+    "API 26 physical-device playback and resource-loader reuse",
 ];
 
 #[derive(Debug, Args)]
@@ -308,7 +309,7 @@ fn doctor(root: &Path, tools: Option<&Path>) -> CliResult<()> {
         "schemaVersion": 1,
         "scope": "harmony-host-prerequisites",
         "target": TARGET,
-        "plannedMinimumRuntimeApi": 20,
+        "plannedMinimumRuntimeApi": MINIMUM_RUNTIME_API,
         "status": if passed { "passed" } else { "blocked" },
         "checks": checks,
         "unverified": UNVERIFIED,
@@ -336,13 +337,14 @@ fn read_sdk_identity(native: &Path) -> Result<String, String> {
     }
     let identity: Value =
         serde_json::from_str(&content).map_err(|error| format!("invalid SDK identity: {error}"))?;
-    if identity["apiVersion"] != "26"
+    let expected_api = MINIMUM_RUNTIME_API.to_string();
+    if identity["apiVersion"].as_str() != Some(expected_api.as_str())
         || identity["platformVersion"] != "26.0.0"
         || identity["releaseType"] != "Release"
         || identity["version"].as_str().is_none_or(str::is_empty)
     {
         return Err(format!(
-            "expected HarmonyOS SDK 26.0.0 Release (API 26): {identity}"
+            "expected HarmonyOS SDK 26.0.0 Release (API {MINIMUM_RUNTIME_API}): {identity}"
         ));
     }
     Ok(format!("{}\n{identity}", path.display()))

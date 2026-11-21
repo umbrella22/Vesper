@@ -44,7 +44,7 @@ export async function prepareDashPlayback(provider: ResourceProvider, uri: strin
     const kind = bridge.invoke<ManifestKind>(JSON.stringify({ op: 'classify', mpd: decode(snapshot.bytes), manifestUrl: snapshot.info.finalUrl }));
     if (!kind.dynamic) { bridge.close(); return { snapshot: snapshot }; }
     // The internal prototype is exercised by contract tests. The public route
-    // stays closed: API 20 omitted separate audio and API 26 stopped refreshing it.
+    // stays closed because AVPlayer stopped refreshing separate audio in testing.
     if (!allowUnverifiedLive) { throw new VesperPlayerError('unsupported', 'Dynamic DASH has no verified native audio/video route on the supported Harmony runtimes'); }
     live = new DashLiveResourceProvider(provider, uri, bridge);
     live.initialize(snapshot); scope.check();

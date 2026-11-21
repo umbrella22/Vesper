@@ -410,11 +410,6 @@ pub unsafe extern "C" fn player_ffi_initializer_initialize(
 
         match initializer.initialize() {
             Ok(bootstrap) => {
-                let has_initial_frame = bootstrap.initial_frame.is_some();
-                let initial_frame = bootstrap
-                    .initial_frame
-                    .map(PlayerFfiVideoFrame::from)
-                    .unwrap_or_default();
                 let Some(player_handle) = into_player_handle(bootstrap.player) else {
                     write_error(
                         out_error,
@@ -425,6 +420,12 @@ pub unsafe extern "C" fn player_ffi_initializer_initialize(
                     );
                     return PlayerFfiCallStatus::Error;
                 };
+                // Keep the frame under Rust ownership until handle registration succeeds.
+                let has_initial_frame = bootstrap.initial_frame.is_some();
+                let initial_frame = bootstrap
+                    .initial_frame
+                    .map(PlayerFfiVideoFrame::from)
+                    .unwrap_or_default();
                 // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_player, player_handle);

@@ -130,10 +130,10 @@ final class VesperPlayerSource {
     );
   }
 
-  /// RTSP / RTSPS live stream.
+  /// RTSP live stream through the optional Android or iOS host kit bridge.
   ///
-  /// On iOS this protocol is not supported by AVPlayer and the host kit will
-  /// surface a capability error.
+  /// Builds without the bridge report `rtsp_bridge_not_bundled`. The current
+  /// bridge accepts `rtsp://` URLs and does not use HTTP request headers.
   factory VesperPlayerSource.rtsp({
     required String uri,
     String? label,

@@ -32,6 +32,10 @@ OpenSSL overlays resolve the latest patch in the **OpenSSL 3.5 LTS** series.
 Release-index checks compare upstream and cached patches; missing versioned
 archives are downloaded into the shared cache. An unavailable index falls back
 to the highest matching cached patch. Exact-version overrides skip discovery.
+Desktop source builds also compare the resolved version, source URL, and archive
+digest with `vesper-ffmpeg-source.json` before reusing an installation. Existing
+files alone do not bypass newer patch discovery. This receipt records the
+actual build input and does not narrow the configured source series.
 
 The worker carries a known digest for **libxml2 2.15.4** from
 [the official GNOME source archive](https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz),
@@ -125,6 +129,17 @@ Light font, copyright 2011 Canonical Ltd., under the Ubuntu Font Licence 1.0.
 The font and its full licence are in `examples/basic-player/assets/fonts/`.
 Desktop distributions that embed this font must retain `UFL.txt`. The font is
 separate from Vesper's Apache-2.0 source and from optional FFmpeg runtimes.
+
+The desktop overlay reads font metadata and outlines with
+[skrifa](https://github.com/googlefonts/fontations) 0.50.0 (MIT OR Apache-2.0,
+with the `std` feature) and rasterizes outlines with `ab_glyph_rasterizer`
+0.1.10 (Apache-2.0). These Rust dependencies are statically linked. Their
+upstream license texts are included in the corresponding Cargo source archives.
+Wayland window titles use winit's `wayland-csd-adwaita-crossfont` feature and
+crossfont 0.8.1 (Apache-2.0), which uses system Fontconfig and FreeType libraries
+on Linux. Distributions that bundle those native libraries must also retain
+their own license notices. Installed fallback fonts are read in place and are
+not copied into Vesper artifacts.
 
 When a release artifact bundles a third-party runtime, add an entry here with:
 

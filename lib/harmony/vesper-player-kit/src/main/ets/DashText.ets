@@ -13,10 +13,9 @@ interface Adaptation { kind: string; language?: string; representations: Represe
 interface Period { adaptationSets: Adaptation[]; }
 interface Manifest { type: string; periods: Period[]; }
 export interface DashTextTrack { cues: SubtitleCue[]; language: string; }
-export interface DashAudioHeader { uri: string; language: string; bytes: number; }
 
 /** Reads only bounded text renditions; the original MPD and AVPlayer route are preserved. */
-export async function loadDashText(provider: ResourceProvider, uri: string, scope: OperationScope, audioHeaders: DashAudioHeader[] = [], initial?: ResourceSnapshot): Promise<DashTextTrack[]> {
+export async function loadDashText(provider: ResourceProvider, uri: string, scope: OperationScope, initial?: ResourceSnapshot): Promise<DashTextTrack[]> {
   const token = new VesperCancellationToken(); const remove = scope.onFailure(() => { token.cancel(); });
   const bridge = new NativeSession('{"kind":"dash"}');
   let manifestUri = uri;
@@ -45,17 +44,6 @@ export async function loadDashText(provider: ResourceProvider, uri: string, scop
     if (manifest.type !== 'static' || manifest.periods.length !== 1) { throw new VesperPlayerError('unsupported', 'DASH playback profile requires one static Period'); }
     const tracks: DashTextTrack[] = [];
     for (const adaptation of manifest.periods[0].adaptationSets) {
-      if (adaptation.kind === 'audio') {
-        for (const representation of adaptation.representations) {
-          const base = representation.segmentBase;
-          if (audioHeaders.length < 16 && base !== undefined && base !== null && ['mp4a.40.2', 'mp4a.40.5', 'mp4a.40.29'].includes(representation.codecs)) {
-            const bytes = Math.max(base.initialization.end, base.indexRange.end) + 1;
-            if (Number.isSafeInteger(bytes) && bytes > 0 && bytes <= 65536) {
-              audioHeaders.push({ uri: representation.baseURL, language: adaptation.language ?? '', bytes: bytes });
-            }
-          }
-        }
-      }
       if (adaptation.kind !== 'subtitle') { continue; }
       for (const representation of adaptation.representations) {
         if (tracks.length >= 16 || representation.codecs !== 'wvtt' || representation.segmentBase === undefined || representation.segmentBase === null) {

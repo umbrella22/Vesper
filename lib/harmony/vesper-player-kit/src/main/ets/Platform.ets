@@ -10,15 +10,10 @@ export interface VesperHarmonyCapabilities {
   decoderGuarantee: string; hdrEvidence: string; audioOutputEvidence: string;
 }
 
-/** Higher API calls stay behind runtime checks and are never executed on API 20. */
 export class Platform {
   static capabilities(): VesperHarmonyCapabilities {
-    const api = deviceInfo.sdkApiVersion;
-    return { runtimeApi: api, nativePlayer: true, advancedTrackConstraints: api >= 26, timeRanges: api >= 26,
+    return { runtimeApi: deviceInfo.sdkApiVersion, nativePlayer: true, advancedTrackConstraints: true, timeRanges: true,
       decoderGuarantee: 'unknown', hdrEvidence: 'unknown', audioOutputEvidence: 'unknown' };
-  }
-  static advanced(): void {
-    if (deviceInfo.sdkApiVersion < 26) { throw new VesperPlayerError('unsupported', 'This operation requires HarmonyOS API 26'); }
   }
   static ranges(values: media.Range[]): VesperTimeRange[] {
     if (values.length > 256) { throw new VesperPlayerError('capacity', 'Native time-range count exceeds 256'); }

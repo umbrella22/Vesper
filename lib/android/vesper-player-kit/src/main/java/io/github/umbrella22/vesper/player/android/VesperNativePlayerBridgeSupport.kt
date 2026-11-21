@@ -393,6 +393,7 @@ internal interface VesperNativeBindings {
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge? = null,
     ): NativeBridgeStartup
     fun openNativeFramePipeline(
         source: VesperPlayerSource,
@@ -526,6 +527,7 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge?,
     ): NativeBridgeStartup {
         throw UnsupportedOperationException(VesperNativeLibrary.failureMessage())
     }

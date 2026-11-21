@@ -1,6 +1,6 @@
 {
   "app": {
-    "products": [{ "name": "default", "compatibleSdkVersion": "6.0.0(20)", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS" }],
+    "products": [{ "name": "default", "compatibleSdkVersion": "26.0.0", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS" }],
     "buildModeSet": [{ "name": "release" }]
   },
   "modules": [

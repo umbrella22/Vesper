@@ -3140,6 +3140,18 @@
     },
     {
       "kind": "function",
+      "return_type": "char *",
+      "name": "vesper_rtsp_command",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "request_json"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
       "return_type": "bool",
       "name": "vesper_dash_bridge_execute_json",
       "parameters": [
@@ -6424,6 +6436,18 @@
     },
     {
       "kind": "function",
+      "return_type": "char *",
+      "name": "player_ffi_ios_rtsp_command",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "request_json"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
       "return_type": "PlayerFfiCallStatus",
       "name": "player_ffi_dash_bridge_execute_json",
       "parameters": [
@@ -7469,6 +7493,17 @@
       ],
       "ownership": [],
       "body_fragment": "fragments/wrappers/vesper_ios_native_frame_pipeline_close.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_rtsp_command",
+      "ffi_symbols": [
+        "player_ffi_ios_rtsp_command"
+      ],
+      "ownership": [
+        "Returns Rust-owned JSON to be released with vesper_dash_bridge_string_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_rtsp_command.c.inc"
     },
     {
       "kind": "wrapper",

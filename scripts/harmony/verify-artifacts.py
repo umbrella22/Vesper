@@ -56,8 +56,10 @@ def main():
             if len(set(names)) != len(names) or any(Path(name).is_absolute() or '..' in Path(name).parts for name in names):
                 raise ValueError('Invalid HAP paths')
             module = json.loads(archive.read('module.json'))
-            if module['app']['minAPIVersion'] != 60000020 or module['app']['buildMode'] != 'release' or module['app']['debug']:
-                raise ValueError('Consumer is not Release with the API 20 floor')
+            app = module['app']
+            if (app['minAPIVersion'] != build.PACKED_MIN_API_VERSION
+                    or app['buildMode'] != 'release' or app['debug'] is not False):
+                raise ValueError(f'Consumer is not Release with the API {build.MIN_API_VERSION} floor')
             libraries = {Path(name).name: hashlib.sha256(archive.read(name)).hexdigest() for name in names if name.endswith('.so')}
             if libraries != native or any('/arm64-v8a/' not in name for name in names if name.endswith('.so')):
                 raise ValueError('Consumer native bytes differ from core HAR')

@@ -3,16 +3,6 @@
 version = 4
 
 [[package]]
-name = "ab_glyph"
-version = "0.2.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01c0457472c38ea5bd1c3b5ada5e368271cb550be7a4ca4a0b4634e9913f6cc2"
-dependencies = [
- "ab_glyph_rasterizer",
- "owned_ttf_parser",
-]
-
-[[package]]
 name = "ab_glyph_rasterizer"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,15 +260,21 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "basic-player"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
- "ab_glyph",
+ "ab_glyph_rasterizer",
  "anyhow",
  "player-backend-ffmpeg",
  "player-host-desktop",
@@ -290,6 +286,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "skrifa",
  "tracing",
  "tracing-subscriber",
  "vesper-player-plugin",
@@ -624,6 +621,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-text"
+version = "20.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d2790b5c08465d49f8dc05c8bcae9fea467855947db39b0f8145c091aaced5"
+dependencies = [
+ "core-foundation",
+ "core-graphics",
+ "foreign-types",
+ "libc",
+]
+
+[[package]]
 name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -872,6 +881,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "crossfont"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a650099c323679b4d6fb6858c2c512660ff5118f6b0ffb1bfc6cadcd54002b14"
+dependencies = [
+ "core-foundation",
+ "core-foundation-sys",
+ "core-graphics",
+ "core-text",
+ "dwrote",
+ "foreign-types",
+ "freetype-rs",
+ "libc",
+ "log",
+ "objc2 0.5.3",
+ "objc2-foundation 0.2.2",
+ "once_cell",
+ "pkg-config",
+ "winapi",
+ "yeslogic-fontconfig-sys",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,6 +926,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "cstr"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68523903c8ae5aacfa32a0d9ae60cadeb764e1da14ee0d26b1f3089f13a54636"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
@@ -1051,6 +1093,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dwrote"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1b35532432acc8b19ceed096e35dfa088d3ea037fe4f3c085f1f97f33b4d02"
+dependencies = [
+ "lazy_static",
+ "libc",
+ "serde",
+ "serde_derive",
+ "winapi",
+ "wio",
+]
+
+[[package]]
 name = "ed25519"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1197,6 +1253,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "font-types"
+version = "0.12.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "foreign-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1230,6 +1295,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "freetype-rs"
+version = "0.36.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5442dee36ca09604133580dc0553780e867936bb3cbef3275859e889026d2b17"
+dependencies = [
+ "bitflags 2.13.2",
+ "freetype-sys",
+ "libc",
+]
+
+[[package]]
+name = "freetype-sys"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e7edc5b9669349acfda99533e9e0bcf26a51862ab43b08ee7745c55d28eb134"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2448,15 +2535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "owned_ttf_parser"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
-dependencies = [
- "ttf-parser",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2525,7 +2603,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-audio-cpal"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2534,7 +2612,7 @@ dependencies = [
 
 [[package]]
 name = "player-backend-ffmpeg"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
@@ -2547,8 +2625,9 @@ dependencies = [
 
 [[package]]
 name = "player-dash-hls-bridge"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
+ "player-hls-playlist",
  "player-model",
  "quick-xml 0.42.0",
  "serde",
@@ -2559,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-d3d11"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
  "windows",
@@ -2567,14 +2646,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-fixture"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-decoder-mediacodec"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "tracing",
  "vesper-player-plugin",
@@ -2582,14 +2661,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-videotoolbox"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-download"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-dash-hls-bridge",
  "player-model",
@@ -2600,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-backend-ffmpeg",
  "player-ffi-common",
@@ -2614,24 +2693,25 @@ dependencies = [
 
 [[package]]
 name = "player-ffi-common"
-version = "0.9.1"
+version = "0.10.0"
 
 [[package]]
 name = "player-ffi-harmony"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-platform-harmony",
 ]
 
 [[package]]
 name = "player-ffi-ios"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-dash-hls-bridge",
  "player-ffi-common",
  "player-model",
  "player-platform-ios",
  "player-platform-mobile",
+ "player-rtsp-hls-bridge",
  "player-runtime",
  "serde",
  "serde_json",
@@ -2643,14 +2723,18 @@ dependencies = [
 
 [[package]]
 name = "player-frame-processor-diagnostic"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
+name = "player-hls-playlist"
+version = "0.10.0"
+
+[[package]]
 name = "player-host-desktop"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "player-model",
@@ -2665,7 +2749,7 @@ dependencies = [
 
 [[package]]
 name = "player-ios-bridge-shim-generator"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "vesper-player-cli",
@@ -2673,12 +2757,13 @@ dependencies = [
 
 [[package]]
 name = "player-jni-android"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "jni",
  "player-model",
  "player-platform-android",
  "player-platform-mobile",
+ "player-rtsp-hls-bridge",
  "player-runtime",
  "serde_json",
  "vesper-player-plugin",
@@ -2687,7 +2772,7 @@ dependencies = [
 
 [[package]]
 name = "player-model"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2696,14 +2781,14 @@ dependencies = [
 
 [[package]]
 name = "player-performance-diagnostics"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-platform-android"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2718,11 +2803,11 @@ dependencies = [
 
 [[package]]
 name = "player-platform-apple"
-version = "0.9.1"
+version = "0.10.0"
 
 [[package]]
 name = "player-platform-desktop"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "player-audio-cpal",
@@ -2738,12 +2823,13 @@ dependencies = [
 
 [[package]]
 name = "player-platform-harmony"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-dash-hls-bridge",
  "player-download",
  "player-model",
  "player-platform-mobile",
+ "player-rtsp-hls-bridge",
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
@@ -2752,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-ios"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2764,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-linux"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-model",
  "player-platform-desktop",
@@ -2773,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-macos"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2789,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-mobile"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-model",
  "player-runtime",
@@ -2801,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-native-frame"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-runtime",
  "serde",
@@ -2810,7 +2896,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-windows"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2824,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "player-playlist"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -2833,14 +2919,14 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-fixture"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-preload"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -2849,7 +2935,7 @@ dependencies = [
 
 [[package]]
 name = "player-relay-ffmpeg-android"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "ffmpeg-next",
  "jni",
@@ -2861,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "player-remux-ffmpeg"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "ffmpeg-next",
  "tempfile",
@@ -2871,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "player-render-wgpu"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "wgpu",
@@ -2879,8 +2965,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-rtsp-hls-bridge"
+version = "0.10.0"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "hex",
+ "md-5",
+ "percent-encoding",
+ "player-hls-playlist",
+ "serde_json",
+ "sha2 0.11.1",
+ "url",
+]
+
+[[package]]
 name = "player-runtime"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -2893,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -2902,14 +3003,14 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer-diagnostic"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-source-normalizer-ffmpeg"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "ffmpeg-next",
  "player-source-normalizer",
@@ -3107,6 +3208,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "read-fonts"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a39d2f8f681030a7bcbbcf3e8568775ac2393afd51401a2e2133ee89e3953897"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "font-types",
+ "once_cell",
+ "smallvec",
+ "yoke",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3278,9 +3393,8 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6277f0217056f77f1d8f49f2950ac6c278c0d607c45f5ee99328d792ede24ec"
 dependencies = [
- "ab_glyph",
+ "crossfont",
  "log",
- "memmap2",
  "smithay-client-toolkit",
  "tiny-skia",
 ]
@@ -3442,6 +3556,19 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "skrifa"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e85ba678a6023a063d0a78c8770f1c166674ef46af13523d05eff67430f79dfe"
+dependencies = [
+ "bytemuck",
+ "once_cell",
+ "read-fonts",
+ "smallvec",
+ "yoke",
+]
 
 [[package]]
 name = "slab"
@@ -3865,12 +3992,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ttf-parser"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
 name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3979,10 +4100,10 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-player-cli"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.23.1",
  "clap",
  "ed25519-dalek",
  "flate2",
@@ -4023,7 +4144,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-platform-process"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "nix",
  "windows-sys 0.61.2",
@@ -4031,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hex",
  "semver",
@@ -4047,11 +4168,11 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-abi"
-version = "0.9.1"
+version = "0.10.0"
 
 [[package]]
 name = "vesper-player-plugin-loader"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hex",
  "libloading 0.9.0",
@@ -4075,7 +4196,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-macros"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4084,7 +4205,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-package"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -4106,7 +4227,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-wasm"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "dlmalloc",
  "wit-bindgen 0.63.0",
@@ -4114,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-wasm-host"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -4841,6 +4962,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4848,6 +4985,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
@@ -5109,6 +5252,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "wio"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d129932f4644ac2396cb456385cbf9e63b5b30c6e8dc4820bdca4eb082037a5"
+dependencies = [
+ "winapi",
 ]
 
 [[package]]
@@ -5385,6 +5537,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
 dependencies = [
  "lzma-sys",
+]
+
+[[package]]
+name = "yeslogic-fontconfig-sys"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffb6b23999a8b1a997bf47c7bb4d19ad4029c3327bb3386ebe0a5ff584b33c7a"
+dependencies = [
+ "cstr",
+ "dlib",
+ "once_cell",
+ "pkg-config",
 ]
 
 [[package]]

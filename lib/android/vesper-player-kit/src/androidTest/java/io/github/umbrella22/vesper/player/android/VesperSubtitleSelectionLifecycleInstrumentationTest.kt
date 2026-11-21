@@ -235,6 +235,7 @@ private class DeviceDeferredSubtitleBindings(
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge?,
     ): NativeBridgeStartup {
         initializedSource = source
         return NativeBridgeStartup()

@@ -1,6 +1,6 @@
 # HarmonyOS preview testing
 
-Preview bundles target API 20+ arm64 phones and tablets. Playback uses Media Kit
+Preview bundles target API 26+ arm64 phones and tablets. Playback uses Media Kit
 AVPlayer and a native Surface. The build job checks Rust/host contracts, three
 Release HARs and four HAR-only consumers. Each bundle records its own source
 identity; runtime results require a separate device or simulator observation.
@@ -28,8 +28,7 @@ Command Line Tools/SDK 26. Configure an application bundle identifier and a
 development signing profile authorized for that device, then build and run the
 entry module. Account/device registration and signing follow DevEco's current
 signing interface. A downloaded unsigned HAP is not directly installable on an
-ordinary physical device. The compiled application's runtime floor remains
-API 20; SDK 26 is the build-time requirement.
+ordinary physical device. The compiled application requires API 26 or later.
 
 On a development simulator that accepts unsigned HAPs, select its exact target:
 
@@ -105,7 +104,7 @@ and production signing as unverified. Earlier runtime receipts apply only to
 their recorded source/artifact identities.
 
 Live DVR and dynamic DASH remain gated. Separate-audio HLS has profile-specific
-limitations on tested API 20/26 simulators. API 26 native static DASH alternate
+limitations on the tested API 26 simulator. API 26 native static DASH alternate
 audio is confirmed during fresh playback in the controlled fixture; its short
 seek/rate phase remains unconfirmed. These observations do not identify whether
 commercial-device behavior is affected or establish a vendor/Beta repair.

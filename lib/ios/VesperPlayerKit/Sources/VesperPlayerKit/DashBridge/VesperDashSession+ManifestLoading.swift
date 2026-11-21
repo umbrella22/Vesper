@@ -48,22 +48,51 @@ extension VesperDashSession {
             return try await manifestLoadTask.value
         }
 
-        let task = Task { try await self.fetchManifestFromNetwork() }
-        manifestLoadTask = task
-        let parsed: VesperDashManifest
-        do {
-            parsed = try await task.value
-            manifestLoadTask = nil
-        } catch {
-            manifestLoadTask = nil
-            throw error
+        let task = Task {
+            let parsed = try await self.fetchManifestFromNetwork()
+            try self.installManifest(parsed)
+            return parsed
         }
+        manifestLoadTask = task
+        defer { manifestLoadTask = nil }
+        return try await task.value
+    }
+
+    private func installManifest(_ parsed: VesperDashManifest) throws {
+        let validatedSegments = try validatePublishedLiveRenditions(in: parsed)
         if manifest != nil, parsed.type == .dynamic {
             clearManifestDerivedCaches()
+            templateSegmentsByRenditionId = validatedSegments
         }
         manifest = parsed
         manifestLoadedAt = Date()
-        return parsed
+    }
+
+    private func validatePublishedLiveRenditions(
+        in candidate: VesperDashManifest
+    ) throws -> [String: [VesperDashTemplateSegment]] {
+        guard !liveTargetDurationByRenditionId.isEmpty else { return [:] }
+        guard candidate.type == .dynamic else {
+            throw VesperDashBridgeError.unsupportedManifest("DASH manifest type changed after live publication")
+        }
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: candidate,
+            variantPolicy: .all
+        )
+        var validated: [String: [VesperDashTemplateSegment]] = [:]
+        for playable in selected.video + selected.audio + selected.subtitles {
+            guard let target = liveTargetDurationByRenditionId[playable.renditionId] else { continue }
+            guard let template = playable.representation.segmentTemplate else {
+                throw VesperDashBridgeError.unsupportedManifest("Live DASH rendition stopped using SegmentTemplate")
+            }
+            validated[playable.renditionId] = try VesperDashHlsBuilder.templateSegments(
+                manifestType: candidate.type,
+                durationMs: candidate.durationMs,
+                segmentTemplate: template,
+                targetDuration: target
+            )
+        }
+        return validated
     }
 
     func fetchManifestFromNetwork() async throws -> VesperDashManifest {
@@ -103,7 +132,17 @@ extension VesperDashSession {
         if let cached = playableByRenditionId[renditionId] {
             return cached
         }
-        let manifest = try await loadManifest()
+        let loaded = try await loadManifest()
+        return try playableRepresentation(renditionId: renditionId, manifest: manifest ?? loaded)
+    }
+
+    func playableRepresentation(
+        renditionId: String,
+        manifest: VesperDashManifest
+    ) throws -> VesperDashPlayableRepresentation {
+        if let cached = playableByRenditionId[renditionId] {
+            return cached
+        }
         let selected = try selectedPlayableRepresentations(
             manifest: manifest,
             variantPolicy: .all

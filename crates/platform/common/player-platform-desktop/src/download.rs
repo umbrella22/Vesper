@@ -1,10 +1,11 @@
 //! Desktop SDK-managed offline download support shared by macOS, Windows, and Linux hosts.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,9 +13,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::Result;
 use player_download::{DownloadPlanner, DownloadPlanningClient};
-use player_model::{MediaSource, MediaSourceProtocol};
+use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
     OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress, StreamKind,
@@ -33,28 +34,226 @@ const DOWNLOAD_ROOT_DIR: &str = "vesper-desktop-downloads";
 const CURL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 static UNIQUE_SUFFIX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+const PLANNING_TIMEOUT: Duration = Duration::from_secs(60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_HEADER_BYTES: u64 = 256 * 1024;
+const MAX_CURL_DIAGNOSTIC_BYTES: u64 = 8 * 1024;
+static NEVER_CANCEL_PLANNING: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy)]
+struct DesktopDownloadPlanningSession<'a> {
+    cancel: &'a AtomicBool,
+    deadline: Instant,
+    source_is_remote: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DesktopDownloadPlanningClient;
 
 impl DownloadPlanningClient for DesktopDownloadPlanningClient {
-    fn fetch_text(&self, uri: &str) -> player_runtime::PlayerResult<String> {
-        fetch_remote_text(uri).map_err(|error| source_error(error.to_string()))
+    fn fetch_text(&self, uri: &str) -> Result<String, PlayerError> {
+        DesktopDownloadPlanningSession::new(&NEVER_CANCEL_PLANNING, false).fetch_text(uri)
     }
 
-    fn content_length(&self, uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
-        if let Some(local_path) = local_path_from_uri(uri) {
-            return fs::metadata(&local_path)
-                .map(|metadata| Some(metadata.len()))
-                .map_err(|error| {
-                    source_error(format!(
-                        "failed to inspect local resource `{}`: {error}",
-                        local_path.display()
-                    ))
-                });
-        }
-        probe_remote_content_length(uri)
+    fn content_length(&self, uri: &str) -> Result<Option<u64>, PlayerError> {
+        DesktopDownloadPlanningSession::new(&NEVER_CANCEL_PLANNING, false).content_length(uri)
     }
 }
+
+impl<'a> DesktopDownloadPlanningSession<'a> {
+    fn new(cancel: &'a AtomicBool, source_is_remote: bool) -> Self {
+        Self {
+            cancel,
+            deadline: Instant::now() + PLANNING_TIMEOUT,
+            source_is_remote,
+        }
+    }
+
+    fn validate_member(&self, uri: &str) -> Result<(), PlayerError> {
+        self.check()?;
+        validate_download_member(self.source_is_remote, uri)
+    }
+
+    fn check(&self) -> Result<(), PlayerError> {
+        if self.cancel.load(Ordering::Acquire) {
+            return Err(playback_error("desktop download planning cancelled"));
+        }
+        if Instant::now() >= self.deadline {
+            return Err(planning_timeout());
+        }
+        Ok(())
+    }
+
+    fn curl(&self, uri: &str, args: &[&str], limit: u64) -> Result<Option<String>, PlayerError> {
+        self.check()?;
+        let deadline = self.deadline.min(Instant::now() + REQUEST_TIMEOUT);
+        let mut child = http_curl()
+            .arg("--max-time")
+            .arg(REQUEST_TIMEOUT.as_secs().to_string())
+            .args(args)
+            .args(["--", uri])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| network_error(format!("failed to spawn planning curl: {error}")))?;
+        let Some(stdout) = child.stdout.take() else {
+            stop_curl(&mut child);
+            return Err(network_error("planning curl did not open an output pipe"));
+        };
+        thread::scope(|scope| {
+            // Drain concurrently so curl does not stall on a full pipe.
+            let reader = scope.spawn(move || read_planning_text(stdout, limit));
+            let status = wait_for_child(&mut child, self.cancel, Some(deadline));
+            let text = reader
+                .join()
+                .map_err(|_| network_error("planning curl reader failed"))?;
+            let status = status?;
+            self.check()?;
+            if status.code() == Some(28) {
+                return Err(planning_timeout());
+            }
+            let text = text?;
+            Ok(status.success().then_some(text))
+        })
+    }
+
+    fn probe_length(&self, uri: &str) -> Result<Option<u64>, PlayerError> {
+        let status_argument = "\n%{http_code}";
+        let head = self.curl(
+            uri,
+            &["--head", "--write-out", status_argument],
+            MAX_HEADER_BYTES,
+        )?;
+        if let Some(size) = head
+            .as_deref()
+            .and_then(curl_final_response_headers)
+            .filter(|(code, _)| (200..=299).contains(code))
+            .and_then(|(_, headers)| last_header_value(headers, "content-length"))
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            return Ok(Some(size));
+        }
+        let null_output = if cfg!(target_os = "windows") {
+            "NUL"
+        } else {
+            "/dev/null"
+        };
+        let range = self.curl(
+            uri,
+            &[
+                "--range",
+                "0-0",
+                "--max-filesize",
+                "1",
+                "--dump-header",
+                "-",
+                "--output",
+                null_output,
+                "--write-out",
+                status_argument,
+            ],
+            MAX_HEADER_BYTES,
+        )?;
+        Ok(range
+            .as_deref()
+            .and_then(curl_final_response_headers)
+            .filter(|(code, _)| *code == 206)
+            .and_then(|(_, headers)| last_header_value(headers, "content-range"))
+            .and_then(|value| value.rsplit_once('/'))
+            .and_then(|(_, total)| total.trim().parse::<u64>().ok()))
+    }
+}
+
+impl DownloadPlanningClient for DesktopDownloadPlanningSession<'_> {
+    fn fetch_text(&self, uri: &str) -> Result<String, PlayerError> {
+        self.validate_member(uri)?;
+        if let Some(local_path) = local_path_from_uri(uri) {
+            if !local_path.is_file() {
+                return Err(source_error(
+                    "download manifest must be a regular local file",
+                ));
+            }
+            let file = fs::File::open(local_path).map_err(|error| {
+                source_error(format!("failed to open download manifest: {error}"))
+            })?;
+            return read_planning_text(file, MAX_MANIFEST_BYTES);
+        }
+        self.curl(uri, &["--fail"], MAX_MANIFEST_BYTES)?
+            .ok_or_else(|| network_error("failed to fetch remote download manifest"))
+    }
+
+    fn content_length(&self, uri: &str) -> Result<Option<u64>, PlayerError> {
+        self.validate_member(uri)?;
+        if let Some(local_path) = local_path_from_uri(uri) {
+            let metadata = fs::metadata(local_path).map_err(|error| {
+                source_error(format!("failed to inspect local resource: {error}"))
+            })?;
+            if !metadata.is_file() {
+                return Err(source_error(
+                    "download resource must be a regular local file",
+                ));
+            }
+            return Ok(Some(metadata.len()));
+        }
+        self.probe_length(uri)
+    }
+}
+
+fn read_planning_text(input: impl Read, limit: u64) -> Result<String, PlayerError> {
+    let mut bytes = Vec::new();
+    input
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            source_error(format!(
+                "failed to read download planning response: {error}"
+            ))
+        })?;
+    if bytes.len() as u64 > limit {
+        return Err(source_error(
+            "download planning response exceeds the byte limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| source_error("download planning response must be UTF-8"))
+}
+
+fn curl_final_response_headers(response: &str) -> Option<(u16, &str)> {
+    let (headers, status) = response.rsplit_once('\n')?;
+    let status = status.trim().parse().ok()?;
+    // Curl can emit multiple response blocks before the final status code.
+    let final_response = headers
+        .rsplit_once("\nHTTP/")
+        .map(|(_, block)| block)
+        .or_else(|| headers.strip_prefix("HTTP/"))?;
+    let (_, fields) = final_response.split_once('\n')?;
+    let mut end = 0;
+    for line in fields.split_inclusive('\n') {
+        if matches!(line, "\r\n" | "\n") {
+            return Some((status, &fields[..end]));
+        }
+        end += line.len();
+    }
+    None
+}
+
+fn http_curl() -> Command {
+    let mut command = Command::new(CURL_BIN);
+    command.args([
+        "-q",
+        "-L",
+        "--silent",
+        "--show-error",
+        "--globoff",
+        "--proto",
+        "=http,https",
+        "--proto-redir",
+        "=http,https",
+    ]);
+    command
+}
+
 #[derive(Debug, Clone)]
 pub struct PreparedDownloadTask {
     pub source: DownloadSource,
@@ -263,14 +462,38 @@ impl DesktopDownloadController {
         label: String,
         prepared: PreparedDownloadTask,
     ) -> player_runtime::PlayerResult<DownloadTaskId> {
-        self.asset_labels.insert(asset_id.clone(), label);
-        self.manager.create_task(
-            asset_id,
+        let index = &prepared.asset_index;
+        let paths = index
+            .resources
+            .iter()
+            .map(|r| (r.relative_path.as_deref(), r.uri.as_str()))
+            .chain(
+                index
+                    .segments
+                    .iter()
+                    .map(|s| (s.relative_path.as_deref(), s.uri.as_str())),
+            );
+        for (relative, uri) in paths {
+            let path = member_relative_path(relative, uri);
+            if path.file_name().is_none()
+                || path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+            {
+                return Err(source_error(
+                    "desktop download member must name a relative file within its target directory",
+                ));
+            }
+        }
+        let id = self.manager.create_task(
+            asset_id.clone(),
             prepared.source,
             prepared.profile,
             prepared.asset_index,
             Instant::now(),
-        )
+        )?;
+        self.asset_labels.insert(asset_id, label);
+        Ok(id)
     }
 
     pub fn trigger_primary_action(
@@ -306,7 +529,8 @@ impl DesktopDownloadController {
         self.export_state.remove(&task_id);
         self.exported_paths.remove(&task_id);
         if let Some(target_directory) = target_directory
-            && let Err(error) = fs::remove_dir_all(&target_directory)
+            && let Err(error) =
+                remove_managed_download_directory(snapshot.asset_id.as_str(), &target_directory)
         {
             tracing::warn!(
                 "failed to remove desktop download directory `{}`: {error}",
@@ -530,13 +754,19 @@ pub fn prepare_download_task(
     source: &MediaSource,
     source_label: &str,
 ) -> Result<PreparedDownloadTask> {
-    let target_directory = desktop_download_target_directory(asset_id);
-    fs::create_dir_all(&target_directory).with_context(|| {
-        format!(
-            "failed to create desktop download directory `{}`",
-            target_directory.display()
-        )
-    })?;
+    prepare_download_task_with_cancellation(asset_id, source, source_label, &NEVER_CANCEL_PLANNING)
+}
+
+pub fn prepare_download_task_with_cancellation(
+    asset_id: &str,
+    source: &MediaSource,
+    source_label: &str,
+    cancel: &AtomicBool,
+) -> Result<PreparedDownloadTask> {
+    let client =
+        DesktopDownloadPlanningSession::new(cancel, source.kind() == MediaSourceKind::Remote);
+    client.validate_member(source.uri())?;
+    let target_directory = desktop_download_target_directory(asset_id)?;
 
     let content_format = resolved_download_content_format(source);
     let download_source = DownloadSource::new(source.clone(), content_format);
@@ -545,8 +775,17 @@ pub fn prepare_download_task(
         target_directory: Some(target_directory),
         ..DownloadProfile::default()
     };
-    let asset_index =
-        DownloadPlanner::new(DesktopDownloadPlanningClient).plan(&download_source, &profile)?;
+    let asset_index = DownloadPlanner::new(client).plan(&download_source, &profile)?;
+    // A byte-range entry can be planned without probing its locator.
+    for resource in &asset_index.resources {
+        if resource.generated_text.is_none() {
+            client.validate_member(&resource.uri)?;
+        }
+    }
+    for segment in &asset_index.segments {
+        client.validate_member(&segment.uri)?;
+    }
+    client.check()?;
 
     Ok(PreparedDownloadTask {
         source: download_source,
@@ -612,11 +851,15 @@ fn run_download_task(
         let mut received_bytes = 0_u64;
         let mut received_segments = 0_u32;
 
+        let source_is_remote = task.source.source.kind() == MediaSourceKind::Remote;
         for item in work_items {
             if cancel_flag.load(Ordering::SeqCst) {
                 return Ok(None);
             }
 
+            if item.generated_text.is_none() {
+                validate_download_member(source_is_remote, &item.uri)?;
+            }
             if let Some(parent) = item.target_path.parent() {
                 fs::create_dir_all(parent).map_err(|error| {
                     source_error(format!(
@@ -726,10 +969,7 @@ fn build_work_items(task: &DownloadTaskSnapshot) -> Result<Vec<DownloadWorkItem>
 
     let mut items = Vec::new();
     for resource in &task.asset_index.resources {
-        let relative_path = resource
-            .relative_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(relative_path_for_uri(&resource.uri)));
+        let relative_path = member_relative_path(resource.relative_path.as_deref(), &resource.uri);
         items.push(DownloadWorkItem {
             uri: resource.uri.clone(),
             target_path: target_directory.join(relative_path),
@@ -740,10 +980,7 @@ fn build_work_items(task: &DownloadTaskSnapshot) -> Result<Vec<DownloadWorkItem>
         });
     }
     for segment in &task.asset_index.segments {
-        let relative_path = segment
-            .relative_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(relative_path_for_uri(&segment.uri)));
+        let relative_path = member_relative_path(segment.relative_path.as_deref(), &segment.uri);
         items.push(DownloadWorkItem {
             uri: segment.uri.clone(),
             target_path: target_directory.join(relative_path),
@@ -886,6 +1123,16 @@ fn download_remote_file(
     Ok(())
 }
 
+fn read_curl_diagnostics(mut input: impl Read) -> std::io::Result<String> {
+    let mut prefix = Vec::new();
+    input
+        .by_ref()
+        .take(MAX_CURL_DIAGNOSTIC_BYTES)
+        .read_to_end(&mut prefix)?;
+    std::io::copy(&mut input, &mut std::io::sink())?;
+    Ok(String::from_utf8_lossy(&prefix).into_owned())
+}
+
 fn run_curl_download(
     uri: &str,
     range_header: Option<&str>,
@@ -894,11 +1141,10 @@ fn run_curl_download(
 ) -> Result<CurlDownloadOutput, PlayerError> {
     let temp_path = temporary_sibling_path(output_path, "part");
     let headers_path = temporary_sibling_path(output_path, "headers");
-    let mut command = Command::new(CURL_BIN);
+    let mut command = http_curl();
     command
-        .arg("-L")
-        .arg("--silent")
-        .arg("--show-error")
+        .arg("--connect-timeout")
+        .arg(REQUEST_TIMEOUT.as_secs().to_string())
         .arg("--dump-header")
         .arg(&headers_path)
         .arg("--write-out")
@@ -909,13 +1155,32 @@ fn run_curl_download(
     let mut child = command
         .arg("--output")
         .arg(&temp_path)
-        .arg(uri)
+        .args(["--", uri])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| network_error(format!("failed to spawn curl: {error}")))?;
 
-    let status = wait_for_child(&mut child, uri, cancel_flag)?;
+    let diagnostics = child.stderr.take();
+    let outcome = thread::scope(|scope| {
+        let reader = scope.spawn(move || diagnostics.map(read_curl_diagnostics).transpose());
+        // stdout contains only the status code. The body and headers go directly to files.
+        let status = wait_for_child(&mut child, cancel_flag, None)?;
+        let stderr = reader
+            .join()
+            .map_err(|_| network_error("curl diagnostic reader failed"))?
+            .map_err(|error| network_error(format!("failed to read curl diagnostics: {error}")))?;
+        Ok::<_, PlayerError>((status, stderr.unwrap_or_default()))
+    });
+    let (status, stderr) = match outcome {
+        Ok(output) => output,
+        Err(error) => {
+            remove_file_warn(&temp_path);
+            remove_file_warn(&headers_path);
+            return Err(error);
+        }
+    };
     let mut stdout = String::new();
     if let Some(mut stream) = child.stdout.take() {
         stream.read_to_string(&mut stdout).map_err(|error| {
@@ -924,15 +1189,6 @@ fn run_curl_download(
             ))
         })?;
     }
-    let mut stderr = String::new();
-    if let Some(mut stream) = child.stderr.take() {
-        stream.read_to_string(&mut stderr).map_err(|error| {
-            network_error(format!(
-                "failed to read curl error output for `{uri}`: {error}"
-            ))
-        })?;
-    }
-
     if !status.success() {
         remove_file_warn(&temp_path);
         remove_file_warn(&headers_path);
@@ -1163,108 +1419,51 @@ struct CurlDownloadOutput {
     append: bool,
 }
 
+fn stop_curl(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn planning_timeout() -> PlayerError {
+    PlayerError::with_taxonomy(
+        PlayerErrorCode::Timeout,
+        PlayerErrorCategory::Network,
+        true,
+        "desktop download planning timed out",
+    )
+}
+
 fn wait_for_child(
     child: &mut Child,
-    uri: &str,
-    cancel_flag: &Arc<AtomicBool>,
+    cancel_flag: &AtomicBool,
+    deadline: Option<Instant>,
 ) -> Result<std::process::ExitStatus, PlayerError> {
     loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(playback_error(format!("download cancelled for `{uri}`")));
+        if cancel_flag.load(Ordering::Acquire) {
+            stop_curl(child);
+            return Err(playback_error("desktop download cancelled"));
         }
-
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            stop_curl(child);
+            return Err(planning_timeout());
+        }
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
-            Ok(None) => thread::sleep(CURL_POLL_INTERVAL),
+            Ok(None) => {
+                let sleep = deadline.map_or(CURL_POLL_INTERVAL, |deadline| {
+                    Duration::from_millis(10)
+                        .min(deadline.saturating_duration_since(Instant::now()))
+                });
+                thread::sleep(sleep);
+            }
             Err(error) => {
+                stop_curl(child);
                 return Err(network_error(format!(
                     "failed to monitor curl process: {error}"
                 )));
             }
         }
     }
-}
-
-fn fetch_remote_text(uri: &str) -> Result<String> {
-    if let Some(local_path) = local_path_from_uri(uri) {
-        return fs::read_to_string(&local_path)
-            .with_context(|| format!("failed to read local manifest `{}`", local_path.display()));
-    }
-
-    let output = Command::new(CURL_BIN)
-        .arg("-L")
-        .arg("--fail")
-        .arg("--silent")
-        .arg("--show-error")
-        .arg(uri)
-        .output()
-        .with_context(|| format!("failed to spawn curl for `{uri}`"))?;
-    if !output.status.success() {
-        bail!(
-            "failed to fetch remote manifest `{uri}`: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|error| anyhow!("manifest `{uri}` was not valid UTF-8: {error}"))
-}
-
-fn probe_remote_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
-    if let Some(size) = probe_remote_head_content_length(uri)? {
-        return Ok(Some(size));
-    }
-    probe_remote_range_content_length(uri)
-}
-
-fn probe_remote_head_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
-    let output = Command::new(CURL_BIN)
-        .arg("-L")
-        .arg("--head")
-        .arg("--silent")
-        .arg("--show-error")
-        .arg("--write-out")
-        .arg("\n%{http_code}")
-        .arg(uri)
-        .output()
-        .map_err(|error| {
-            network_error(format!("failed to spawn curl HEAD for `{uri}`: {error}"))
-        })?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some((headers, status_text)) = stdout.rsplit_once('\n') else {
-        return Ok(None);
-    };
-    let status_code = status_text.trim().parse::<u16>().unwrap_or(0);
-    if !(200..=299).contains(&status_code) {
-        return Ok(None);
-    }
-    Ok(last_header_value(headers, "content-length").and_then(|value| value.parse::<u64>().ok()))
-}
-
-fn probe_remote_range_content_length(uri: &str) -> player_runtime::PlayerResult<Option<u64>> {
-    let output_path =
-        std::env::temp_dir().join(format!("vesper-content-length-{}", unique_suffix()));
-    let transfer = run_curl_download(
-        uri,
-        Some("0-0"),
-        &output_path,
-        &Arc::new(AtomicBool::new(false)),
-    )?;
-    let size = if transfer.status_code == 206 {
-        last_header_value(&transfer.headers, "content-range").and_then(|value| {
-            value
-                .rsplit_once('/')
-                .and_then(|(_, total)| total.trim().parse::<u64>().ok())
-        })
-    } else {
-        None
-    };
-    remove_file_warn(&transfer.output_path);
-    Ok(size)
 }
 
 fn last_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
@@ -1277,12 +1476,53 @@ fn last_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-fn desktop_download_target_directory(asset_id: &str) -> PathBuf {
-    std::env::temp_dir().join(DOWNLOAD_ROOT_DIR).join(asset_id)
+fn desktop_download_target_directory(asset_id: &str) -> Result<PathBuf, PlayerError> {
+    let mut components = Path::new(asset_id).components();
+    if asset_id.contains(['/', '\\', ':'])
+        || asset_id.ends_with(['.', ' '])
+        || !matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(asset_id))
+        || components.next().is_some()
+    {
+        return Err(source_error(
+            "desktop download asset ID must be a single directory name",
+        ));
+    }
+    Ok(std::env::temp_dir().join(DOWNLOAD_ROOT_DIR).join(asset_id))
+}
+
+fn remove_managed_download_directory(asset_id: &str, target: &Path) -> std::io::Result<()> {
+    let Ok(expected) = desktop_download_target_directory(asset_id) else {
+        return Ok(());
+    };
+    if target != expected || !fs::symlink_metadata(target).is_ok_and(|info| info.is_dir()) {
+        return Ok(());
+    }
+    let managed_root = std::env::temp_dir().canonicalize()?.join(DOWNLOAD_ROOT_DIR);
+    let actual = target.canonicalize()?;
+    if actual.parent() == Some(managed_root.as_path()) && actual.file_name() == expected.file_name()
+    {
+        fs::remove_dir_all(actual)?;
+    }
+    Ok(())
+}
+
+fn is_http_uri(uri: &str) -> bool {
+    uri.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+fn validate_download_member(source_is_remote: bool, uri: &str) -> Result<(), PlayerError> {
+    if source_is_remote && !is_http_uri(uri) {
+        return Err(source_error(
+            "remote download members must use HTTP or HTTPS",
+        ));
+    }
+    Ok(())
 }
 
 fn local_path_from_uri(uri: &str) -> Option<PathBuf> {
-    if uri.starts_with("http://") || uri.starts_with("https://") {
+    if is_http_uri(uri) {
         None
     } else if let Some(path) = uri.strip_prefix("file://") {
         Some(file_uri_path(path))
@@ -1300,6 +1540,11 @@ fn file_uri_path(path: &str) -> PathBuf {
     }
 
     PathBuf::from(path)
+}
+
+fn member_relative_path<'a>(path: Option<&'a Path>, uri: &str) -> Cow<'a, Path> {
+    path.map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(PathBuf::from(relative_path_for_uri(uri))))
 }
 
 fn relative_path_for_uri(uri: &str) -> String {
@@ -1625,10 +1870,88 @@ mod tests {
     const TEST_TIMEOUT: Duration = Duration::from_secs(20);
 
     #[test]
+    fn curl_diagnostics_keep_a_bounded_prefix_and_drain_the_entire_stream() {
+        use std::io::Cursor;
+
+        let limit = super::MAX_CURL_DIAGNOSTIC_BYTES as usize;
+        let mut stream = Cursor::new(vec![b'x'; limit * 4]);
+        let detail = super::read_curl_diagnostics(&mut stream).unwrap();
+        assert_eq!(detail, "x".repeat(limit));
+        assert_eq!(stream.position(), (limit * 4) as u64);
+    }
+
+    #[test]
     fn local_path_from_uri_supports_file_scheme() {
         let path = local_path_from_uri("file:///tmp/vesper-fixture/master.m3u8")
             .expect("file uri should map to a local path");
         assert_eq!(path, PathBuf::from("/tmp/vesper-fixture/master.m3u8"));
+    }
+
+    #[test]
+    fn download_planner_keeps_remote_and_local_resource_policies_distinct() {
+        use player_runtime::PlayerErrorCode;
+        use std::sync::atomic::AtomicBool;
+        let cancel = AtomicBool::new(false);
+        let remote = super::DesktopDownloadPlanningSession::new(&cancel, true);
+        let local = super::DesktopDownloadPlanningSession::new(&cancel, false);
+        assert!(
+            remote
+                .validate_member("https://example.test/video.mp4")
+                .is_ok()
+        );
+        assert!(
+            local
+                .validate_member("file:///tmp/local-fixture.mp4")
+                .is_ok()
+        );
+        assert_eq!(
+            remote
+                .validate_member("file:///tmp/local-fixture.mp4")
+                .unwrap_err()
+                .code(),
+            PlayerErrorCode::InvalidSource
+        );
+    }
+
+    #[test]
+    fn desktop_cleanup_removes_only_the_managed_asset_directory() {
+        let workspace = TestWorkspace::new("unmanaged-download");
+        let sentinel = workspace.path().join("fixture.mp4");
+        fs::write(&sentinel, b"retain").unwrap();
+        let asset_id = format!("managed-download-{}", super::unique_suffix());
+        super::remove_managed_download_directory(&asset_id, workspace.path()).unwrap();
+        assert_eq!(fs::read(&sentinel).unwrap(), b"retain");
+        assert!(super::desktop_download_target_directory("../unmanaged-download").is_err());
+        let managed = super::desktop_download_target_directory(&asset_id).unwrap();
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(managed.join("fixture.mp4"), b"remove").unwrap();
+        super::remove_managed_download_directory(&asset_id, &managed).unwrap();
+        assert!(!managed.exists());
+    }
+
+    #[test]
+    #[ignore = "requires curl and a loopback HTTP listener"]
+    fn download_planning_request_times_out_and_cancels() {
+        use player_runtime::PlayerErrorCode;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let uri = format!("http://{}/asset.m3u8", origin.local_addr().unwrap());
+        let cancel = AtomicBool::new(false);
+        let mut planner = super::DesktopDownloadPlanningSession::new(&cancel, true);
+        planner.deadline = Instant::now() + Duration::from_millis(150);
+        let error = planner.curl(&uri, &[], 1024).unwrap_err();
+        assert_eq!(error.code(), PlayerErrorCode::Timeout);
+        assert!(error.is_retriable());
+        let planner = super::DesktopDownloadPlanningSession::new(&cancel, true);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(Duration::from_millis(30));
+                cancel.store(true, Ordering::Release);
+            });
+            let error = planner.curl(&uri, &["--head"], 1024).unwrap_err();
+            assert_eq!(error.code(), PlayerErrorCode::InvalidState);
+            assert!(error.message().contains("cancelled"));
+        });
     }
 
     #[test]

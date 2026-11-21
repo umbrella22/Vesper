@@ -18,3 +18,7 @@ player-platform-android = { path = "../../mobile/player-platform-android" }
 player-platform-mobile = { path = "../../common/player-platform-mobile" }
 player-runtime = { path = "../../../core/player-runtime" }
 serde_json.workspace = true
+player-rtsp-hls-bridge = { path = "../../../core/player-rtsp-hls-bridge", optional = true }
+
+[features]
+rtsp-bridge = ["dep:player-rtsp-hls-bridge"]

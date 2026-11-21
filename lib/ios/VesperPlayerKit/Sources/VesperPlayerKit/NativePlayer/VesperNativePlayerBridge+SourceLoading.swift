@@ -25,7 +25,21 @@ extension VesperNativePlayerBridge {
         ) {
             throw drmFailure
         }
-        nativeFrameRoute: while true {
+        if source.protocol == .rtsp, let retiringRtspHandle {
+            try await VesperRtspSession.waitForRetirement(retiringRtspHandle, deadline: deadline)
+            try Task.checkCancellation()
+            guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else { throw CancellationError() }
+            self.retiringRtspHandle = nil
+        }
+        let rtsp = try source.protocol == .rtsp ? VesperRtspSession(source: source) : nil
+        if let rtsp { currentRtspSession = rtsp }
+        // A superseded activation may finish after its replacement owns the bridge.
+        defer {
+            if Task.isCancelled, let rtsp, currentRtspSession === rtsp {
+                tearDownActivePlayback(cancelSourceCommand: false)
+            }
+        }
+        nativeFrameRoute: while rtsp == nil {
             switch evaluateNativeFramePipelineRoute(for: source) {
             case .systemPlayer, .fallback:
                 break nativeFrameRoute
@@ -93,11 +107,11 @@ extension VesperNativePlayerBridge {
                 )
             }
         }
-        let normalizedResource = await openSourceNormalizerResourceIfNeeded(
+        let normalizedResource = rtsp == nil ? await openSourceNormalizerResourceIfNeeded(
             for: source,
             sourceLoadEpoch: sourceLoadEpoch
-        )
-        if normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
+        ) : nil
+        if rtsp == nil && normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
                 domain: "io.github.umbrella22.vesper.host.ios",
                 code: -2,
@@ -113,7 +127,9 @@ extension VesperNativePlayerBridge {
             resource: normalizedResource
         )
         let url: URL
-        if let normalizedURL = normalizedSession?.playbackURL {
+        if let rtsp {
+            url = try await rtsp.playlist(deadline: deadline)
+        } else if let normalizedURL = normalizedSession?.playbackURL {
             url = normalizedURL
         } else if normalizedResource != nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
@@ -127,7 +143,7 @@ extension VesperNativePlayerBridge {
         } else {
             url = try resolvedUrl(for: source)
         }
-        let urlDescription = diagnosticURLDescription(url.absoluteString)
+        let urlDescription = rtsp == nil ? diagnosticURLDescription(url.absoluteString) : "rtsp-loopback"
         iosHostLog(
             "loadCurrentSource url=\(urlDescription) sourceNormalizerRoute=\(normalizedResource?.outputRoute ?? "native")"
         )
@@ -148,13 +164,13 @@ extension VesperNativePlayerBridge {
             token: cachePolicyToken
         )
         preloadCoordinator.configure(cachePolicy: cachePolicy)
-        preloadCoordinator.warmCurrentSource(source: source, url: url)
+        if rtsp == nil { preloadCoordinator.warmCurrentSource(source: source, url: url) }
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
         try Task.checkCancellation()
         guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
             throw CancellationError()
         }
-        let item = try makePlayerItem(
+        let item = rtsp != nil ? AVPlayerItem(url: url) : try makePlayerItem(
             for: playbackSource,
             url: url,
             sourceEpoch: subtitleSourceEpoch
@@ -166,7 +182,7 @@ extension VesperNativePlayerBridge {
         let player = AVPlayer(playerItem: item)
         player.volume = systemPlayerVolume
         player.isMuted = systemPlayerIsMuted
-        player.allowsExternalPlayback = true
+        player.allowsExternalPlayback = rtsp == nil
         player.automaticallyWaitsToMinimizeStalling =
             bufferingPolicy.automaticallyWaitsToMinimizeStalling
         applyDefaultPlaybackRate(desiredPlaybackRate, to: player)
@@ -179,6 +195,22 @@ extension VesperNativePlayerBridge {
         resetTrackState()
         applyDashStartupAbrLimitIfNeeded(for: playbackSource, to: item)
         self.player = player
+        if let rtsp {
+            rtspHealthTask = Task { @MainActor [weak self, weak rtsp] in
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: .milliseconds(500))
+                        guard let self, let rtsp, self.currentRtspSession === rtsp else { return }
+                        try rtsp.checkHealth()
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        self?.handlePlaybackFailure(error: error, fallbackMessage: "The RTSP bridge stopped.")
+                        return
+                    }
+                }
+            }
+        }
         activePlayerObservationToken = diagnosticsTracker.capture()
         surfaceHost?.attach(player: player)
         subtitleOverlayRenderer.attach(surfaceHost: surfaceHost)
@@ -207,9 +239,9 @@ extension VesperNativePlayerBridge {
                 isBuffering: true,
                 isInterrupted: false,
                 timeline: TimelineUiState(
-                    kind: .vod,
-                    isSeekable: true,
-                    seekableRange: SeekableRangeUi(startMs: 0, endMs: 0),
+                    kind: rtsp == nil ? .vod : .live,
+                    isSeekable: rtsp == nil,
+                    seekableRange: rtsp == nil ? SeekableRangeUi(startMs: 0, endMs: 0) : nil,
                     liveEdgeMs: nil,
                     positionMs: 0,
                     durationMs: nil

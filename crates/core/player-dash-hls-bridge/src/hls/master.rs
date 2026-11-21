@@ -485,7 +485,8 @@ where
 }
 
 fn append_variant(output: &mut String, variant: &HlsVariant) -> DashHlsResult<()> {
-    ensure_line_value(&variant.uri, "variant URI")?;
+    player_hls_playlist::validate_uri_line(&variant.uri, "variant")
+        .map_err(super::media_playlist_error)?;
     if variant.bandwidth == 0 {
         return Err(DashHlsError::InvalidHlsInput(
             "variant BANDWIDTH must be non-zero".to_owned(),
@@ -648,6 +649,35 @@ mod tests {
     use super::*;
     use crate::dash::parse_mpd;
     use crate::hls::model::{HlsMasterInput, HlsResolution};
+
+    #[test]
+    fn master_variant_uri_must_occupy_a_uri_line() {
+        let mut input = HlsMasterInput {
+            variants: vec![HlsVariant {
+                uri: "variant.m3u8?lang=en".to_owned(),
+                bandwidth: 1,
+                average_bandwidth: None,
+                codecs: "avc1.42c01e".to_owned(),
+                resolution: None,
+                frame_rate: None,
+                audio_group_id: None,
+                subtitle_group_id: None,
+                video_range: None,
+            }],
+            ..Default::default()
+        };
+        assert!(
+            build_hls_master_playlist(&input)
+                .unwrap()
+                .ends_with("variant.m3u8?lang=en\n")
+        );
+        for uri in [" \t", "  #fragment", "one.m3u8\ntwo.m3u8"] {
+            input.variants[0].uri = uri.to_owned();
+            assert!(
+                matches!(build_hls_master_playlist(&input), Err(DashHlsError::InvalidHlsInput(message)) if message.contains("variant"))
+            );
+        }
+    }
 
     #[test]
     fn builds_master_playlist_with_audio_group() {

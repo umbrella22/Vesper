@@ -9,7 +9,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/umbrella22/VesperPlayerKit.git",
-            exact: "0.9.1"
+            exact: "0.10.0"
         ),
     ],
     targets: [

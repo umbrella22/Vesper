@@ -18,6 +18,10 @@ pub enum DashHlsError {
     UnsupportedMp4(String),
     #[error("invalid HLS input: {0}")]
     InvalidHlsInput(String),
+    #[error(
+        "invalid HLS input: segment exceeds the playlist target duration of {target_duration} seconds"
+    )]
+    TargetDurationExceeded { target_duration: u64 },
 }
 
 impl DashHlsError {

@@ -1,7 +1,7 @@
 # HarmonyOS ArkUI host
 
 The standalone Vesper Player example consumes the three staged Harmony HARs on
-API 20+ arm64 phones and tablets. Its **Play**, **Diagnostics**, and **Downloads**
+API 26+ arm64 phones and tablets. Its **Play**, **Diagnostics**, and **Downloads**
 pages cover the same workflows as the Android Compose and iOS SwiftUI examples
 using HarmonyOS components: `Navigation`, native bottom `Tabs`, `List`, sheets,
 sliders, switches and system colors. Wide windows use a player/sidebar layout.
@@ -81,7 +81,7 @@ Actions use Huawei system symbol resources through `SymbolGlyph` and
 download and share. No external icon font or copied platform icon assets are
 required. Example icons have accessible labels and 48 vp touch targets; SDK Stage
 buttons retain at least 44 vp targets.
-The resources are compiled by the installed HarmonyOS SDK for the API 20 floor.
+The resources are compiled with the HarmonyOS API 26 SDK.
 
 **System playback** controls the app's AVSession/background-audio integration.
 Automatic PiP starts disabled. Enabling it creates and configures the native PiP

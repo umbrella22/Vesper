@@ -1,6 +1,6 @@
 # HarmonyOS preview release
 
-The preview distributes three API 20+ arm64 HARs in dependency order:
+The preview distributes three API 26+ arm64 HARs in dependency order:
 `@vesper/player-kit`, `@vesper/player-kit-arkui`, and
 `@vesper/player-kit-arkui-ui`. The current package version is
 `0.9.1-harmony.0`. The core includes Rust and Node-API libraries; the other two
@@ -51,7 +51,7 @@ python3 scripts/harmony/verify-artifacts.py --directory target/harmony-kit/dist 
 ```
 
 Prepare media through `fixture-server.py --prepare-only` before freezing a new
-checkout. Record API 20/26 runtime receipts, retained failures and fixture hashes.
+checkout. Record API 26 runtime receipts, retained failures and fixture hashes.
 Stop emulator instances before native builds on the local host. Then run:
 
 ```sh
@@ -97,7 +97,7 @@ confirm that the intended preview tag points to the tested version.
 
 ## Verify installation and announce
 
-Create a fresh API 20+ arm64 consumer outside the local build staging folders.
+Create a fresh API 26+ arm64 consumer outside the local build staging folders.
 Declare the three exact registry versions in its `oh-package.json5`, remove all
 `file:` dependencies and local overrides, and use a fresh project-local cache.
 Run `ohpm install --all`, inspect the lockfile and dependency graph, then compile

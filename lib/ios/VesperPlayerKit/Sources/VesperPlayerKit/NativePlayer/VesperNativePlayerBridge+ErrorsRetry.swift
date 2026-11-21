@@ -358,6 +358,10 @@ extension VesperNativePlayerBridge {
         )
         fixedTrackIssueActive = false
 
+        if currentRtspSession != nil {
+            // Opening a replacement needs the slot held by the failed RTSP session.
+            tearDownActivePlayback(cancelSourceCommand: false)
+        }
         if scheduleRetryIfPossible(for: enrichedError) {
             return
         }

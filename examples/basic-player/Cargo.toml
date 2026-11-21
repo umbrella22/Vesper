@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-ab_glyph = "0.2.32"
+ab_glyph_rasterizer = "0.1.10"
 anyhow.workspace = true
 pollster.workspace = true
 player-model = { path = "../../crates/model/player-model" }
@@ -21,6 +21,7 @@ player-runtime = { path = "../../crates/core/player-runtime" }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+skrifa = { version = "0.50.0", default-features = false, features = ["std"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 winit.workspace = true

@@ -40,7 +40,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistTracker
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -59,6 +59,10 @@ import kotlin.math.pow
 import kotlin.math.roundToLong
 import org.json.JSONArray
 import org.json.JSONObject
+
+// At the bridge's 2-second HLS target duration, 30 seconds covers the 5-second
+// media watchdog, the 20-second recovery window, and playlist reload scheduling.
+private const val RTSP_BRIDGE_PLAYLIST_STUCK_COEFFICIENT = 15.0
 
 internal class VesperNativeJniBindings(
     context: Context,
@@ -244,6 +248,10 @@ internal class VesperNativeJniBindings(
         prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ) = disposePreparedSourceNormalizerResourceForPlayback(prepared)
 
+    private var activeRtspBridge: NativeRtspBridge? = null
+    internal val isRtspBridgeActive: Boolean
+        get() = activeRtspBridge != null
+
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
@@ -251,11 +259,19 @@ internal class VesperNativeJniBindings(
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge?,
     ): NativeBridgeStartup {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${diagnosticSourceDescription(source)}")
         val existingSubtitleCuesListener = subtitleCuesListener
         val existingTrackSelectionFailureListener = trackSelectionFailureListener
-        dispose(stopSourceNormalizerLoopbackServer = preparedSourceNormalizer.resource == null)
+        try {
+            dispose(stopSourceNormalizerLoopbackServer = preparedSourceNormalizer.resource == null)
+        } catch (error: Throwable) {
+            preparedRtspBridge?.close()
+            disposePreparedSourceNormalizerResource(preparedSourceNormalizer)
+            throw error
+        }
+        activeRtspBridge = preparedRtspBridge
         // initialize() reuses the binding object across source epochs. The
         // callbacks belong to the bridge, so restore them after dispose()
         // clears player-owned listeners; otherwise the next source silently
@@ -323,12 +339,16 @@ internal class VesperNativeJniBindings(
                     VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
                 }
             val playbackDataSourceFactory =
-                buildDataSourceFactory(
-                    appContext,
-                    resolvedResiliencePolicy.cache,
-                    playbackSource.headers,
-                    playbackSource.dashStartupScope,
-                )
+                if (preparedRtspBridge != null) {
+                    buildUpstreamDataSourceFactory(appContext)
+                } else {
+                    buildDataSourceFactory(
+                        appContext,
+                        resolvedResiliencePolicy.cache,
+                        playbackSource.headers,
+                        playbackSource.dashStartupScope,
+                    )
+                }
             val mediaSourceFactory =
                 DefaultMediaSourceFactory(appContext)
                     .setDataSourceFactory(playbackDataSourceFactory)
@@ -357,6 +377,7 @@ internal class VesperNativeJniBindings(
                     .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                     .setMediaSourceFactory(mediaSourceFactory)
                     .build()
+            player = exoPlayer
             exoPlayer.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -380,20 +401,37 @@ internal class VesperNativeJniBindings(
             exoPlayer.addListener(listener)
             exoPlayer.addAnalyticsListener(analytics)
             frameMetadata?.let(exoPlayer::setVideoFrameMetadataListener)
-            val mainMediaItem = buildMediaItem(playbackSource.copy(externalSubtitles = emptyList()))
+            val mainMediaItem = buildMediaItem(
+                playbackSource.copy(externalSubtitles = emptyList()),
+                rtspPlaylistUri = preparedRtspBridge?.playlistUri,
+            )
             val mainMediaSource =
-                if (playbackSource.protocol == VesperPlayerSourceProtocol.Hls) {
+                if (playbackSource.protocol == VesperPlayerSourceProtocol.Hls || preparedRtspBridge != null) {
                     HlsMediaSource.Factory(
                         buildHlsPlaybackDataSourceFactory(
-                            manifestFactory =
-                                buildUpstreamDataSourceFactory(
-                                    appContext,
-                                    playbackSource.headers,
-                                ),
+                            manifestFactory = if (preparedRtspBridge != null) {
+                                playbackDataSourceFactory
+                            } else {
+                                buildUpstreamDataSourceFactory(appContext, playbackSource.headers)
+                            },
                             mediaFactory = playbackDataSourceFactory,
                         )
                     )
                         .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                        .apply {
+                            if (preparedRtspBridge != null) {
+                                setPlaylistTrackerFactory { dataSource, loadPolicy, parser, cmcd, executor ->
+                                    DefaultHlsPlaylistTracker(
+                                        dataSource,
+                                        loadPolicy,
+                                        parser,
+                                        cmcd,
+                                        RTSP_BRIDGE_PLAYLIST_STUCK_COEFFICIENT,
+                                        executor,
+                                    )
+                                }
+                            }
+                        }
                         .createMediaSource(mainMediaItem)
                 } else {
                     mediaSourceFactory.createMediaSource(mainMediaItem)
@@ -417,9 +455,8 @@ internal class VesperNativeJniBindings(
                 FirstFrameWatchdogRoute.systemPlayback(systemPlaybackVideoEnabled)
             scheduleFirstFrameWatchdog(playbackSource, firstFrameGate.currentEpoch, firstFrameWatchdogRoute)
             recordBenchmark("source_load_configured")
-            executePreloadWarmupCommands(source)
+            if (preparedRtspBridge == null) executePreloadWarmupCommands(source)
 
-            player = exoPlayer
             schedulePlaybackStallObservation(exoPlayer, callbackGeneration)
             playerListener = listener
             analyticsListener = analytics
@@ -789,6 +826,9 @@ internal class VesperNativeJniBindings(
                 .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to release ExoPlayer failure=${diagnosticPlaybackFailure(error)}") }
         } finally {
             player = null
+            val rtspBridge = activeRtspBridge
+            activeRtspBridge = null
+            rtspBridge?.close()
             if (handle != null) {
                 // Null sessionHandle before the JNI call so that concurrent
                 // dispatchRustCommand invocations see a null handle and bail
@@ -904,7 +944,7 @@ internal class VesperNativeJniBindings(
         }
         val handle = sessionHandle ?: return null
         val exoPlayer = player ?: return null
-        val sample = exoPlayer.currentTimelineSample()
+        val sample = exoPlayer.currentTimelineSample(liveOnly = isRtspBridgeActive)
         return VesperNativeJni.sampleTimeline(
             sessionHandle = handle,
             positionMs = sample.timelinePositionMs,

@@ -9,6 +9,7 @@ export interface ExportMember { path: string; size: number; checksum?: string; }
 interface ZipEntry { name: Uint8Array; size: number; crc: number; offset: number; }
 export const EXPORT_MAXIMUM_BYTES: number = 256 * 1024 * 1024;
 export const EXPORT_DISK_BUDGET: number = 512 * 1024 * 1024;
+const EXPORT_MAXIMUM_FILES: number = 512;
 const CHUNK_BYTES: number = 65536;
 
 function crcUpdate(crc: number, bytes: Uint8Array): number {
@@ -33,6 +34,13 @@ export function exportOutputBytes(format: string, entry: string, files: ExportMe
   for (const file of files) { size += file.size + 92 + encoded(file.path).byteLength * 2; }
   size += encoded(exportManifest(format, entry, files)).byteLength + 92 + encoded('vesper-offline.json').byteLength * 2;
   return size;
+}
+
+export function exportCapacityIssue(files: ExportMember[], bytes: number): string | undefined {
+  if (files.length < 1 || files.length > EXPORT_MAXIMUM_FILES) { return 'file-count-limit'; }
+  if (files.some((file: ExportMember): boolean => !Number.isSafeInteger(file.size) || file.size < 1) ||
+    !Number.isSafeInteger(bytes) || bytes > EXPORT_MAXIMUM_BYTES) { return 'size-limit'; }
+  return undefined;
 }
 
 /** The physical operation retains descriptors until each pending read/write has completed. */

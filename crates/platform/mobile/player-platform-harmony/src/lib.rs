@@ -4,6 +4,7 @@
 mod dash_live;
 mod downloads;
 mod playback_manifest;
+mod rtsp;
 mod sources;
 mod wire;
 
@@ -20,6 +21,7 @@ pub enum HarmonySession {
     Dash,
     DashLive(dash_live::DashLive),
     PlaybackManifest,
+    Rtsp(rtsp::Rtsp),
     Downloads(downloads::Downloads),
 }
 
@@ -53,6 +55,7 @@ impl HarmonySession {
             }
             Some("dash") => Ok(Self::Dash),
             Some("dashLive") => Ok(Self::DashLive(dash_live::DashLive::default())),
+            Some("rtsp") => Ok(Self::Rtsp(rtsp::Rtsp::default())),
             Some("playbackManifest") => Ok(Self::PlaybackManifest),
             Some("downloads") => downloads::Downloads::new(&value).map(Self::Downloads),
             _ => Err(failure("unsupported", "unknown session kind")),
@@ -89,6 +92,7 @@ impl HarmonySession {
                 Ok(value) => success(value).to_string(),
                 Err(error) => error.to_string(),
             },
+            Self::Rtsp(session) => session.execute(&value).to_string(),
             Self::PlaybackManifest => match playback_manifest::project(&value) {
                 Ok(value) => success(value).to_string(),
                 Err(error) => error.to_string(),

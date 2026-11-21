@@ -10,7 +10,11 @@ publish = false
 name = "vesper_player_ffi_ios"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
+[features]
+rtsp-bridge = ["dep:player-rtsp-hls-bridge"]
+
 [dependencies]
+player-rtsp-hls-bridge = { path = "../../core/player-rtsp-hls-bridge", optional = true }
 player-model = { path = "../../model/player-model" }
 player-dash-hls-bridge = { path = "../../core/player-dash-hls-bridge" }
 player-ffi-common = { path = "../player-ffi-common" }

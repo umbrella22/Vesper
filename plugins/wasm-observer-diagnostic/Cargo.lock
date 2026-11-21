@@ -201,7 +201,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "vesper-player-plugin-wasm"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "dlmalloc",
  "wit-bindgen",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-plugin-wasm-observer-diagnostic"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "vesper-player-plugin-wasm",
 ]

@@ -310,6 +310,7 @@ extension VesperNativePlayerBridge {
         clearLastError()
         cancelPendingSeekCommand(reason: "seekCommandSuperseded")
         seekCommandGeneration &+= 1
+        guard publishRtspSeekErrorIfNeeded() == nil else { return }
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             let timeline = publishedUiState.timeline
@@ -342,6 +343,7 @@ extension VesperNativePlayerBridge {
         clearLastError()
         cancelPendingSeekCommand(reason: "seekCommandSuperseded")
         seekCommandGeneration &+= 1
+        guard publishRtspSeekErrorIfNeeded() == nil else { return }
         guard ratio.isFinite else {
             reportCommandError(
                 code: .invalidArgument,
@@ -397,6 +399,7 @@ extension VesperNativePlayerBridge {
         clearLastError()
         cancelPendingSeekCommand(reason: "seekCommandSuperseded")
         seekCommandGeneration &+= 1
+        guard publishRtspSeekErrorIfNeeded() == nil else { return }
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             reportCommandError(
@@ -422,6 +425,7 @@ extension VesperNativePlayerBridge {
         guard let target = publishedUiState.timeline.goLivePositionMs else {
             cancelPendingSeekCommand(reason: "seekCommandSuperseded")
             seekCommandGeneration &+= 1
+            if let error = publishRtspSeekErrorIfNeeded() { throw error }
             let error = seekCommandError(
                 message: "The current iOS timeline has no live edge.",
                 code: .invalidState,

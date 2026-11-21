@@ -3,7 +3,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { util, url } from '@kit.ArkTS';
 import { NativeSession } from './NativeSession';
 import { VesperExportArtifact, VesperExportFile, VesperExportOptions } from './Exports';
-import { exportOutputBytes, EXPORT_MAXIMUM_BYTES } from './ExportStream';
+import { exportOutputBytes, exportCapacityIssue, EXPORT_MAXIMUM_BYTES } from './ExportStream';
 import { DownloadPartial, downloadDigest, downloadResourceFingerprint, clearDownloadPartial, validDownloadPartial, verifiedDownloadPrefix, writeDownloadChunk } from './DownloadPartial';
 import { VesperSourceHandle, VesperSourceLease } from './SourceSession';
 import { VesperPlayerSource, VesperPlayerError } from './Types';
@@ -106,12 +106,14 @@ export class VesperDownloadManager {
     const task = this.tasks.get(value.taskId);
     if (task !== undefined) {
       const reusable = task.files.reduce((sum: number, file: StoredFile): number => sum + (file.generated ? 0 : file.checksum !== undefined ? file.size : file.partialBytes ?? 0), 0);
-      const bytes = exportOutputBytes(task.format, task.entry, task.files);
+      const files = this.exportFiles(task);
+      const bytes = exportOutputBytes(task.format, task.entry, files);
+      const issue = value.status === 'Completed' ? exportCapacityIssue(files, bytes) : 'not-completed';
       result.title = task.title; result.reusableBytes = `${reusable}`;
       result.resumeState = value.status === 'Completed' ? 'complete' : task.lease === undefined || value.status === 'Failed' ? 'source-refresh-required' :
         task.job !== undefined ? 'in-progress' : reusable > 0 ? 'version-check-required' : 'restart-required';
-      result.exportEligibility = { available: value.status === 'Completed' && bytes <= EXPORT_MAXIMUM_BYTES,
-        reason: value.status !== 'Completed' ? 'not-completed' : bytes > EXPORT_MAXIMUM_BYTES ? 'size-limit' : 'eligible', maximumBytes: EXPORT_MAXIMUM_BYTES, outputBytes: bytes };
+      result.exportEligibility = { available: issue === undefined, reason: issue ?? 'eligible',
+        maximumBytes: EXPORT_MAXIMUM_BYTES, outputBytes: bytes };
     }
     return result;
   }
@@ -204,10 +206,13 @@ export class VesperDownloadManager {
       this.tasks.set(result.task.taskId, task); await directory(this.assetRoot(task)); await this.checkpoint(); this.publish(task);
       return this.copy(task.snapshot);
     } catch (error) {
-      if (planned?.planId !== undefined && !Array.from(this.tasks.values()).some((task: Task) => task.planId === planned?.planId)) {
-        this.bridge.invoke<Object>(JSON.stringify({ op: 'discardPlan', planId: planned.planId }));
+      try {
+        if (planned?.planId !== undefined && !Array.from(this.tasks.values()).some((task: Task) => task.planId === planned?.planId)) {
+          this.bridge.invoke<Object>(JSON.stringify({ op: 'discardPlan', planId: planned.planId }));
+        }
+      } finally {
+        if (!Array.from(this.tasks.values()).some((task: Task) => task.lease === lease)) { lease.release(); }
       }
-      if (!Array.from(this.tasks.values()).some((task: Task) => task.lease === lease)) { lease.release(); }
       throw nativeError(error, 'download creation');
     }
   }
@@ -396,18 +401,20 @@ export class VesperDownloadManager {
     task.snapshot = this.call({ op: 'remove', taskId: taskId }).task; this.cancel(task);
     if (task.job !== undefined) { const scope = new OperationScope(10000); try { await scope.wait(task.job.done); } finally { scope.close(); } }
     if (await fs.access(root)) { await fs.rmdir(root); }
-    task.lease?.release(); task.lease = undefined; task.files = []; task.plan = undefined;
+    task.lease?.release(); task.lease = undefined; task.files = []; task.plan = undefined; task.planId = undefined;
     await this.checkpoint(); this.publish(task);
     } finally { finishDelete(); }
   }
   offlineSource(taskId: string): Promise<VesperPlayerSource> { return this.io(() => this.offlineNow(taskId)); }
+  private exportFiles(task: Task): VesperExportFile[] {
+    return task.files.map((file: StoredFile): VesperExportFile => ({ path: file.path, size: file.size, checksum: file.checksum }));
+  }
   exportAsset(taskId: string, format: string = 'original', options: VesperExportOptions = {}): Promise<VesperExportArtifact> {
     return this.io(async (): Promise<VesperExportArtifact> => {
       const task = this.task(taskId);
       if (format !== 'original') { throw new VesperPlayerError('unsupported', 'Remux export is not installed; use the original asset format'); }
       if (task.snapshot.status !== 'Completed' || !await this.verify(task)) { throw new VesperPlayerError('offline_incomplete', 'Export requires a verified complete asset'); }
-      const files = task.files.map((file: StoredFile): VesperExportFile => ({ path: file.path, size: file.size, checksum: file.checksum }));
-      return VesperExportArtifact.create(this.assetRoot(task), this.root, task.format, task.entry, files, options);
+      return VesperExportArtifact.create(this.assetRoot(task), this.root, task.format, task.entry, this.exportFiles(task), options);
     });
   }
   private async offlineNow(taskId: string): Promise<VesperPlayerSource> {

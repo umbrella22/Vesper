@@ -213,6 +213,13 @@ longer launches a shell provisioning wrapper during dependency discovery. When
 using `VESPER_DESKTOP_FFMPEG_DIR`, add that directory's `lib/pkgconfig` child to
 `PKG_CONFIG_PATH` for subsequent Cargo commands.
 
+Linux desktop builds use winit's `wayland-csd-adwaita-crossfont` backend for
+window titles and require Fontconfig and FreeType development packages
+(`libfontconfig-dev` and `libfreetype-dev` on Debian/Ubuntu). The shared Linux
+CI setup installs these alongside the existing X11, Wayland, audio, and FFmpeg
+dependencies. The `basic-player` overlay parses fonts with skrifa and uses the
+standalone `ab_glyph_rasterizer` for coverage rasterization.
+
 ## Gradle Resolution
 
 The Rust CLI resolves Gradle through the same policy in local and CI runs.
@@ -501,6 +508,11 @@ tarballs somewhere else.
   `VESPER_FFMPEG_SERIES` / `VESPER_<PLATFORM>_FFMPEG_SERIES` for intentional
   series moves, and `VESPER_FFMPEG_VERSION` /
   `VESPER_<PLATFORM>_FFMPEG_VERSION` only for exact-version reproduction.
+- Desktop `ensure-ffmpeg` resolves the source before checking an existing local
+  install. Its `vesper-ffmpeg-source.json` receipt records the actual version,
+  source URL, and archive SHA-256. A changed or missing receipt triggers a staged
+  rebuild; a failed replacement preserves the previous install. This receipt
+  records build provenance and does not pin ordinary version selection.
 - Android OpenSSL provisioning is opt-in through FFmpeg TLS overlays and uses
   the OpenSSL 3.5 LTS series by default. The resolver uses the same upstream and cache
   patch selection as FFmpeg. Override `VESPER_ANDROID_OPENSSL_SERIES` only for

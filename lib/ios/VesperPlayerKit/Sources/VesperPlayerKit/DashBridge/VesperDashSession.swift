@@ -15,6 +15,7 @@ actor VesperDashSession {
     nonisolated static let startupMediaSegmentPrefetchLimit = 2
     nonisolated static let defaultDynamicManifestRefreshIntervalMs: UInt64 = 2_000
     nonisolated static let minimumDynamicManifestRefreshIntervalMs: UInt64 = 500
+    nonisolated static let maxPublishedLiveRenditions = 256
 
     nonisolated let id: String
     nonisolated let sourceURL: URL
@@ -26,6 +27,8 @@ actor VesperDashSession {
     var manifestLoadedAt: Date?
     var masterPlaylistCache: Data?
     var mediaPlaylistCacheByRenditionId: [String: Data] = [:]
+    // A live target remains bound to this session's rendition URI across refreshes.
+    var liveTargetDurationByRenditionId: [String: UInt64] = [:]
     var manifestLoadTask: Task<VesperDashManifest, Error>?
     var mediaPlaylistTasksByRenditionId: [String: Task<Data, Error>] = [:]
     var sidxLoadTasksByRenditionId: [String: Task<VesperDashSidxBox, Error>] = [:]

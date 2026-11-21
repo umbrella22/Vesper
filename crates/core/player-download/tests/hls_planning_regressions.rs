@@ -146,3 +146,45 @@ fn hls_master_with_one_child_keeps_every_referenced_playlist() {
             .is_some_and(|p| p == "video.m3u8")
     }));
 }
+
+#[test]
+fn direct_flv_uses_the_path_extension_with_a_query_and_fragment() {
+    let planner = DownloadPlanner::new(Client(HashMap::new()));
+    for uri in [
+        "https://cdn.test/clip.flv?variant=archive.mp4#start",
+        "https://cdn.test/clip.flv?variant=archive.mp4",
+        "https://cdn.test?variant=archive.mp4",
+    ] {
+        let index = planner
+            .plan(
+                &DownloadSource::new(MediaSource::new(uri), DownloadContentFormat::FlvSegments),
+                &DownloadProfile::default(),
+            )
+            .unwrap();
+        assert_eq!(index.segments.len(), 1);
+        assert_eq!(index.segments[0].uri, uri);
+        assert_eq!(index.total_size_bytes, Some(16));
+    }
+}
+
+#[test]
+fn hls_only_plans_referenced_maps_and_keeps_implicit_map_offsets() {
+    let root = "https://cdn.test/index.m3u8";
+    let manifest = concat!(
+        "#EXTM3U\n",
+        "#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"4@12\"\n",
+        "#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"8\"\n",
+        "#EXTINF:4,\na.m4s\n#EXTINF:4,\nb.m4s\n",
+        "#EXT-X-MAP:URI=\"unused.mp4\"\n#EXT-X-ENDLIST\n",
+    );
+    let index = plan(root, &[(root, manifest)], &DownloadProfile::default()).unwrap();
+    assert_eq!(index.resources.len(), 2);
+    let map = &index.resources[1];
+    assert_eq!(map.uri, "https://cdn.test/init.mp4");
+    let range = map.byte_range.unwrap();
+    assert_eq!((range.offset, range.length), (16, 8));
+    assert_eq!(index.total_size_bytes, Some(40));
+    let local = index.resources[0].generated_text.as_deref().unwrap();
+    assert_eq!(local.matches("#EXT-X-MAP:").count(), 1);
+    assert!(local.contains("segments/media-init-0.mp4"));
+}

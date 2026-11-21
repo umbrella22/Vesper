@@ -26,7 +26,7 @@ class ArtifactTests(unittest.TestCase):
         self.directory = Path(self.temporary.name)
         self.native = {name: f'native fixture {name}'.encode() for name in build.LIBRARIES}
         self.hashes = {name: hashlib.sha256(data).hexdigest() for name, data in self.native.items()}
-        self.module = {'app': {'minAPIVersion': 60000020, 'buildMode': 'release',
+        self.module = {'app': {'minAPIVersion': 260000026, 'buildMode': 'release',
                               'debug': False, 'bundleName': 'dev.vesper.harmony.test'},
                        'module': {'requestPermissions': []}}
 
@@ -35,7 +35,7 @@ class ArtifactTests(unittest.TestCase):
         dependencies = ({'libvesper_player_harmony_node.so': 'file:./src/main/cpp/types/libvesper_player_harmony_node'}
                         if index == 0 else {'@vesper/player-kit': version}
                         if index == 1 else {'@vesper/player-kit-arkui': version})
-        package = {'version': version, 'dependencies': dependencies, 'compatibleSdkVersion': 20,
+        package = {'version': version, 'dependencies': dependencies, 'compatibleSdkVersion': 26,
                    'metadata': {'debug': False}}
         files = {'package/LICENSE': b'license', 'package/NOTICE-libcxx.txt': b'notice',
                  'package/oh-package.json5': json.dumps(package).encode(),
@@ -92,19 +92,19 @@ class ArtifactTests(unittest.TestCase):
                     build.verify_har(self.write_har(files), self.hashes)
 
     def test_har_rejects_api_floor_and_debug_changes(self):
-        for field, value in [('compatibleSdkVersion', 26), ('metadata', {'debug': True})]:
+        for field, value in [('compatibleSdkVersion', 20), ('metadata', {'debug': True})]:
             with self.subTest(field=field):
                 files = self.har_files()
                 package = json.loads(files['package/oh-package.json5'])
                 package[field] = value
                 files['package/oh-package.json5'] = json.dumps(package).encode()
-                with self.assertRaisesRegex(ValueError, 'API 20 and Release'):
+                with self.assertRaisesRegex(ValueError, 'API 26 and Release'):
                     build.verify_har(self.write_har(files), self.hashes)
         files = self.har_files()
         module = copy.deepcopy(self.module)
-        module['app']['minAPIVersion'] = 20
+        module['app']['minAPIVersion'] = 60000020
         files['package/src/main/module.json'] = json.dumps(module).encode()
-        with self.assertRaisesRegex(ValueError, 'packed API 20'):
+        with self.assertRaisesRegex(ValueError, 'packed API 26'):
             build.verify_har(self.write_har(files), self.hashes)
 
     def test_har_rejects_unsafe_archive_entries(self):
@@ -141,14 +141,14 @@ class ArtifactTests(unittest.TestCase):
 
     def test_hap_rejects_debug_buildmode_and_os_api_changes(self):
         self.stage_hars()
-        for field, value in [('minAPIVersion', 20), ('minAPIVersion', 260000026),
-                             ('minAPIVersion', 260000020), ('debug', True), ('buildMode', 'debug')]:
+        for field, value in [('minAPIVersion', 26), ('minAPIVersion', 60000020),
+                             ('minAPIVersion', 260000025), ('debug', True), ('buildMode', 'debug')]:
             with self.subTest(field=field, value=value):
                 module = copy.deepcopy(self.module)
                 module['app'][field] = value
                 result = self.verify_hap(self.write_hap(module=module))
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn('Release with the API 20 floor', result.stderr)
+                self.assertIn('Release with the API 26 floor', result.stderr)
 
     def test_offline_hap_rejects_internet_permission(self):
         self.stage_hars()

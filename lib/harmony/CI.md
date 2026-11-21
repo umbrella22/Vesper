@@ -49,7 +49,7 @@ builds. OHPM/Hvigor use the bundled tools and local HAR dependencies.
 
 `ci-artifacts.py` runs Rust tests, native/transpiled host contracts, the three HAR
 builds and four consumers: core, UI, no-INTERNET and standalone example. Each HAP
-is checked for Release metadata, API 20 floor, arm64 native bytes and applicable
+is checked for Release metadata, API 26 floor, arm64 native bytes and applicable
 permission/dependency contracts. Example receipts bind the portable source file
 inventory as well as the HAP and vendored HARs.
 

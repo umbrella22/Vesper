@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the simulator matrix against one frozen set of three HARs and HAPs."""
+"""Run the API 26 simulator matrix against one frozen set of three HARs and HAPs."""
 import argparse
 import hashlib
 import json
@@ -10,6 +10,9 @@ import time
 import urllib.request
 import zipfile
 from candidate_identity import require_candidate, require_runtime_candidate, digest
+
+
+ACCEPTANCE_API = 26
 
 
 def call(arguments, timeout=450):
@@ -34,7 +37,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tools', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--api', type=int, choices=[20, 26], action='append')
+    parser.add_argument('--api', type=int, choices=[ACCEPTANCE_API], default=ACCEPTANCE_API)
     parser.add_argument('--candidate', type=Path)
     options = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
@@ -42,16 +45,20 @@ def main():
     candidate_path = options.candidate or dist / 'candidate.json'
     candidate = require_runtime_candidate(root, candidate_path)
     options.output.mkdir(parents=True, exist_ok=True)
-    devices = {}
-    for target in call([options.tools / 'sdk/default/openharmony/toolchains/hdc', 'list', 'targets'], 15).splitlines():
+    api = options.api
+    hdc_tool = options.tools / 'sdk/default/openharmony/toolchains/hdc'
+    device = None
+    for target in call([hdc_tool, 'list', 'targets'], 15).splitlines():
         target = target.strip()
         if not target or target == '[Empty]':
             continue
-        api = call([options.tools / 'sdk/default/openharmony/toolchains/hdc', '-t', target, 'shell', 'param', 'get', 'const.ohos.apiversion'], 15)
-        if api in ['20', '26']:
-            if int(api) in devices:
+        actual = call([hdc_tool, '-t', target, 'shell', 'param', 'get', 'const.ohos.apiversion'], 15)
+        if actual == str(api):
+            if device is not None:
                 raise ValueError(f'More than one API {api} target is connected')
-            devices[int(api)] = target
+            device = target
+    if device is None:
+        raise ValueError(f'Connect one API {api} simulator before this matrix run')
     haps = {name: dist / f'vesper-harmony-{name}-consumer-unsigned.hap' for name in ['kit', 'ui']}
     haps['offline'] = dist / 'vesper-harmony-kit-consumer-offline-unsigned.hap'
     for hap in haps.values():
@@ -72,9 +79,8 @@ def main():
               'powerThermal': 'NOT RUN', 'telephonyBluetooth': 'NOT RUN', 'productionSigning': 'NOT RUN', 'registry': 'NOT RUN'}}
     def persist():
         (options.output / 'acceptance.json').write_text(json.dumps(ledger, indent=2) + '\n')
-    def scenario(api, button, kind='kit', suffix=None):
-        device = devices[api]
-        name = suffix or button.lower().replace(' ', '-')
+    def scenario(button, kind='kit'):
+        name = button.lower().replace(' ', '-')
         report = options.output / f'{name}-api{api}.json'
         require_candidate(root, candidate_path)
         command = [sys.executable, root / 'scripts/harmony/emulator-smoke.py', '--tools', options.tools,
@@ -95,45 +101,39 @@ def main():
         persist()
         print(json.dumps(ledger['scenarios'][-1]), flush=True)
         return status
-    for api in options.api or [20, 26]:
-        if api not in devices:
-            raise ValueError(f'Connect exactly one API {api} simulator before this matrix run')
-        device = devices[api]
-        hdc = [options.tools / 'sdk/default/openharmony/toolchains/hdc', '-t', device]
-        actual = call(hdc + ['shell', 'param', 'get', 'const.ohos.apiversion'], 15)
-        if actual != str(api):
-            raise ValueError(f'Required API {api} runner is missing; reported {actual}')
-        ledger['runtimes'].append({'api': api, 'device': device,
-            'version': call(hdc + ['shell', 'param', 'get', 'const.ohos.fullname'], 15)})
-        for button in ['Run kit checks', 'Run track system checks', 'Run sequence cache checks',
-                       'Run live subtitle checks', 'Run reference checks', 'Run final stress checks',
-                       'Run worker cleanup checks', 'Run DASH profile checks', 'Run playback recovery checks']:
-            scenario(api, button)
-        scenario(api, 'Prepare interrupted download')
-        interrupted_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        call(hdc + ['shell', 'aa', 'force-stop', 'dev.vesper.harmony.kitconsumer'], 15)
-        interrupted_stopped = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        resumed_status = scenario(api, 'Resume interrupted download')
-        resumed_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        ledger['processRestarts'].append({'api': api, 'kind': 'incomplete-download', 'beforePid': interrupted_pid,
-            'stoppedPid': interrupted_stopped, 'afterPid': resumed_pid,
-            'status': 'PASS' if resumed_status == 'PASS' and interrupted_pid and not interrupted_stopped and resumed_pid and resumed_pid != interrupted_pid else 'FAIL'})
-        persist()
-        scenario(api, 'Prepare process downloads')
-        before_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        call(hdc + ['shell', 'aa', 'force-stop', 'dev.vesper.harmony.kitconsumer'], 15)
-        stopped = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        before_requests = audit()
-        status = scenario(api, 'Restore offline downloads', 'offline')
-        after_requests = audit()
-        after_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
-        restart = {'api': api, 'beforePid': before_pid, 'stoppedPid': stopped, 'afterPid': after_pid,
-                   'originRequestsDuringOffline': after_requests - before_requests,
-                   'status': 'PASS' if status == 'PASS' and before_pid and not stopped and after_pid and before_pid != after_pid and after_requests == before_requests else 'FAIL'}
-        ledger['processRestarts'].append(restart); persist()
-        scenario(api, 'Run UI checks', 'ui')
-        scenario(api, 'Run customization checks', 'ui')
-        scenario(api, 'Run rejected control check', 'ui')
+    hdc = [hdc_tool, '-t', device]
+    ledger['runtimes'].append({'api': api, 'device': device,
+        'version': call(hdc + ['shell', 'param', 'get', 'const.ohos.fullname'], 15)})
+    for button in ['Run kit checks', 'Run track system checks', 'Run sequence cache checks',
+                   'Run live subtitle checks', 'Run reference checks', 'Run final stress checks',
+                   'Run worker cleanup checks', 'Run DASH profile checks', 'Run playback recovery checks']:
+        scenario(button)
+    scenario('Prepare interrupted download')
+    interrupted_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    call(hdc + ['shell', 'aa', 'force-stop', 'dev.vesper.harmony.kitconsumer'], 15)
+    interrupted_stopped = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    resumed_status = scenario('Resume interrupted download')
+    resumed_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    ledger['processRestarts'].append({'api': api, 'kind': 'incomplete-download', 'beforePid': interrupted_pid,
+        'stoppedPid': interrupted_stopped, 'afterPid': resumed_pid,
+        'status': 'PASS' if resumed_status == 'PASS' and interrupted_pid and not interrupted_stopped and resumed_pid and resumed_pid != interrupted_pid else 'FAIL'})
+    persist()
+    scenario('Prepare process downloads')
+    before_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    call(hdc + ['shell', 'aa', 'force-stop', 'dev.vesper.harmony.kitconsumer'], 15)
+    stopped = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    before_requests = audit()
+    status = scenario('Restore offline downloads', 'offline')
+    after_requests = audit()
+    after_pid = call(hdc + ['shell', 'pidof', 'dev.vesper.harmony.kitconsumer'], 15)
+    restart = {'api': api, 'beforePid': before_pid, 'stoppedPid': stopped, 'afterPid': after_pid,
+               'originRequestsDuringOffline': after_requests - before_requests,
+               'status': 'PASS' if status == 'PASS' and before_pid and not stopped and after_pid and before_pid != after_pid and after_requests == before_requests else 'FAIL'}
+    ledger['processRestarts'].append(restart)
+    persist()
+    scenario('Run UI checks', 'ui')
+    scenario('Run customization checks', 'ui')
+    scenario('Run rejected control check', 'ui')
     ledger['status'] = 'PASS' if all(item['status'] == 'PASS' for item in ledger['scenarios'] + ledger['processRestarts']) else 'FAIL'
     require_candidate(root, candidate_path)
     persist()

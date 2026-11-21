@@ -403,15 +403,18 @@ mod platform {
                 return Err(DecoderError::NotConfigured);
             }
             let raw = device_ptr as *mut c_void;
+            // SAFETY: The host supplies a live ID3D11Device for this call. Cloning the borrowed
+            // interface takes a COM reference before the host borrow ends.
             let device = unsafe {
                 ID3D11Device::from_raw_borrowed(&raw)
-                    .map(|device| device.clone())
+                    .cloned()
                     .ok_or_else(|| {
                         DecoderError::abi_violation(
                             "D3D11 decoder received an invalid D3D11Device handle",
                         )
                     })?
             };
+            // SAFETY: The owned device reference is live for this read of its creation flags.
             let creation_flags = unsafe { device.GetCreationFlags() };
             if creation_flags & D3D11_CREATE_DEVICE_SINGLETHREADED.0 != 0 {
                 return Err(DecoderError::UnsupportedCapability {
@@ -458,6 +461,8 @@ mod platform {
             self.start_stream_if_needed_in_apartment(&apartment)?;
             let sample = create_input_sample(packet, data)?;
             let decoder = self.resolve_decoder(&apartment)?;
+            // SAFETY: The transform is resolved in this apartment. The input sample and its buffer
+            // remain live through ProcessInput on stream zero.
             match unsafe { decoder.ProcessInput(0, &sample, 0) } {
                 Ok(()) => Ok(DecoderPacketResult { accepted: true }),
                 Err(error) if error.code() == MF_E_NOTACCEPTING => {
@@ -474,6 +479,8 @@ mod platform {
             }
             self.start_stream_if_needed_in_apartment(&apartment)?;
             let decoder = self.resolve_decoder(&apartment)?;
+            // SAFETY: The transform is resolved in the current apartment. Neither end-of-stream
+            // notification takes a pointer payload.
             unsafe {
                 decoder
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
@@ -496,12 +503,18 @@ mod platform {
             let mut output = MFT_OUTPUT_DATA_BUFFER::default();
             let mut status = 0u32;
             let decoder = self.resolve_decoder(&apartment)?;
+            // SAFETY: ProcessOutput receives one initialized, writable output entry and status word.
+            // Both outlive the call on the apartment-local transform.
             match unsafe {
                 decoder.ProcessOutput(0, std::slice::from_mut(&mut output), &mut status)
             } {
                 Ok(()) => {
+                    // SAFETY: On success the entry owns its optional event collection. Take that COM
+                    // reference once so it is released on drop.
                     let _events = unsafe { ManuallyDrop::take(&mut output.pEvents) };
                     let sample =
+                        // SAFETY: The successful output entry transfers its optional sample reference.
+                        // The ManuallyDrop field is not read a second time.
                         unsafe { ManuallyDrop::take(&mut output.pSample) }.ok_or_else(|| {
                             DecoderError::internal(
                                 "D3D11 Media Foundation decoder returned no output sample",
@@ -556,6 +569,7 @@ mod platform {
             apartment: &ComApartmentScope,
         ) -> Result<(), DecoderError> {
             let decoder = self.resolve_decoder(apartment)?;
+            // SAFETY: The apartment-local transform is live and the flush command takes no payload.
             unsafe {
                 decoder
                     .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
@@ -596,6 +610,8 @@ mod platform {
                 return Ok(());
             }
             let decoder = self.resolve_decoder(apartment)?;
+            // SAFETY: These stream notifications take no payload and use the transform
+            // resolved for the calling apartment.
             unsafe {
                 decoder
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
@@ -615,6 +631,8 @@ mod platform {
             let output_type =
                 create_video_media_type(MFVideoFormat_NV12, self.width, self.height, None, true)?;
             let decoder = self.resolve_decoder(apartment)?;
+            // SAFETY: The local media type and apartment-local transform remain live
+            // through the stream-zero type negotiation.
             unsafe {
                 decoder
                     .SetOutputType(0, &output_type, 0)
@@ -636,15 +654,20 @@ mod platform {
             sample: IMFSample,
         ) -> Result<NativeFrame, DecoderError> {
             let pts_us =
+                // SAFETY: The sample owns a live IMFSample reference throughout this timestamp query.
                 unsafe { sample.GetSampleTime().ok() }.map(|value| value / HNS_PER_MICROSECOND);
             let duration_us =
+                // SAFETY: The same sample reference remains live for the duration query.
                 unsafe { sample.GetSampleDuration().ok() }.map(|value| value / HNS_PER_MICROSECOND);
+            // SAFETY: The sample is live. GetBufferByIndex reports a missing index via HRESULT.
             let buffer = unsafe { sample.GetBufferByIndex(0) }
                 .map_err(|error| mf_error("IMFSample::GetBufferByIndex", error))?;
             let dxgi_buffer: IMFDXGIBuffer = buffer
                 .cast()
                 .map_err(|error| mf_error("IMFMediaBuffer::cast<IMFDXGIBuffer>", error))?;
             let mut resource = ptr::null_mut();
+            // SAFETY: The DXGI buffer is live and the out-pointer is writable. The requested
+            // IID fixes the interface type returned on success.
             unsafe {
                 dxgi_buffer
                     .GetResource(&ID3D11Texture2D::IID, &mut resource)
@@ -655,6 +678,8 @@ mod platform {
                     "D3D11 Media Foundation decoder returned a null texture resource",
                 ));
             }
+            // SAFETY: GetResource succeeded for the texture IID and returned a non-null owned
+            // reference. from_raw takes that reference exactly once.
             let texture = unsafe { ID3D11Texture2D::from_raw(resource) };
             let handle = texture.as_raw() as usize;
             let frame_id = self.next_frame_id;
@@ -686,6 +711,8 @@ mod platform {
     fn ensure_media_foundation_started() -> Result<(), DecoderError> {
         static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
         STARTED
+            // SAFETY: OnceLock serializes startup. The caller has entered COM and the version
+            // and startup flags are Media Foundation constants.
             .get_or_init(|| unsafe { MFStartup(MF_VERSION, 0) }.map_err(|error| error.to_string()))
             .clone()
             .map_err(|message| DecoderError::internal(format!("MFStartup failed: {message}")))
@@ -705,6 +732,8 @@ mod platform {
         };
         let mut activates = ptr::null_mut::<Option<IMFActivate>>();
         let mut count = 0u32;
+        // SAFETY: Both type filters are initialized. The output pointer and count remain
+        // writable through the call and are consumed only on success.
         unsafe {
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_DECODER,
@@ -721,6 +750,8 @@ mod platform {
         }
 
         let mut selected = None;
+        // SAFETY: MFTEnumEx returned a non-null array of count interface entries. We have
+        // exclusive access until the matching CoTaskMemFree.
         let entries = unsafe { std::slice::from_raw_parts_mut(activates, count as usize) };
         for entry in entries.iter_mut() {
             if selected.is_none() {
@@ -729,14 +760,20 @@ mod platform {
                 let _ = entry.take();
             }
         }
+        // SAFETY: Each COM reference was taken out of the array. The slice is no longer used
+        // and the array is freed once with its matching allocator.
         unsafe { CoTaskMemFree(Some(activates.cast::<c_void>())) };
 
         let activate =
             selected.ok_or_else(|| DecoderError::internal("MFTEnumEx returned an empty entry"))?;
+        // SAFETY: The selected activation object owns a live reference. The requested IID
+        // determines the transform interface returned by ActivateObject.
         let decoder = unsafe { activate.ActivateObject::<IMFTransform>() }
             .map_err(|error| mf_error("IMFActivate::ActivateObject<IMFTransform>", error))?;
         let mut token = 0u32;
         let mut manager = None;
+        // SAFETY: The reset token and manager out-parameter are initialized and writable
+        // for the duration of the call.
         unsafe {
             MFCreateDXGIDeviceManager(&mut token, &mut manager)
                 .map_err(|error| mf_error("MFCreateDXGIDeviceManager", error))?;
@@ -747,6 +784,8 @@ mod platform {
         let unknown: IUnknown = device
             .cast()
             .map_err(|error| mf_error("ID3D11Device::cast<IUnknown>", error))?;
+        // SAFETY: The reset token came from this manager. The device and manager references
+        // remain live through ResetDevice and the transform message.
         unsafe {
             manager
                 .ResetDevice(&unknown, token)
@@ -773,12 +812,16 @@ mod platform {
             (!config.extradata.is_empty()).then_some(config.extradata.as_slice()),
             false,
         )?;
+        // SAFETY: The live transform borrows the initialized input type for this
+        // stream-zero configuration call.
         unsafe {
             decoder
                 .SetInputType(0, &input_type, 0)
                 .map_err(|error| mf_error("IMFTransform::SetInputType", error))?;
         }
         let output_type = create_video_media_type(MFVideoFormat_NV12, width, height, None, true)?;
+        // SAFETY: The live transform and initialized NV12 output type remain valid
+        // for this stream-zero configuration call.
         unsafe {
             decoder
                 .SetOutputType(0, &output_type, 0)
@@ -795,8 +838,11 @@ mod platform {
         all_samples_independent: bool,
     ) -> Result<IMFMediaType, DecoderError> {
         let media_type =
+            // SAFETY: Media Foundation has been started and returns an owned media-type interface.
             unsafe { MFCreateMediaType() }.map_err(|error| mf_error("MFCreateMediaType", error))?;
         let frame_size = (u64::from(width) << 32) | u64::from(height);
+        // SAFETY: The media type is owned here. All GUIDs and the optional sequence header
+        // remain valid while Media Foundation copies their attribute values.
         unsafe {
             media_type
                 .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -845,9 +891,12 @@ mod platform {
         let buffer_len = u32::try_from(data.len()).map_err(|_| {
             DecoderError::internal("D3D11 Media Foundation packet is too large for IMFMediaBuffer")
         })?;
+        // SAFETY: The checked u32 length describes the fresh buffer returned by Media Foundation.
         let buffer = unsafe { MFCreateMemoryBuffer(buffer_len) }
             .map_err(|error| mf_error("MFCreateMemoryBuffer", error))?;
         let mut destination = ptr::null_mut();
+        // SAFETY: The new buffer has capacity for data.len() bytes and cannot overlap data.
+        // A successful lock supplies the write pointer until the matching unlock.
         unsafe {
             buffer
                 .Lock(&mut destination, None, None)
@@ -863,7 +912,10 @@ mod platform {
                 .map_err(|error| mf_error("IMFMediaBuffer::SetCurrentLength", error))?;
         }
         let sample =
+            // SAFETY: Media Foundation is started and returns a new owned sample reference.
             unsafe { MFCreateSample() }.map_err(|error| mf_error("MFCreateSample", error))?;
+        // SAFETY: The sample and buffer references are live for AddBuffer. The timestamp and
+        // duration setters take scalar values.
         unsafe {
             sample
                 .AddBuffer(&buffer)

@@ -1098,6 +1098,9 @@ pub(crate) fn build_jni(
         command.arg("-t").arg(abi);
     }
     command.arg("build").arg("-p").arg("player-jni-android");
+    if env::var("VESPER_ANDROID_RTSP_BRIDGE").as_deref() == Ok("1") {
+        command.args(["--features", "rtsp-bridge"]);
+    }
     if profile == "release" {
         command.arg("--release");
     }

@@ -17,14 +17,12 @@ export async function runLiveChecks(surface: string): Promise<string> {
     if (!rejected) { throw new Error('Live numeric playback rate was accepted'); }
     await new Promise<void>((resolve) => { setTimeout(resolve, 8000); });
     if (controller.snapshot().state !== 'playing' || controller.snapshot().error !== undefined) { throw new Error('Rolling live did not remain in playing state'); }
-    if (controller.capabilities().runtimeApi >= 26) {
-      stage = 'live-ranges'; const ranges = await controller.timeRanges();
-      results.push(JSON.stringify({ liveRanges: ranges }));
-      stage = 'live-default-position';
-      let unsupported = false; try { await controller.seekToDefaultPosition(); } catch (error) { unsupported = `${error}`.includes('resource-loader route'); }
-      if (!unsupported || controller.snapshot().error !== undefined) { throw new Error('Unverified live default-position route must reject without poisoning playback'); }
-      results.push(JSON.stringify({ liveDefaultPosition: 'unsupported_resource_loader', nativeFailureEvidence: 5400102 }));
-    }
+    stage = 'live-ranges'; const ranges = await controller.timeRanges();
+    results.push(JSON.stringify({ liveRanges: ranges }));
+    stage = 'live-default-position';
+    let unsupported = false; try { await controller.seekToDefaultPosition(); } catch (error) { unsupported = `${error}`.includes('resource-loader route'); }
+    if (!unsupported || controller.snapshot().error !== undefined) { throw new Error('Unverified live default-position route must reject without poisoning playback'); }
+    results.push(JSON.stringify({ liveDefaultPosition: 'unsupported_resource_loader', nativeFailureEvidence: 5400102 }));
     results.push(JSON.stringify({ live: controller.snapshot() })); await controller.stop();
     stage = 'dash-audio-video-seek-control';
     const control = sources.register({ kind: 'remote', protocol: 'dash', uri: 'http://127.0.0.1:18765/dash/manifest.mpd', label: 'DASH A/V control', headers: { 'X-Vesper-Probe': 'h00' } });

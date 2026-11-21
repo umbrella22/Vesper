@@ -44,10 +44,8 @@ export async function runStreamObservation(context: common.UIAbilityContext, sur
           }
         }
         const final = controller.snapshot();
-        let ranges: string = 'API 26 required';
-        if (controller.capabilities().runtimeApi >= 26) {
-          try { ranges = JSON.stringify(await controller.timeRanges()); } catch (error) { ranges = `${error}`; }
-        }
+        let ranges: string;
+        try { ranges = JSON.stringify(await controller.timeRanges()); } catch (error) { ranges = `${error}`; }
         results.push(JSON.stringify({ test: test.name, terminal: terminal, elapsedMs: Date.now() - started, samples: samples,
           final: final, ranges: ranges, rate: final.playbackRate, requestedBitrate: requestedBitrate }));
       } finally { source.close(); await controller.stop().catch(() => {}); }

@@ -6299,6 +6299,7 @@ private class FakeBindings(
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge?,
     ): NativeBridgeStartup {
         lastInitializedSource = source
         lastSystemPlaybackUsesSourceNormalizerResource = systemPlaybackUsesSourceNormalizerResource
@@ -7047,6 +7048,7 @@ private class PreparedResourceOwningTestBindings(
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+        preparedRtspBridge: NativeRtspBridge?,
     ): NativeBridgeStartup {
         disposeOwnedPreparation()
         ownedPreparation = preparedSourceNormalizer

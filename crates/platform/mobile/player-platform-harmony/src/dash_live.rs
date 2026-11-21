@@ -1,4 +1,5 @@
 use player_dash_hls_bridge::{
+    DashHlsError,
     dash::{DashAdaptationKind, DashManifestType, DashRepresentation, parse_mpd_with_base_uri},
     hls::{build_hls_master_input_from_dash_manifest, build_hls_master_playlist},
     ops::{expand_template, template_segments},
@@ -39,6 +40,7 @@ struct Track {
 pub struct DashLive {
     identity: Option<(String, Option<String>)>,
     tracks: Vec<Track>,
+    target_durations: Option<[u64; 2]>,
 }
 
 fn unsupported() -> Value {
@@ -368,6 +370,7 @@ impl DashLive {
         let mut playlists = vec![json!({"uri":format!("{root}master.m3u8"), "text":master})];
         let mut resources = Vec::new();
         let mut sequences = Vec::new();
+        let mut targets = [0; 2];
         for (index, track) in ordered.iter().enumerate() {
             let name = if index == 0 { "video" } else { "audio" };
             let initialization = format!("{root}{name}/init.mp4");
@@ -381,18 +384,29 @@ impl DashLive {
                 .ok_or_else(unsupported)?
                 .timescale;
             let mut segments = Vec::new();
+            let mut longest = 1.0_f64;
             for segment in &track.segments {
                 let uri = format!("{root}{name}/segment-{}.m4s", segment.time);
-                segments.push(
-                    json!({"uri":uri,"duration":(segment.end-segment.time) as f64 / scale as f64}),
-                );
+                let duration = (segment.end - segment.time) as f64 / scale as f64;
+                longest = longest.max(duration);
+                segments.push(json!({"uri":uri,"duration":duration}));
                 resources.push(json!({"uri":uri,"upstreamUri":segment.upstream}));
             }
             let first_number = track.segments[0].number;
+            let target = self
+                .target_durations
+                .map_or_else(|| longest.ceil() as u64, |targets| targets[index]);
+            targets[index] = target;
             let request = json!({"operation":"build_external_media_playlist","map":{"uri":initialization},
-                "segments":segments,"playlistKind":"live","mediaSequence":first_number});
-            let result = player_dash_hls_bridge::ops::execute_json(&request.to_string())
-                .map_err(|_| unsupported())?;
+                "segments":segments,"playlistKind":"live","mediaSequence":first_number,"targetDuration":target});
+            let result = player_dash_hls_bridge::ops::execute_json(&request.to_string()).map_err(
+                |error| match error {
+                    DashHlsError::TargetDurationExceeded { .. } => {
+                        failure("resource_changed", &error.to_string())
+                    }
+                    _ => unsupported(),
+                },
+            )?;
             let playlist: String = serde_json::from_str(&result).map_err(|_| unsupported())?;
             playlists.push(json!({"uri":format!("{root}{name}.m3u8"),"text":playlist}));
             sequences.push(first_number.to_string());
@@ -403,6 +417,7 @@ impl DashLive {
         }
         self.identity = Some(identity);
         self.tracks = ordered;
+        self.target_durations = Some(targets);
         Ok(output)
     }
 }

@@ -80,24 +80,17 @@ export async function runTrackSystemChecks(context: common.UIAbilityContext, sur
       if (JSON.stringify(controller.snapshot().nativeBuffering) !== JSON.stringify(nativeBuffering)) { throw new Error('Deferred policy changed active buffer diagnostics'); }
       results.push(JSON.stringify({ nativeBuffering: nativeBuffering, nextActivationBuffering: deferredBuffer }));
       await until(() => controller.snapshot().availableBitrates.filter((value) => value > 0).length >= 2);
-      if (controller.capabilities().runtimeApi >= 26) {
-        stage = 'hls-resolution-filter';
-        const before = controller.snapshot();
-        const requested: VesperTrackConstraints = { minVideoResolution: { width: 160, height: 90 }, maxVideoResolution: { width: 160, height: 90 },
-          preferredAudioLanguages: ['en'], preferredSubtitleLanguages: [] };
-        const accepted = await controller.setTrackConstraints(requested);
-        if (accepted.maxVideoResolution?.width !== 160 || accepted.maxVideoResolution.height !== 90
-          || accepted.minVideoResolution?.width !== 160 || accepted.minVideoResolution.height !== 90
-          || accepted.preferredAudioLanguages?.[0] !== 'en') { throw new Error('Native resolution/language filter readback differs from request'); }
-        await until(() => controller.snapshot().width === 160 && controller.snapshot().height === 90, 45000);
-        results.push(JSON.stringify({ resolutionFilter: 'accepted', requested: requested, accepted: accepted, before: before, observed: controller.snapshot() }));
-        await controller.setTrackConstraints({});
-      } else {
-        let rejected = false;
-        try { await controller.setTrackConstraints({ maxVideoResolution: { width: 160, height: 90 }, preferredAudioLanguages: ['en'] }); }
-        catch (error) { rejected = `${error}`.includes('API 26'); }
-        if (!rejected) { throw new Error('API 20 reached resolution/language filters'); }
-      }
+      stage = 'hls-resolution-filter';
+      const before = controller.snapshot();
+      const requested: VesperTrackConstraints = { minVideoResolution: { width: 160, height: 90 }, maxVideoResolution: { width: 160, height: 90 },
+        preferredAudioLanguages: ['en'], preferredSubtitleLanguages: [] };
+      const accepted = await controller.setTrackConstraints(requested);
+      if (accepted.maxVideoResolution?.width !== 160 || accepted.maxVideoResolution.height !== 90
+        || accepted.minVideoResolution?.width !== 160 || accepted.minVideoResolution.height !== 90
+        || accepted.preferredAudioLanguages?.[0] !== 'en') { throw new Error('Native resolution/language filter readback differs from request'); }
+      await until(() => controller.snapshot().width === 160 && controller.snapshot().height === 90, 45000);
+      results.push(JSON.stringify({ resolutionFilter: 'accepted', requested: requested, accepted: accepted, before: before, observed: controller.snapshot() }));
+      await controller.setTrackConstraints({});
       stage = 'hls-bitrate-selection';
       const bitrate = Math.min(...controller.snapshot().availableBitrates.filter((value) => value > 0));
       await controller.selectTrack({ kind: 'video', mode: 'bitrate', bitrate: bitrate });
@@ -112,22 +105,16 @@ export async function runTrackSystemChecks(context: common.UIAbilityContext, sur
     try { await controller.activate(systemSource, { timeoutMs: 10000 }); } finally { systemSource.close(); }
     if (controller.snapshot().nativeBuffering?.submitted?.preferredBufferDurationMs !== 5000
       || controller.snapshot().trackConstraints !== undefined) { throw new Error('New activation did not apply deferred buffering or clear epoch-local track filters'); }
-    stage = 'api-boundary';
+    stage = 'native-options';
     const policy = await controller.setPlaybackPolicy({ buffering: { minBufferMs: 1000 }, retry: { maxAttempts: 2 }, decoder: 'hardwareOnly' });
     if (policy.parameters.filter((item) => item.status === 'unsupported').length !== 2) { throw new Error('Policy unsupported results were lost'); }
     results.push(JSON.stringify({ policy: policy }));
     const capabilities = controller.capabilities();
-    if (capabilities.runtimeApi >= 26) {
-      const effective = await controller.setTrackConstraints({ maxVideoBitrate: 2000000 });
-      const ranges = await controller.timeRanges();
-      await controller.seekToDefaultPosition();
-      await controller.setTrackConstraints({});
-      results.push(JSON.stringify({ capabilities: capabilities, effective: effective, ranges: ranges }));
-    } else {
-      let rejected = false; try { await controller.setTrackConstraints({ maxVideoBitrate: 2000000 }); } catch (error) { rejected = `${error}`.includes('API 26'); }
-      if (!rejected) { throw new Error('API 20 reached an advanced operation'); }
-      results.push(JSON.stringify({ capabilities: capabilities, advancedOperation: 'unsupported' }));
-    }
+    const effective = await controller.setTrackConstraints({ maxVideoBitrate: 2000000 });
+    const ranges = await controller.timeRanges();
+    await controller.seekToDefaultPosition();
+    await controller.setTrackConstraints({});
+    results.push(JSON.stringify({ capabilities: capabilities, effective: effective, ranges: ranges }));
     stage = 'system-create';
     system = await VesperSystemSession.create(context, controller, { bundleName: 'dev.vesper.harmony.kitconsumer',
       abilityName: 'EntryAbility', title: 'Vesper integration fixture', backgroundAudio: true });

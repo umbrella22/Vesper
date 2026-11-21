@@ -835,6 +835,8 @@ bool vesper_ios_native_frame_pipeline_seek(
 
 void vesper_ios_native_frame_pipeline_close(uint64_t handle);
 
+char * vesper_rtsp_command(const char *request_json);
+
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,

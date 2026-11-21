@@ -1,5 +1,5 @@
 import { VesperPlayerSnapshot } from './Types';
-import { VesperHarmonyCapabilities, VesperTimeRanges } from './Platform';
+import { VesperTimeRanges } from './Platform';
 
 export interface VesperOperationAvailability { status: string; reason: string; }
 export interface VesperPlaybackView {
@@ -12,9 +12,8 @@ export interface VesperPlaybackView {
   ranges?: VesperTimeRanges;
 }
 
-/** Platform availability and source applicability remain separate observations. */
-export function resolvePlaybackView(snapshot: VesperPlayerSnapshot, platform: VesperHarmonyCapabilities,
-  protocol: string): VesperPlaybackView {
+/** Operation availability for the current playback epoch and source. */
+export function resolvePlaybackView(snapshot: VesperPlayerSnapshot, protocol: string): VesperPlaybackView {
   const ready = !snapshot.disposed && ['prepared', 'playing', 'paused', 'completed'].includes(snapshot.state);
   const available = (supported: boolean, reason: string): VesperOperationAvailability =>
     !ready ? { status: 'temporarilyUnavailable', reason: snapshot.disposed ? 'disposed' : 'playerNotReady' } :
@@ -26,9 +25,7 @@ export function resolvePlaybackView(snapshot: VesperPlayerSnapshot, platform: Ve
     seek: available(vod && Number.isFinite(snapshot.durationMs) && (snapshot.durationMs ?? 0) > 0, vod ? 'durationUnknown' : 'timelineNotSeekable'),
     rate: available(vod, 'numericRateRequiresVod'), videoTracks: catalog('video'), audioTracks: catalog('audio'),
     subtitles: catalog('subtitle'), adaptiveBitrate: available(snapshot.availableBitrates.length > 0, 'noNativeBitrateCatalog'),
-    timeRanges: platform.timeRanges ? available(true, '') : { status: 'unsupported', reason: 'requiresApi26' },
-    trackConstraints: !platform.advancedTrackConstraints ? { status: 'unsupported', reason: 'requiresApi26' } :
-      available(protocol === 'hls', 'filterApplicabilityUnverified'),
+    timeRanges: available(true, ''), trackConstraints: available(protocol === 'hls', 'filterApplicabilityUnverified'),
     buffering: snapshot.buffering, nativeBufferingPercent: snapshot.bufferingPercent,
     cachedDurationMs: snapshot.cachedDurationMs, ranges: snapshot.timeRanges };
 }

@@ -10534,7 +10534,8 @@ fn ios_stage_release_classifies_missing_crashed_and_unbounded_tools() {
         .expect("run iOS release staging with unbounded ditto output");
     assert_eq!(unbounded.status.code(), Some(6));
     assert!(unbounded.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&unbounded.stderr).contains("exceeds"));
+    let stderr = String::from_utf8_lossy(&unbounded.stderr);
+    assert!(stderr.contains("exceeds"), "{stderr}");
     assert_eq!(
         fs::read(&previous).expect("read preserved output"),
         b"previous\n"
@@ -11264,7 +11265,8 @@ fn ios_app_store_layout_classifies_missing_and_failed_apple_tools() {
         .output()
         .expect("verify app with oversized Apple tool output");
     assert_eq!(oversized.status.code(), Some(6));
-    assert!(String::from_utf8_lossy(&oversized.stderr).contains("stdout exceeds 1048576 bytes"));
+    let stderr = String::from_utf8_lossy(&oversized.stderr);
+    assert!(stderr.contains("stdout exceeds 1048576 bytes"), "{stderr}");
 
     write_executable_script(&tools.join("plutil"), "#!/bin/sh\nkill -SEGV $$\n");
     let crashed = ios_app_store_command(&root, &app, &tools)
@@ -16194,10 +16196,30 @@ fn desktop_remux_verification_preserves_override_and_ci_skip_semantics() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn desktop_ensure_ffmpeg_uses_an_existing_repository_install_without_shell_workers() {
+fn desktop_ensure_ffmpeg_refreshes_source_before_reusing_an_existing_install() {
+    use sha2::{Digest, Sha256};
+
     let directory = tempfile::tempdir().expect("temporary desktop FFmpeg fixture");
     let root = directory.path();
     fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write desktop manifest");
+    let scripts = root.join("scripts");
+    let cache = root.join("third_party/_cache");
+    fs::create_dir_all(&scripts).expect("create scripts directory");
+    fs::create_dir_all(&cache).expect("create source cache");
+    let source_bytes = b"cached source archive";
+    let source_sha256 = hex::encode(Sha256::digest(source_bytes));
+    fs::write(cache.join("ffmpeg-8.1.2.tar.xz"), source_bytes).expect("cache source");
+    fs::write(
+        scripts.join("ffmpeg-source-policy.toml"),
+        format!(
+            "schema_version = 1\n[compatibility]\nrequirement = \">=8.1.0, <8.2.0\"\ndefault_series = \"8.1\"\n[release]\nversion = \"8.1.2\"\nsource_url = \"https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz\"\nsource_sha256 = \"{source_sha256}\"\n"
+        ),
+    )
+    .expect("write source policy");
+    let index = root.join("release-index");
+    fs::write(&index, "ffmpeg-8.1.2.tar.xz").expect("write release index");
+    let curl = root.join("curl");
+    write_executable_script(&curl, "#!/bin/sh\n/bin/cat \"$VESPER_TEST_FFMPEG_INDEX\"\n");
     let install = root.join("third_party/ffmpeg/desktop");
     for component in [
         "avcodec",
@@ -16215,11 +16237,34 @@ fn desktop_ensure_ffmpeg_uses_an_existing_repository_install_without_shell_worke
             .expect("write desktop FFmpeg static archive");
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["desktop", "ensure-ffmpeg", "--root"])
-        .arg(root)
-        .output()
-        .expect("run desktop FFmpeg worker");
+    fs::write(
+        install.join("vesper-ffmpeg-source.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "version": "8.1.2",
+            "source_url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+            "source_sha256": source_sha256,
+        }))
+        .expect("encode source receipt"),
+    )
+    .expect("write source receipt");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_vesper"))
+            .env("CURL", &curl)
+            .env("VESPER_TEST_FFMPEG_INDEX", &index)
+            .env("VESPER_THIRD_PARTY_SOURCE_CACHE_DIR", &cache)
+            .env_remove("VESPER_FFMPEG_VERSION")
+            .env_remove("VESPER_DESKTOP_FFMPEG_VERSION")
+            .env_remove("VESPER_FFMPEG_SERIES")
+            .env_remove("VESPER_DESKTOP_FFMPEG_SERIES")
+            .env_remove("VESPER_FFMPEG_SOURCE_SHA256")
+            .env_remove("VESPER_DESKTOP_FFMPEG_SOURCE_SHA256")
+            .args(["desktop", "ensure-ffmpeg", "--root"])
+            .arg(root)
+            .output()
+            .expect("run desktop FFmpeg worker")
+    };
+    let output = run();
 
     assert_eq!(
         output.status.code(),
@@ -16236,6 +16281,22 @@ fn desktop_ensure_ffmpeg_uses_an_existing_repository_install_without_shell_worke
         format!("{}\n", canonical_install.display())
     );
     assert!(!root.join("scripts/desktop/ensure-ffmpeg.sh").exists());
+
+    fs::write(&index, "ffmpeg-8.1.2.tar.xz ffmpeg-8.1.3.tar.xz")
+        .expect("publish a newer fixture patch");
+    fs::write(
+        cache.join("ffmpeg-8.1.3.tar.xz"),
+        b"invalid replacement archive",
+    )
+    .expect("cache invalid new source");
+    let output = run();
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid FFmpeg source archive"), "{stderr}");
+    assert_eq!(
+        fs::read(install.join("lib/libavcodec.a")).expect("read retained install"),
+        b"archive\n"
+    );
 }
 
 #[cfg(not(target_os = "macos"))]

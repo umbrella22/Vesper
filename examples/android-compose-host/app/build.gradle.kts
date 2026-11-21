@@ -128,8 +128,8 @@ extensions.configure<ApplicationExtension>("android") {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 901
-        versionName = "0.9.1"
+        versionCode = 1000
+        versionName = "0.10.0"
 
         ndk {
             abiFilters += configuredAndroidAbis
@@ -196,6 +196,7 @@ dependencies {
     implementation(project.dependencies.project(":vesper-player-kit-performance-diagnostics"))
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.media3:media3-exoplayer-rtsp:1.11.1")
 }
 
 val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemuxFfmpegAndroidPlugin") {

@@ -55,6 +55,43 @@ final class VesperDashSupportedRouteRegressionTests: XCTestCase {
         try healthRequire(client.mediaRequestCount == 1, "native redirect must bypass old private media result")
     }
 
+    func testDynamicPlaylistKeepsItsTargetAndRejectsAnOversizedRefresh() async throws {
+        let client = HealthDashClient(dynamic: true)
+        let session = VesperDashSession(
+            sourceURL: client.manifestURL,
+            networkClient: client,
+            videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider
+        )
+        let initial = try await session.loadManifest()
+        let selected = try await session.selectedPlayableRepresentations(manifest: initial, variantPolicy: .all)
+        let rendition = try healthUnwrap(selected.video.first?.renditionId)
+        let url = session.mediaPlaylistURL(for: rendition)
+        let first = try await session.mediaPlaylistData(renditionId: rendition)
+        let firstPlaylist = String(decoding: first, as: UTF8.self)
+        try healthRequire(firstPlaylist.contains("#EXT-X-TARGETDURATION:2\n"), "first window must publish target 2")
+
+        client.advanceManifest()
+        client.setLiveTailDuration(2_500)
+        await session.healthExpireManifest()
+        do {
+            _ = try await session.mediaPlaylistData(renditionId: rendition)
+            throw HealthProbeFailure(message: "oversized window was published")
+        } catch let error as VesperDashBridgeError {
+            try healthRequire(error.localizedDescription.contains("target duration"), "expected a target duration error")
+        }
+        let retainedManifest = await session.manifest
+        let retainedPlaylist = await session.mediaPlaylistCacheByRenditionId[rendition]
+        try healthRequire(retainedManifest == initial && retainedPlaylist == first, "invalid refresh must preserve the published window")
+
+        client.setLiveTailDuration(2_250)
+        let newData = try await session.mediaPlaylistData(renditionId: rendition)
+        let next = String(decoding: newData, as: UTF8.self)
+        try healthRequire(url == session.mediaPlaylistURL(for: rendition), "rendition URI must stay stable")
+        try healthRequire(next.contains("#EXT-X-MEDIA-SEQUENCE:102\n"), "media sequence must advance")
+        try healthRequire(next.contains("#EXT-X-TARGETDURATION:2\n"), "reload must keep the advertised target")
+        try healthRequire(next.contains("#EXTINF:2.250,"), "a fitting variable-duration segment must be published")
+    }
+
     func testDirectNetworkRequestCancellationStopsURLSessionTask() async throws {
         HealthStalledProtocol.reset()
         let client = HealthCancellationClient()
@@ -126,6 +163,7 @@ private final class HealthDashClient: VesperDashNetworkClient {
     private let dynamic: Bool
     private let lock = NSLock()
     private var generation = 0
+    private var liveTailDuration: Int?
     private var manifestRequests = 0
     private var mediaRequests = 0
     private var gated: Bool
@@ -142,6 +180,7 @@ private final class HealthDashClient: VesperDashNetworkClient {
     var manifestRequestCount: Int { locked { manifestRequests } }
     var mediaRequestCount: Int { locked { mediaRequests } }
     func advanceManifest() { locked { generation += 1 } }
+    func setLiveTailDuration(_ duration: Int) { locked { liveTailDuration = duration } }
     func releaseMedia() {
         let waiting = locked { () -> [CheckedContinuation<Void, Never>] in
             gated = false
@@ -150,11 +189,15 @@ private final class HealthDashClient: VesperDashNetworkClient {
         waiting.forEach { $0.resume() }
     }
     override func manifestData(for url: URL) async throws -> (Data, URL) {
-        let generation = locked { manifestRequests += 1; return self.generation }
+        let (generation, tail) = locked {
+            manifestRequests += 1
+            return (self.generation, liveTailDuration)
+        }
+        let timeline = tail.map { "r=\"1\"/><S d=\"\($0)\"/>" } ?? "r=\"2\"/>"
         let template = dynamic
             ? """
               <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="$RepresentationID$-$Time$.m4s" startNumber="\(101 + generation)">
-                <SegmentTimeline><S t="\(200000 + 2000 * generation)" d="2000" r="2"/></SegmentTimeline>
+                <SegmentTimeline><S t="\(200000 + 2000 * generation)" d="2000" \(timeline)</SegmentTimeline>
               </SegmentTemplate>
               """
             : """
@@ -223,6 +266,8 @@ private struct HealthProbeMain {
         print("PASS S21: A/V prefetch init+2; private hit; HTTPS redirect retained; SDK redirect fetches=0")
         try await test.testDynamicTemplateRefreshWhileOldPrefetchCompletesPreservesNativeRoute()
         print("PASS S22: old worker -> refresh -> native number/time URL -> old completion; current redirect unchanged")
+        try await test.testDynamicPlaylistKeepsItsTargetAndRejectsAnOversizedRefresh()
+        print("PASS Live DASH target duration stays fixed across accepted and rejected refreshes")
         try await test.testDirectNetworkRequestCancellationStopsURLSessionTask()
         print("PASS S23: URLSession request cancellation reports cancelled and invokes stopLoading")
         try await test.testFinitePrefetchReleasesSessionAndRemovesPrivateCacheAfterOwnerRelease()

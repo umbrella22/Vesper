@@ -25,7 +25,7 @@ homepage = "https://github.com/umbrella22/Vesper"
 license = "Apache-2.0"
 repository = "https://github.com/umbrella22/Vesper"
 rust-version = "1.99.0"
-version = "0.9.1"
+version = "0.10.0"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
@@ -73,7 +73,7 @@ zip = { version = "9.5.1", default-features = false }
 xz2 = "0.1.7"
 x509-parser = "0.18.1"
 wgpu = "30.0.2"
-winit = "0.30.13"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-crossfont"] }
 
 [profile.release]
 codegen-units = 1

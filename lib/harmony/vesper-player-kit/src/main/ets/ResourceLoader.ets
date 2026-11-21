@@ -14,7 +14,6 @@ export interface ResourceProvider {
   inventory?(): string;
 }
 export interface ResourceSnapshot { info: ResourceInfo; bytes: ArrayBuffer; }
-interface PrimedHeader { info: ResourceInfo; bytes: ArrayBuffer; }
 
 /** A local adaptive asset has no network fallback, including absolute child URLs. */
 export class FileResourceProvider implements ResourceProvider {
@@ -63,7 +62,6 @@ export class NetworkResourceProvider implements ResourceProvider {
   timeline: string = 'unknown';
   private versions: Map<string, ResourceInfo> = new Map();
   // Source-local initialization/SIDX retention: at most sixteen 64 KiB prefixes.
-  private primed: Map<string, PrimedHeader> = new Map();
   constructor(transport: Transport, cache: StartupCache, headers: Record<string, string>, sourceUri: string) {
     this.transport = transport; this.cache = cache; this.headers = headers; this.origin = new url.URL(sourceUri).origin;
   }
@@ -97,7 +95,6 @@ export class NetworkResourceProvider implements ResourceProvider {
   }
   async metadata(uri: string, cancellation: VesperCancellationToken): Promise<ResourceInfo> {
     this.validateScope(uri);
-    const primed = this.primed.get(uri); if (primed !== undefined) { return this.remember(uri, primed.info); }
     const memory = this.cache.metadata(uri); if (memory !== undefined) { return this.remember(uri, memory); }
     const cached = this.diskEligible(uri) ? await this.cache.diskMetadata(uri).catch(() => undefined) : undefined;
     if (cached !== undefined && this.diskEligible(uri, cached)) { return this.remember(uri, cached); }
@@ -110,11 +107,6 @@ export class NetworkResourceProvider implements ResourceProvider {
   }
   async read(uri: string, range: ByteRange, cancellation: VesperCancellationToken): Promise<ArrayBuffer> {
     this.validateScope(uri);
-    const primed = this.primed.get(uri);
-    if (primed !== undefined && range.start < primed.bytes.byteLength) {
-      const bytes = primed.bytes.slice(range.start, Math.min(range.end + 1, primed.bytes.byteLength));
-      this.cacheBytes += bytes.byteLength; return bytes;
-    }
     const cached = this.cache.read(uri, range.start, range.end - range.start + 1);
     if (cached !== undefined) { this.cacheBytes += cached.byteLength; return cached; }
     const version = this.versions.get(uri);
@@ -136,26 +128,6 @@ export class NetworkResourceProvider implements ResourceProvider {
         contentType: response.contentType, etag: response.etag }).catch(() => {});
     }
     return response.bytes;
-  }
-  async prime(uri: string, maximum: number, cancellation: VesperCancellationToken): Promise<void> {
-    this.validateScope(uri);
-    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 65536) {
-      throw new VesperPlayerError('invalid_argument', 'Audio initialization/SIDX prefix exceeds 64 KiB');
-    }
-    if (cancellation.isCancelled) { throw new VesperPlayerError('cancelled', 'Audio header preparation was cancelled'); }
-    const ready = this.primed.get(uri); if (ready !== undefined && ready.bytes.byteLength >= maximum) { return; }
-    const info = await this.metadata(uri, cancellation);
-    const output = new Uint8Array(Math.min(maximum, info.totalBytes)); let offset = 0;
-    while (offset < output.byteLength) {
-      const bytes = await this.read(uri, { start: offset, end: output.byteLength - 1 }, cancellation);
-      if (cancellation.isCancelled) { throw new VesperPlayerError('cancelled', 'Audio header preparation was cancelled'); }
-      if (bytes.byteLength < 1 || bytes.byteLength > output.byteLength - offset) {
-        throw new VesperPlayerError('invalid_response', 'Audio initialization/SIDX ended unexpectedly');
-      }
-      output.set(new Uint8Array(bytes), offset); offset += bytes.byteLength;
-    }
-    if (this.primed.size >= 16 && !this.primed.has(uri)) { this.primed.delete(Array.from(this.primed.keys())[0]); }
-    this.primed.set(uri, { info: info, bytes: output.buffer as ArrayBuffer });
   }
 }
 

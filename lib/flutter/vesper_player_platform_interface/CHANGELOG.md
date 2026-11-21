@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-21
+
 ## 0.9.1 - 2026-10-12
 
 - Align the platform-interface package version with the 0.9.1 SDK.

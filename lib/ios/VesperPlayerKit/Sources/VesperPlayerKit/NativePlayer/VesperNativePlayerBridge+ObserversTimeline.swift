@@ -489,6 +489,7 @@ extension VesperNativePlayerBridge {
         durationMs: Int64?,
         seekableRange: SeekableRangeUi?
     ) -> TimelineKindUi {
+        if currentSource?.protocol == .rtsp { return .live }
         guard currentSourceIsConfirmedLive == true else {
             return .vod
         }

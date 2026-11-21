@@ -117,17 +117,24 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
         return
     }
     var ownedPreparation: NativeSourceLoadPreparation? = null
+    var ownedRtspBridge: NativeRtspBridge? = null
     try {
         val preparation =
             try {
                 // Keep ownership outside the dispatcher boundary: prompt cancellation
                 // can discard a returned value before the caller receives it.
                 withContext<Unit>(sourceLoadDispatcher) {
+                    if (source.protocol == VesperPlayerSourceProtocol.Rtsp &&
+                        nativeFrameDecision != NativeFramePipelineRoute.SdkManaged
+                    ) {
+                        ownedRtspBridge = NativeRtspBridge.open(source)
+                        ownedRtspBridge.awaitReady()
+                    }
                     ownedPreparation = NativeSourceLoadPreparation(
                         pluginDiagnostics = probeMobilePluginsForSource(source),
                         sourceNormalizer = bindings.prepareSourceNormalizerForPlayback(
                             source,
-                            enabled = nativeFrameDecision != NativeFramePipelineRoute.SdkManaged,
+                            enabled = nativeFrameDecision != NativeFramePipelineRoute.SdkManaged && ownedRtspBridge == null,
                         ),
                     )
                     currentCoroutineContext().ensureActive()
@@ -154,13 +161,15 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
             }
         if (!isCurrentSourceLoad(epoch)) return
         runOnMainForSourceLoad {
-            applyPreparedSourceLoadOnMain(epoch, source, nativeFrameDecision, preparation) {
+            applyPreparedSourceLoadOnMain(epoch, source, nativeFrameDecision, preparation, ownedRtspBridge) {
                 // The bindings own success and failure cleanup once initialize starts,
                 // even if cancellation prevents delivery of this main-thread result.
                 ownedPreparation = null
+                ownedRtspBridge = null
             }
         }
     } finally {
+        ownedRtspBridge?.close()
         ownedPreparation?.let {
             disposePreparedSourceNormalizerOnBackground(it.sourceNormalizer)
         }
@@ -336,6 +345,7 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
     source: VesperPlayerSource,
     nativeFrameDecision: NativeFramePipelineRoute,
     preparation: NativeSourceLoadPreparation,
+    rtspBridge: NativeRtspBridge?,
     onPreparationConsumed: () -> Unit,
 ) {
     if (!isCurrentSourceLoad(epoch) || currentSource != source) {
@@ -353,6 +363,7 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
             systemPlaybackVideoEnabled =
                 nativeFrameDecision != NativeFramePipelineRoute.SdkManaged,
             preparedSourceNormalizer = preparation.sourceNormalizer,
+            preparedRtspBridge = rtspBridge,
         )
     }
         .onSuccess {

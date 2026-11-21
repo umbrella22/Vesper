@@ -171,6 +171,7 @@ extension VesperNativePlayerBridge {
             return .waiting
         }
 
+        if source.protocol == .rtsp { return .ready(.live, isConfirmedLive: true) }
         let durationMs = item.duration.finiteMilliseconds
         let seekableRange = currentSeekableRange(item: item, durationMs: durationMs)
         let isConfirmedLive = await confirmedLiveEvidence(for: source, item: item)

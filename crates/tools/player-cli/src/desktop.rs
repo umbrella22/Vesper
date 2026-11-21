@@ -112,6 +112,20 @@ const DESKTOP_REQUIRED_COMPONENTS: [&str; 6] = [
     "swresample",
     "swscale",
 ];
+#[cfg(target_os = "macos")]
+const DESKTOP_SOURCE_RECEIPT: &str = "vesper-ffmpeg-source.json";
+#[cfg(target_os = "macos")]
+const DESKTOP_SOURCE_RECEIPT_LIMIT: u64 = 64 * 1024;
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesktopFfmpegSourceReceipt {
+    schema_version: u32,
+    version: String,
+    source_url: String,
+    source_sha256: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopErrorKind {
@@ -243,14 +257,25 @@ pub fn ensure_ffmpeg(root: &Path) -> Result<(), DesktopError> {
 #[cfg(target_os = "macos")]
 fn ensure_ffmpeg_macos(root: &Path) -> Result<(), DesktopError> {
     let install_directory = desktop_ffmpeg_install_directory(root);
-    if desktop_install_complete(&install_directory)? {
+    let source = ffmpeg::resolve_desktop_source(root).map_err(map_ffmpeg_error)?;
+    let archive = desktop_source_archive(root, &source)?;
+    let receipt = DesktopFfmpegSourceReceipt {
+        schema_version: 1,
+        version: source.version.clone(),
+        source_url: source.source_url.clone(),
+        source_sha256: crate::source_archive::sha256_file(
+            &archive,
+            DESKTOP_SOURCE_ARCHIVE_LIMIT,
+            "desktop FFmpeg source archive",
+        )
+        .map_err(map_source_archive_error)?,
+    };
+    if desktop_install_matches_source(&install_directory, &receipt)? {
         warn_if_desktop_install_is_hidden(&install_directory);
         println!("{}", install_directory.display());
         return Ok(());
     }
 
-    let source = ffmpeg::resolve_desktop_source(root).map_err(map_ffmpeg_error)?;
-    let archive = desktop_source_archive(root, &source)?;
     let extraction = tempfile::Builder::new()
         .prefix("vesper-desktop-ffmpeg-source-")
         .tempdir()
@@ -343,6 +368,16 @@ fn ensure_ffmpeg_macos(root: &Path) -> Result<(), DesktopError> {
     })?;
     let staged_install = install_stage.path().join(staged_relative);
     require_complete_desktop_install(&staged_install)?;
+    let receipt_bytes = serde_json::to_vec(&receipt).map_err(|error| {
+        DesktopError::worker(format!(
+            "failed to encode desktop FFmpeg source receipt: {error}"
+        ))
+    })?;
+    fs::write(staged_install.join(DESKTOP_SOURCE_RECEIPT), receipt_bytes).map_err(|error| {
+        DesktopError::storage(format!(
+            "failed to write desktop FFmpeg source receipt: {error}"
+        ))
+    })?;
     publish_desktop_install_deferred(&staged_install, &install_directory)?;
     warn_if_desktop_install_is_hidden(&install_directory);
     println!("{}", install_directory.display());
@@ -494,6 +529,42 @@ fn desktop_install_complete(root: &Path) -> Result<bool, DesktopError> {
         }
     }
     Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn desktop_install_matches_source(
+    root: &Path,
+    expected: &DesktopFfmpegSourceReceipt,
+) -> Result<bool, DesktopError> {
+    if !desktop_install_complete(root)? {
+        return Ok(false);
+    }
+    let receipt_path = root.join(DESKTOP_SOURCE_RECEIPT);
+    if !regular_nonempty_bounded_file(&receipt_path, DESKTOP_SOURCE_RECEIPT_LIMIT)? {
+        return Ok(false);
+    }
+    let file = match fs::File::open(&receipt_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(DesktopError::storage(format!(
+                "failed to open desktop FFmpeg source receipt: {error}"
+            )));
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(DESKTOP_SOURCE_RECEIPT_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            DesktopError::storage(format!(
+                "failed to read desktop FFmpeg source receipt: {error}"
+            ))
+        })?;
+    if bytes.len() as u64 > DESKTOP_SOURCE_RECEIPT_LIMIT {
+        return Ok(false);
+    }
+    Ok(serde_json::from_slice::<DesktopFfmpegSourceReceipt>(&bytes)
+        .is_ok_and(|actual| actual == *expected))
 }
 
 #[cfg(target_os = "macos")]
@@ -2264,6 +2335,39 @@ mod tests {
         assert!(desktop_install_complete(&root).expect("inspect complete install"));
         fs::remove_file(root.join("lib/libavfilter.a")).expect("remove required archive");
         assert!(!desktop_install_complete(&root).expect("inspect incomplete archive set"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_install_reuse_requires_the_resolved_source_identity() {
+        let directory = tempfile::tempdir().expect("create desktop install fixture");
+        let root = directory.path();
+        write_complete_desktop_install(root);
+        let mut expected = DesktopFfmpegSourceReceipt {
+            schema_version: 1,
+            version: "8.1.2".to_owned(),
+            source_url: "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz".to_owned(),
+            source_sha256: "a".repeat(64),
+        };
+        assert!(!desktop_install_matches_source(root, &expected).expect("missing receipt"));
+        let receipt = root.join(DESKTOP_SOURCE_RECEIPT);
+        fs::write(
+            &receipt,
+            serde_json::to_vec_pretty(&expected).expect("encode receipt"),
+        )
+        .expect("write source receipt");
+        assert!(desktop_install_matches_source(root, &expected).expect("matching receipt"));
+
+        expected.version = "8.1.3".to_owned();
+        assert!(!desktop_install_matches_source(root, &expected).expect("new patch"));
+        expected.version = "8.1.2".to_owned();
+        expected.source_sha256 = "b".repeat(64);
+        assert!(!desktop_install_matches_source(root, &expected).expect("changed source bytes"));
+        expected.source_sha256 = "a".repeat(64);
+        expected.source_url = "https://mirror.example/ffmpeg-8.1.2.tar.xz".to_owned();
+        assert!(!desktop_install_matches_source(root, &expected).expect("changed source URL"));
+        fs::write(&receipt, b"invalid receipt").expect("write malformed receipt");
+        assert!(!desktop_install_matches_source(root, &expected).expect("malformed receipt"));
     }
 
     #[cfg(target_os = "macos")]

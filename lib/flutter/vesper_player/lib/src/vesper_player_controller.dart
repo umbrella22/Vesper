@@ -557,9 +557,7 @@ class VesperPlayerController {
     try {
       await operation();
     } catch (error, stackTrace) {
-      if (!_isObsoleteCommandError(error)) {
-        _publishSyntheticError(error, stackTrace);
-      }
+      _publishSyntheticError(error, stackTrace);
       rethrow;
     }
   }
@@ -588,45 +586,74 @@ class VesperPlayerController {
   }
 
   void _publishSyntheticError(Object error, StackTrace stackTrace) {
-    if (_disposed || _eventsController.isClosed) {
+    if (_disposed ||
+        _eventsController.isClosed ||
+        _isObsoleteCommandError(error)) {
       return;
     }
 
     _advanceTimelineRevision();
     _resetProgressRefreshBackoff();
 
-    final vesperError = error is VesperSubtitleException
-        ? VesperPlayerError(
-            message: error.message,
-            code: VesperPlayerErrorCode.invalidState,
-            category: VesperPlayerErrorCategory.capability,
-            retriable: error.retriable,
-            details: <String, Object?>{
-              'domain': 'subtitle',
-              'code': error.code,
-              'phase': error.phase.name,
-              'phaseRawValue': error.phaseRawValue,
-              'trackId': error.trackId,
-              'commandId': error.commandId,
-              'sourceEpoch': error.sourceEpoch,
-              'retriable': error.retriable,
-            },
-          )
-        : error is VesperUnsupportedError
-            ? VesperPlayerError(
-                message: error.message?.toString() ??
-                    'Vesper player is not supported on this platform.',
-                code: VesperPlayerErrorCode.unsupported,
-                category: VesperPlayerErrorCategory.capability,
-                retriable: false,
-                details: _unsupportedErrorDetails(error),
-              )
-            : VesperPlayerError(
-                message: error.toString(),
-                code: VesperPlayerErrorCode.backendFailure,
-                category: VesperPlayerErrorCategory.platform,
-                retriable: false,
-              );
+    final vesperError = switch (error) {
+      VesperPlayerCommandException() => VesperPlayerError(
+          message: error.message,
+          code: error.code,
+          category: error.category,
+          retriable: error.retriable,
+          codeRawValue: error.codeRawValue,
+          categoryRawValue: error.categoryRawValue,
+          details: <String, Object?>{
+            if (error.platformCode != null) 'platformCode': error.platformCode,
+            ...error.details,
+          },
+        ),
+      VesperFixedTrackSelectionException() => VesperPlayerError(
+          message: error.message ?? 'Fixed-track selection failed.',
+          code: VesperPlayerErrorCode.unsupported,
+          category: VesperPlayerErrorCategory.capability,
+          retriable: error.platformDetails['retriable'] == true,
+          details: <String, Object?>{
+            if (error.platformCode != null) 'platformCode': error.platformCode,
+            ...error.platformDetails,
+            'domain': 'fixedTrack',
+            'code': error.codeRawValue,
+            'trackId': error.trackId,
+            'expectedCatalogRevision': error.expectedCatalogRevision,
+            'actualCatalogRevision': error.actualCatalogRevision,
+          },
+        ),
+      VesperSubtitleException() => VesperPlayerError(
+          message: error.message,
+          code: VesperPlayerErrorCode.invalidState,
+          category: VesperPlayerErrorCategory.capability,
+          retriable: error.retriable,
+          details: <String, Object?>{
+            'domain': 'subtitle',
+            'code': error.code,
+            'phase': error.phase.name,
+            'phaseRawValue': error.phaseRawValue,
+            'trackId': error.trackId,
+            'commandId': error.commandId,
+            'sourceEpoch': error.sourceEpoch,
+            'retriable': error.retriable,
+          },
+        ),
+      VesperUnsupportedError() => VesperPlayerError(
+          message: error.message?.toString() ??
+              'Vesper player is not supported on this platform.',
+          code: VesperPlayerErrorCode.unsupported,
+          category: VesperPlayerErrorCategory.capability,
+          retriable: false,
+          details: _unsupportedErrorDetails(error),
+        ),
+      _ => VesperPlayerError(
+          message: error.toString(),
+          code: VesperPlayerErrorCode.backendFailure,
+          category: VesperPlayerErrorCategory.platform,
+          retriable: false,
+        ),
+    };
 
     final snapshot = this.snapshot.copyWith(lastError: vesperError);
     snapshotListenable.value = snapshot;

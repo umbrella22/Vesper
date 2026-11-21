@@ -4,7 +4,7 @@ import { util } from '@kit.ArkTS';
 import { AssetPins, assetFile, directory, atomicText, boundedText, fileHash, regularFile } from './FileStore';
 import { VesperPlayerError } from './Types';
 import { VesperCancellationToken, OperationScope } from './Operation';
-import { copyVerifiedFile, writeStoredZip, exportOutputBytes, EXPORT_MAXIMUM_BYTES, EXPORT_DISK_BUDGET } from './ExportStream';
+import { copyVerifiedFile, writeStoredZip, exportOutputBytes, exportCapacityIssue, EXPORT_MAXIMUM_BYTES, EXPORT_DISK_BUDGET } from './ExportStream';
 
 export interface VesperExportFile { path: string; size: number; checksum?: string; }
 export interface VesperExportOptions { cancellation?: VesperCancellationToken; timeoutMs?: number; }
@@ -38,9 +38,8 @@ export class VesperExportArtifact {
       throw new VesperPlayerError('unsupported', 'Export requires an original finite file or offline HLS/DASH bundle');
     }
     const size = exportOutputBytes(format, entry, files);
-    if (VesperExportArtifact.active.size >= 8 || VesperExportArtifact.preparations >= 2 || files.length < 1 || files.length > 512 ||
-      files.some((file: VesperExportFile): boolean => !Number.isSafeInteger(file.size) || file.size < 1) || !Number.isSafeInteger(size) || size > EXPORT_MAXIMUM_BYTES) {
-      throw new VesperPlayerError('capacity', 'Export allows two preparations, eight temporary assets and 256 MiB per original or ZIP');
+    if (VesperExportArtifact.active.size >= 8 || VesperExportArtifact.preparations >= 2 || exportCapacityIssue(files, size) !== undefined) {
+      throw new VesperPlayerError('capacity', 'Export allows two preparations, eight temporary assets, and up to 512 files and 256 MiB per export');
     }
     const scope = new OperationScope(options.timeoutMs ?? 60000, options.cancellation);
     const parent = `${exportRoot}/exports`;

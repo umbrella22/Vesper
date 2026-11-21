@@ -78,13 +78,13 @@ export async function runCapabilityChecks(surface: string): Promise<string[]> {
     } finally { source.close(); }
   }
   const liveUri = `http://127.0.0.1:18765/dvr/media.m3u8?session=${Date.now()}`;
-  if (controller.capabilities().runtimeApi >= 26) { results.push(...await runNativeDvrChecks(surface)); }
+  results.push(...await runNativeDvrChecks(surface));
   const handle = sources.register({ kind: 'remote', protocol: 'hls', label: 'Controlled DVR', uri: liveUri });
   try {
     await controller.activate(handle, { timeoutMs: 20000 }); await until(() => controller.snapshot().firstFrame);
     results.push(JSON.stringify({ sdkFirst: controller.snapshot(), diagnostics: await controller.refreshDiagnostics() }));
     await new Promise<void>((resolve) => { setTimeout(resolve, 5000); });
-    if (controller.capabilities().runtimeApi >= 26) { results.push(JSON.stringify({ sdkRanges: await controller.timeRanges() })); }
+    results.push(JSON.stringify({ sdkRanges: await controller.timeRanges() }));
     results.push(JSON.stringify({ sdkAfter: controller.snapshot(), diagnostics: await controller.refreshDiagnostics() }));
     await controller.pause(); await controller.play();
   } finally { handle.close(); await controller.dispose(); sources.close(); }

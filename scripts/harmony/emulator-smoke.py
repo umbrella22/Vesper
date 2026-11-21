@@ -33,6 +33,9 @@ def main():
     if not 15 <= options.timeout_seconds <= 600:
         parser.error('--timeout-seconds must be between 15 and 600')
     hdc = [options.tools / 'sdk/default/openharmony/toolchains/hdc', '-t', options.device]
+    runtime_api = run(hdc + ['shell', 'param', 'get', 'const.ohos.apiversion']).strip()
+    if not runtime_api.isdecimal() or int(runtime_api) < 26:
+        raise ValueError(f'HarmonyOS API 26 or later is required, target reported {runtime_api!r}')
     emulator = [options.tools / 'bin/Emulator', '-instance', options.instance,
                 '-instancePath', options.tools / 'emulator-instances']
     if not options.capture_only:

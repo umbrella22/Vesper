@@ -9,11 +9,7 @@ extension VesperNativePlayerBridge {
         url: URL,
         sourceEpoch: UInt64? = nil
     ) throws -> AVPlayerItem {
-        // Live streaming protocols (RTMP/RTSP/FLV) are not supported by AVPlayer
-        // on iOS. Supporting them would require a software demux/remux pipeline
-        // (FFmpeg), which conflicts with the native-first boundary. Reject
-        // explicitly with a capability error instead of letting AVURLAsset
-        // silently fail to load.
+        // RTSP can reach AVPlayer only after source loading supplies a loopback HLS item.
         switch source.protocol {
         case .rtmp, .rtsp, .flv:
             throw VesperPlayerError(

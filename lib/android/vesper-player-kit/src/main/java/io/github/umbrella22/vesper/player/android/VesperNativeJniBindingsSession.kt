@@ -1390,7 +1390,7 @@ internal data class ExoTimelineSample(
     val liveEdgeMs: Long,
 )
 
-internal fun ExoPlayer.currentTimelineSample(): ExoTimelineSample {
+internal fun ExoPlayer.currentTimelineSample(liveOnly: Boolean = false): ExoTimelineSample {
     val isLive = isCurrentMediaItemLive
     val isSeekable = isCurrentMediaItemSeekable
     val liveWindow = if (isLive) currentLiveTimelineWindow() else null
@@ -1430,13 +1430,22 @@ internal fun ExoPlayer.currentTimelineSample(): ExoTimelineSample {
         seekableStartMs = seekableStartMs,
         seekableEndMs = seekableEndMs,
         liveEdgeMs = liveEdgeMs,
-    )
+    ).let { sample -> if (liveOnly) sample.asLiveOnly() else sample }
 }
+
+internal fun ExoTimelineSample.asLiveOnly(): ExoTimelineSample =
+    copy(
+        durationMs = C.TIME_UNSET,
+        isLive = true,
+        isSeekable = false,
+        seekableStartMs = C.TIME_UNSET,
+        seekableEndMs = C.TIME_UNSET,
+    )
 
 internal fun VesperNativeJniBindings.pushSnapshotToRust() {
     val handle = sessionHandle ?: return
     val exoPlayer = player ?: return
-    val sample = exoPlayer.currentTimelineSample()
+    val sample = exoPlayer.currentTimelineSample(liveOnly = isRtspBridgeActive)
     logExoSnapshotToRust(
         playbackState = exoPlayer.playbackState,
         isLive = sample.isLive,

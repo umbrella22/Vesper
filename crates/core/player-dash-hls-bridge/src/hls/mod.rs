@@ -20,11 +20,24 @@ pub(crate) fn bool_attr(value: bool) -> &'static str {
     if value { "YES" } else { "NO" }
 }
 
-pub(crate) fn byte_range_attr(range: &ByteRange, field: &str) -> DashHlsResult<String> {
-    let len = range
-        .len()
-        .ok_or_else(|| DashHlsError::InvalidHlsInput(format!("invalid byte range for {field}")))?;
-    Ok(format!("{len}@{}", range.start))
+pub(crate) fn playlist_byte_range(range: &ByteRange) -> player_hls_playlist::ByteRange {
+    player_hls_playlist::ByteRange {
+        start: range.start,
+        end: range.end,
+    }
+}
+
+pub(crate) fn media_playlist_error(error: player_hls_playlist::PlaylistError) -> DashHlsError {
+    match error {
+        player_hls_playlist::PlaylistError::TargetDurationExceeded { target_duration } => {
+            DashHlsError::TargetDurationExceeded { target_duration }
+        }
+        error => DashHlsError::InvalidHlsInput(error.to_string()),
+    }
+}
+
+pub(crate) fn vod_target_duration(durations: impl Iterator<Item = f64>) -> u64 {
+    durations.fold(1.0_f64, f64::max).ceil() as u64
 }
 
 pub(crate) fn ensure_line_value(value: &str, field: &str) -> DashHlsResult<()> {

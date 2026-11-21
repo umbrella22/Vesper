@@ -452,7 +452,9 @@ impl Downloads {
             Some("start" | "resume") => {
                 let task = DownloadTaskId::from_raw(number(value, "taskId")?);
                 let current = self.bridge.task(task).ok_or_else(invalid)?;
-                if self.task_plans.get(&task.get()) == Some(&0) {
+                if current.status != DownloadTaskStatus::Removed
+                    && self.task_plans.get(&task.get()) == Some(&0)
+                {
                     return Err(failure(
                         "access_context_required",
                         "restore requires a refreshed source before network execution",
@@ -483,6 +485,12 @@ impl Downloads {
                     operation(self.bridge.pause_task(task, now))?;
                 } else {
                     operation(self.bridge.remove_task(task, now))?;
+                    if let Some(plan) = self.task_plans.get_mut(&task.get()) {
+                        let plan = std::mem::take(plan);
+                        if plan != 0 && !self.task_plans.values().any(|id| *id == plan) {
+                            self.plans.remove(&plan);
+                        }
+                    }
                 }
                 self.response(task)
             }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-21
+
 ## 0.9.1 - 2026-10-12
 
 - Preserve typed DASH resource failures when AVFoundation copies an SDK error

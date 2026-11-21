@@ -90,7 +90,7 @@ export class DiagnosticHistory {
       model: deviceInfo.productModel, deviceType: deviceInfo.deviceType, runtimeKind: kind,
       runtimeKindEvidence: kind === 'unknown' ? 'unavailable' : 'host-reported',
       scenario: publicIdentity(options.scenario), fixtureId: publicIdentity(options.fixtureId),
-      protocol: ['file', 'progressive', 'hls', 'dash'].includes(protocol) ? protocol : 'unknown',
+      protocol: ['file', 'progressive', 'hls', 'dash', 'rtsp'].includes(protocol) ? protocol : 'unknown',
       tracks: value.tracks.slice(0, 64).map((track): VesperDiagnosticTrack => ({ id: track.id,
         kind: ['audio', 'video', 'subtitle'].includes(track.kind) ? track.kind : 'unknown',
         mimeType: /^(audio|video|text|application)\/[a-zA-Z0-9.+-]{1,80}$/.test(track.mimeType) ? track.mimeType : 'unknown',

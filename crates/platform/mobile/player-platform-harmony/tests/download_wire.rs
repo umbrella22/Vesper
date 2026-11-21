@@ -14,6 +14,47 @@ fn plan(session: &mut HarmonySession) -> Value {
     assert_eq!(result["ok"], true, "{result}");
     result["value"]["planId"].clone()
 }
+
+#[test]
+fn remove_reclaims_plan_capacity_only_after_the_last_task_releases_it() {
+    let mut session =
+        HarmonySession::from_config_json(r#"{"kind":"downloads","maxTasks":2}"#).unwrap();
+    let shared = plan(&mut session);
+    let _other = plan(&mut session);
+    let create = |session: &mut HarmonySession, asset_id| {
+        let result = call(
+            session,
+            json!({"op":"create","assetId":asset_id,"planId":shared}),
+        );
+        assert_eq!(result["ok"], true, "{result}");
+        result["value"]["task"]["taskId"].clone()
+    };
+    let first = create(&mut session, "first");
+    let second = create(&mut session, "second");
+    let remove = |session: &mut HarmonySession, task_id: &Value| {
+        let result = call(session, json!({"op":"remove","taskId":task_id}));
+        assert_eq!(result["value"]["task"]["status"], "Removed", "{result}");
+    };
+    remove(&mut session, &first);
+    assert_eq!(
+        call(&mut session, json!({"op":"discardPlan","planId":shared}))["error"]["code"],
+        "in_use"
+    );
+    remove(&mut session, &second);
+    assert_ne!(
+        plan(&mut session),
+        shared,
+        "The released plan must no longer count toward capacity"
+    );
+    assert_eq!(
+        call(&mut session, json!({"op":"discardPlan","planId":shared}))["ok"],
+        true
+    );
+    let snapshot = call(&mut session, json!({"op":"snapshot"}));
+    let tasks = snapshot["value"]["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|task| task["status"] == "Removed"));
+}
 #[test]
 fn planner_discovery_and_stale_completion_fences_do_not_expose_credentials() {
     let mut session = HarmonySession::from_config_json(r#"{"kind":"downloads","maxTasks":1}"#)

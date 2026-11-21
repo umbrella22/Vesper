@@ -191,6 +191,7 @@ private struct VesperDashTemplateSegmentsRequest: Encodable {
     let manifestType: VesperDashManifestType?
     let durationMs: UInt64?
     let segmentTemplate: VesperDashSegmentTemplate
+    let targetDuration: UInt64?
 }
 
 private struct VesperDashBuildExternalMediaPlaylistRequest: Encodable {
@@ -199,6 +200,7 @@ private struct VesperDashBuildExternalMediaPlaylistRequest: Encodable {
     let segments: [VesperDashHlsSegment]
     let playlistKind: VesperDashHlsPlaylistKind
     let mediaSequence: UInt64?
+    let targetDuration: UInt64?
 }
 
 private struct VesperDashExpandTemplateRequest: Encodable {
@@ -350,12 +352,14 @@ enum VesperDashHlsBuilder {
         segments: [VesperDashTemplateSegment],
         playlistKind: VesperDashHlsPlaylistKind = .vod,
         mediaSequence: UInt64? = nil,
+        targetDuration: UInt64? = nil,
         segmentURI: (Int, VesperDashTemplateSegment) throws -> String
     ) throws -> String {
         try buildExternalMediaPlaylist(
             map: initializationURI.map { VesperDashHlsMap(uri: $0, byteRange: nil) },
             playlistKind: playlistKind,
             mediaSequence: mediaSequence,
+            targetDuration: targetDuration,
             segments: try segments.enumerated().map { index, segment in
                 VesperDashHlsSegment(
                     duration: segment.duration,
@@ -370,6 +374,7 @@ enum VesperDashHlsBuilder {
         map: VesperDashHlsMap?,
         playlistKind: VesperDashHlsPlaylistKind = .vod,
         mediaSequence: UInt64? = nil,
+        targetDuration: UInt64? = nil,
         segments: [VesperDashHlsSegment]
     ) throws -> String {
         try VesperDashRustBridge.execute(
@@ -377,7 +382,8 @@ enum VesperDashHlsBuilder {
                 map: map,
                 segments: segments,
                 playlistKind: playlistKind,
-                mediaSequence: mediaSequence
+                mediaSequence: mediaSequence,
+                targetDuration: targetDuration
             ),
             response: String.self
         )
@@ -399,13 +405,15 @@ enum VesperDashHlsBuilder {
     static func templateSegments(
         manifestType: VesperDashManifestType? = nil,
         durationMs: UInt64?,
-        segmentTemplate: VesperDashSegmentTemplate
+        segmentTemplate: VesperDashSegmentTemplate,
+        targetDuration: UInt64? = nil
     ) throws -> [VesperDashTemplateSegment] {
         try VesperDashRustBridge.execute(
             VesperDashTemplateSegmentsRequest(
                 manifestType: manifestType,
                 durationMs: durationMs,
-                segmentTemplate: segmentTemplate
+                segmentTemplate: segmentTemplate,
+                targetDuration: targetDuration
             ),
             response: [VesperDashTemplateSegment].self
         )

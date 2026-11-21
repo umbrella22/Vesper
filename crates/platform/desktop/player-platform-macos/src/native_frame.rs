@@ -91,7 +91,7 @@ pub(crate) struct MacosSourceNormalizerPacketVideoSourceFactory {
     pub(crate) frame_processor_mode: FrameProcessorMode,
     pub(crate) frame_processor_policy: FrameProcessorPolicy,
     pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
-    pub(crate) packet_session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+    pub(crate) packet_session: SharedSourceNormalizerPacketSession,
 }
 
 impl std::fmt::Debug for MacosSourceNormalizerPacketVideoSourceFactory {
@@ -580,7 +580,7 @@ impl MacosNativeFramePacketSource for VideoPacketSource {
 }
 
 pub(crate) struct SourceNormalizerPacketSource {
-    pub(crate) session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
+    pub(crate) session: SharedSourceNormalizerPacketSession,
     pub(crate) pending: Option<SourceNormalizerPendingPacket>,
     pub(crate) selected_video_stream_index: Option<usize>,
 }
@@ -592,15 +592,12 @@ pub(crate) struct SourceNormalizerPendingPacket {
 }
 
 impl SourceNormalizerPacketSource {
-    pub(crate) fn new(session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>) -> Self {
+    pub(crate) fn new(session: SharedSourceNormalizerPacketSession) -> Self {
         let selected_video_stream_index = session
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard.as_ref().and_then(|session| {
-                    macos_packet_stream_info_from_source_normalizer(&session.stream_info()).ok()
-                })
+            .with_session(|session| {
+                macos_packet_stream_info_from_source_normalizer(&session.stream_info())
             })
+            .ok()
             .map(|stream_info| stream_info.stream_index);
         Self {
             session,
@@ -645,84 +642,64 @@ impl MacosNativeFramePacketSource for SourceNormalizerPacketSource {
             return self.send_pending_packet(decoder_session, pending);
         }
 
-        let session_arc = self.session.clone();
-        let mut guard = session_arc
-            .lock()
-            .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
-        let session = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
-        loop {
-            let lease = session.read_packet().map_err(|error| {
-                anyhow::anyhow!("source normalizer read_packet failed: {error}")
+        const MAX_PACKET_READS_PER_POLL: usize = 32;
+        let poll_started = Instant::now();
+        for _ in 0..MAX_PACKET_READS_PER_POLL {
+            let (status, pending) = self.session.with_session(|session| {
+                let lease = session.read_packet().map_err(|error| {
+                    anyhow::anyhow!("source normalizer read_packet failed: {error}")
+                })?;
+                let status = lease.metadata.status;
+                if status != SourceNormalizerReadPacketStatus::Packet {
+                    return Ok((status, None));
+                }
+                let selected = lease.metadata.packet.as_ref().filter(|packet| {
+                    packet.media_kind == SourceNormalizerPacketMediaKind::Video
+                        && self
+                            .selected_video_stream_index
+                            .is_none_or(|index| packet.stream_index as usize == index)
+                });
+                let packet = selected.cloned();
+                let data = packet.as_ref().map(|_| lease.data.to_vec());
+                let handle = lease.handle;
+                drop(lease);
+                session.release_packet(handle)?;
+                let pending = match packet.zip(data) {
+                    Some((packet, data)) => Some(SourceNormalizerPendingPacket {
+                        packet: source_normalizer_packet_metadata(packet)?,
+                        data,
+                    }),
+                    None => None,
+                };
+                Ok((status, pending))
             })?;
-            match lease.metadata.status {
+            if let Some(pending) = pending {
+                return self.send_pending_packet(decoder_session, pending);
+            }
+            match status {
                 SourceNormalizerReadPacketStatus::EndOfStream => {
                     return Ok(MacosNativeFramePacketSendStatus::EndOfStream);
                 }
-                SourceNormalizerReadPacketStatus::NeedMoreData => {
-                    return Ok(MacosNativeFramePacketSendStatus::NeedMoreData);
-                }
+                SourceNormalizerReadPacketStatus::NeedMoreData => break,
                 SourceNormalizerReadPacketStatus::Packet => {}
             }
-            let Some(packet) = lease.metadata.packet.clone() else {
-                let handle = lease.handle;
-                drop(lease);
-                session
-                    .release_packet(handle)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                continue;
-            };
-            if packet.media_kind != SourceNormalizerPacketMediaKind::Video {
-                let handle = lease.handle;
-                drop(lease);
-                session
-                    .release_packet(handle)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                continue;
+            if poll_started.elapsed() >= MACOS_NATIVE_FRAME_PREFETCH_COMMAND_POLL_INTERVAL {
+                break;
             }
-            if self
-                .selected_video_stream_index
-                .is_some_and(|selected| packet.stream_index as usize != selected)
-            {
-                let handle = lease.handle;
-                drop(lease);
-                session
-                    .release_packet(handle)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                continue;
-            }
-            let data = lease.data.to_vec();
-            let handle = lease.handle;
-            drop(lease);
-            session
-                .release_packet(handle)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            let packet = source_normalizer_packet_metadata(packet)?;
-            let pending = SourceNormalizerPendingPacket { packet, data };
-            return self.send_pending_packet(decoder_session, pending);
         }
+        Ok(MacosNativeFramePacketSendStatus::NeedMoreData)
     }
 
     fn seek_to(&mut self, position: Duration) -> anyhow::Result<()> {
         self.pending = None;
-        let mut guard = self
-            .session
-            .lock()
-            .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
-        let session = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("source normalizer packet session is not configured"))?;
-        session
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        session
-            .seek(&SourceNormalizerPacketSeek {
+        self.session.with_session(|session| {
+            session.flush()?;
+            session.seek(&SourceNormalizerPacketSeek {
                 position_millis: position.as_millis().min(u64::MAX as u128) as u64,
                 exact: false,
-            })
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            })?;
+            Ok(())
+        })
     }
 }
 
@@ -733,16 +710,9 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
         _buffer_capacity: usize,
         _interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
-        let stream_info = {
-            let guard = self
-                .packet_session
-                .lock()
-                .map_err(|_| anyhow::anyhow!("source normalizer packet session is poisoned"))?;
-            let session = guard.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("source normalizer packet session is not configured")
-            })?;
-            macos_native_frame_stream_info_from_source_normalizer(&session.stream_info())?
-        };
+        let stream_info = self.packet_session.with_session(|session| {
+            macos_native_frame_stream_info_from_source_normalizer(&session.stream_info())
+        })?;
         if let Some(reason) = macos_hdr_programmable_processing_not_supported_reason(&stream_info) {
             anyhow::bail!("{reason}");
         }

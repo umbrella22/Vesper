@@ -82,8 +82,7 @@ const DEFAULT_FRAME_PROCESSOR_DEBUG_WINDOW: u64 = 120;
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_millis(5_000);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_millis(40_000);
 
-pub(crate) type SharedSourceNormalizerPacketSession =
-    Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>;
+pub(crate) type SharedSourceNormalizerPacketSession = Arc<SourceNormalizerPacketSessionSlot>;
 
 pub use native::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,

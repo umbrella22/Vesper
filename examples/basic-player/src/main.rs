@@ -28,7 +28,8 @@ use playback::DesktopPlaybackSession;
 use player_host_desktop::download::{
     DesktopDownloadController, PendingDownloadTask, PreparedDownloadTask,
     download_primary_action_label, download_progress_summary, download_status_label,
-    draft_download_label, make_asset_id, normalized_progress_ratio, prepare_download_task,
+    draft_download_label, make_asset_id, normalized_progress_ratio,
+    prepare_download_task_with_cancellation,
 };
 #[cfg(not(target_os = "macos"))]
 use player_host_desktop::open_desktop_host_runtime_uri_with_options_and_interrupt;
@@ -216,6 +217,7 @@ struct DesktopPlayerApp {
     sidebar_tab: DesktopSidebarTab,
     download_controller: DesktopDownloadController,
     pending_downloads: Vec<PendingDownloadTask>,
+    download_planning_cancel: Arc<AtomicBool>,
     planner_tx: Sender<PlannerEvent>,
     planner_rx: Receiver<PlannerEvent>,
     launch_tx: Sender<LaunchEvent>,
@@ -511,6 +513,7 @@ impl DesktopPlayerApp {
             sidebar_tab: DesktopSidebarTab::Playlist,
             download_controller: DesktopDownloadController::new(),
             pending_downloads: Vec::new(),
+            download_planning_cancel: Arc::new(AtomicBool::new(false)),
             planner_tx,
             planner_rx,
             launch_tx,
@@ -958,6 +961,11 @@ impl DesktopPlayerApp {
     }
 
     fn queue_download_planner(&mut self, source_uri: String, label: String) {
+        const MAX_PENDING_DOWNLOAD_PLANS: usize = 4;
+        if self.pending_downloads.len() >= MAX_PENDING_DOWNLOAD_PLANS {
+            self.download_message = Some("Too many downloads are being prepared".to_owned());
+            return;
+        }
         let asset_prefix = match MediaSource::new(source_uri.clone()).protocol() {
             player_model::MediaSourceProtocol::Hls => "hls",
             player_model::MediaSourceProtocol::Dash => "dash",
@@ -978,9 +986,12 @@ impl DesktopPlayerApp {
         self.download_message = Some(format!("Preparing {source_uri}"));
 
         let planner_tx = self.planner_tx.clone();
+        let cancel = self.download_planning_cancel.clone();
         thread::spawn(move || {
-            let source = MediaSource::new(source_uri.clone());
-            let event = match prepare_download_task(&asset_id, &source, &label) {
+            let source = MediaSource::new(source_uri);
+            let event = match prepare_download_task_with_cancellation(
+                &asset_id, &source, &label, &cancel,
+            ) {
                 Ok(prepared) => PlannerEvent::Prepared { asset_id, prepared },
                 Err(error) => PlannerEvent::Failed {
                     asset_id,
@@ -2854,6 +2865,7 @@ fn log_keyboard_action(action: &'static str) {
 
 impl Drop for DesktopPlayerApp {
     fn drop(&mut self) {
+        self.download_planning_cancel.store(true, Ordering::Release);
         self.close_active_runtime();
     }
 }

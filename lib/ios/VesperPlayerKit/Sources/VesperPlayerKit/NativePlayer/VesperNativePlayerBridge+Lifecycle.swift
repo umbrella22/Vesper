@@ -46,6 +46,13 @@ extension VesperNativePlayerBridge {
             return
         }
         let shouldAutoPlay = pendingAutoPlay || player == nil
+        if currentSource.protocol == .rtsp, let session = currentRtspSession {
+            if activeSourceCommand == nil, player?.currentItem?.status == .readyToPlay,
+               (try? session.checkHealth()) != nil {
+                return
+            }
+            tearDownActivePlayback(cancelSourceCommand: false)
+        }
         let sourceDescription = diagnosticURLDescription(currentSource.uri)
         iosHostLog(
             "initialize source=\(sourceDescription) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
@@ -458,6 +465,8 @@ extension VesperNativePlayerBridge {
     func tearDownActivePlayback(cancelSourceCommand: Bool = true) {
         playbackStallTask?.cancel()
         playbackStallTask = nil
+        rtspHealthTask?.cancel()
+        rtspHealthTask = nil
         activeLegacySeekId = nil
         diagnosticsTracker.stallDetector.resetWindow()
         diagnosticsTracker.endAttempt()
@@ -483,7 +492,10 @@ extension VesperNativePlayerBridge {
         surfaceHost?.attach(player: nil)
         presentationState.update(nil)
         nativeFramePipelineCoordinator.closeActiveSession()
+        if currentRtspSession != nil { player?.replaceCurrentItem(with: nil) }
         player = nil
+        if let handle = currentRtspSession?.close() { retiringRtspHandle = handle }
+        currentRtspSession = nil
         currentDashSession?.closeStartupResources()
         currentDashSession = nil
         dashResourceLoaderDelegate = nil

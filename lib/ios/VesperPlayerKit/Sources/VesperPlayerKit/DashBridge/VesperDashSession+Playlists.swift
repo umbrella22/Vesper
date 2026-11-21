@@ -184,8 +184,9 @@ extension VesperDashSession {
     }
 
     func buildMediaPlaylistData(renditionId: String) async throws -> Data {
-        let manifest = try await loadManifest()
-        let playable = try await playableRepresentation(renditionId: renditionId)
+        let loaded = try await loadManifest()
+        let manifest = self.manifest ?? loaded
+        let playable = try playableRepresentation(renditionId: renditionId, manifest: manifest)
         if let segmentBase = playable.representation.segmentBase {
             if manifest.type == .dynamic {
                 throw VesperDashBridgeError.unsupportedManifest(
@@ -258,10 +259,14 @@ extension VesperDashSession {
         }
         let playlistKind: VesperDashHlsPlaylistKind = manifest.type == .dynamic ? .live : .vod
         let mediaSequence = manifest.type == .dynamic ? segments.first?.number : nil
+        let targetDuration = try (manifest.type == .dynamic
+            ? liveTargetDuration(renditionId: renditionId, segments: segments)
+            : nil)
         let playlist = try VesperDashHlsBuilder.buildExternalMediaPlaylist(
             map: initializationURL.map { VesperDashHlsMap(uri: $0, byteRange: nil) },
             playlistKind: playlistKind,
             mediaSequence: mediaSequence,
+            targetDuration: targetDuration,
             segments: try segments.enumerated().map { index, segment in
                 let segmentIndex = try hlsSegmentIndex(
                     manifest: manifest,
@@ -294,8 +299,28 @@ extension VesperDashSession {
         iosHostLog("dashMediaPlaylist head=\(head)")
 #endif
         let data = Data(playlist.utf8)
+        if let targetDuration {
+            liveTargetDurationByRenditionId[renditionId] = targetDuration
+        }
         mediaPlaylistCacheByRenditionId[renditionId] = data
         return data
+    }
+
+    private func liveTargetDuration(
+        renditionId: String,
+        segments: [VesperDashTemplateSegment]
+    ) throws -> UInt64 {
+        if let target = liveTargetDurationByRenditionId[renditionId] {
+            return target
+        }
+        guard liveTargetDurationByRenditionId.count < Self.maxPublishedLiveRenditions else {
+            throw VesperDashBridgeError.unsupportedManifest("Too many live DASH media playlist URIs in one session")
+        }
+        guard let longest = segments.lazy.map(\.duration).max(), longest > 0,
+              let target = UInt64(exactly: longest.rounded(.up)) else {
+            throw VesperDashBridgeError.invalidManifest("Invalid live DASH target duration")
+        }
+        return target
     }
 
     func hlsSegmentIndex(

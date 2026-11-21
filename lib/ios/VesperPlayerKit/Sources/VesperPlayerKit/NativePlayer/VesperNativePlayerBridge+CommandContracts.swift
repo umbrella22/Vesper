@@ -216,6 +216,8 @@ extension VesperNativePlayerBridge {
             throw error
         }
 
+        if let error = publishRtspSeekErrorIfNeeded() { throw error }
+
         let systemPlayer = player
         let nativeFrameSession = nativeFramePipelineCoordinator.activeSession
         guard systemPlayer != nil || nativeFrameSession?.didStart == true else {
@@ -418,6 +420,22 @@ extension VesperNativePlayerBridge {
             commandId: commandId,
             sourceEpoch: sourceEpoch
         )
+    }
+
+    func publishRtspSeekErrorIfNeeded() -> VesperPlayerError? {
+        guard currentSource?.protocol == .rtsp else { return nil }
+        let error = vesperCommandError(
+            message: "Seeking is unavailable for the RTSP bridge.",
+            code: .unsupported,
+            category: .capability,
+            retriable: false,
+            reason: "rtsp_seek_unsupported",
+            commandId: seekCommandGeneration,
+            sourceEpoch: sourceCommandGeneration,
+            details: ["route": "rtspBridge", "protocol": "rtsp"]
+        )
+        publishSeekCommandFailure(error)
+        return error
     }
 
     private func publishSeekCommandFailure(_ error: VesperPlayerError) {

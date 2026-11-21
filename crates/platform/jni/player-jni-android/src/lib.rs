@@ -12,6 +12,7 @@ mod parsers;
 mod playlist_jni;
 mod plugin_registry_jni;
 mod preload_jni;
+mod rtsp_jni;
 mod sequence_jni;
 mod sessions;
 
@@ -82,6 +83,32 @@ use sessions::{
     with_benchmark_sink_session, with_native_frame_pipeline_session_mut, with_session_mut,
     with_session_mut_checked, with_source_normalizer_resource_session_mut,
 };
+
+// A registered session belongs to Rust until Java receives its open response.
+struct PendingSessionOpen<F: FnOnce()> {
+    rollback: Option<F>,
+}
+
+impl<F: FnOnce()> PendingSessionOpen<F> {
+    fn new(rollback: F) -> Self {
+        Self {
+            rollback: Some(rollback),
+        }
+    }
+
+    fn publish<T>(mut self, response: T) -> T {
+        self.rollback = None;
+        response
+    }
+}
+
+impl<F: FnOnce()> Drop for PendingSessionOpen<F> {
+    fn drop(&mut self) {
+        if let Some(rollback) = self.rollback.take() {
+            rollback();
+        }
+    }
+}
 
 pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
     JNIString::from(value.as_ref())
@@ -334,6 +361,8 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                         return Ok(std::ptr::null_mut());
                     }
                 };
+                let pending =
+                    PendingSessionOpen::new(|| dispose_source_normalizer_resource_session(handle));
                 let Some(json) =
                     with_source_normalizer_resource_session_mut(env, handle, |opened| {
                         mobile_source_normalizer_resource_open_json(handle as u64, opened, None)
@@ -342,7 +371,7 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                 else {
                     return Ok(std::ptr::null_mut());
                 };
-                Ok(env.new_string(json)?.into_raw())
+                Ok(pending.publish(env.new_string(json)?.into_raw()))
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })
@@ -522,13 +551,15 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                         return Ok(std::ptr::null_mut());
                     }
                 };
+                let pending =
+                    PendingSessionOpen::new(|| dispose_native_frame_pipeline_session(handle));
                 let Some(json) = with_native_frame_pipeline_session_mut(env, handle, |session| {
                     android_native_frame_pipeline_open_json(handle as u64, session)
                         .map_err(|error| error.to_string())
                 }) else {
                     return Ok(std::ptr::null_mut());
                 };
-                Ok(env.new_string(json)?.into_raw())
+                Ok(pending.publish(env.new_string(json)?.into_raw()))
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })
@@ -1740,6 +1771,32 @@ mod tests {
         PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy, SubtitleErrorDetails,
     };
     use std::time::Duration;
+
+    #[test]
+    fn unpublished_session_is_removed_on_either_open_response_failure() {
+        use std::cell::RefCell;
+
+        let registry = RefCell::new(HandleRegistry::default());
+        for (json, java_string, expected) in [
+            (None, Ok("response"), Ok(None)),
+            (Some(()), Err("allocation"), Err("allocation")),
+            (Some(()), Ok("response"), Ok(Some("response"))),
+        ] {
+            let handle = registry.borrow_mut().insert(());
+            let result = (|| {
+                let pending = super::PendingSessionOpen::new(|| {
+                    registry.borrow_mut().remove(handle);
+                });
+                let Some(()) = json else { return Ok(None) };
+                Ok(Some(pending.publish(java_string?)))
+            })();
+            assert_eq!(result, expected);
+            assert_eq!(
+                registry.borrow().get(handle).is_some(),
+                matches!(expected, Ok(Some(_)))
+            );
+        }
+    }
 
     #[test]
     fn pipeline_event_report_json_bounds_only_the_outward_utf8_diagnostic() {

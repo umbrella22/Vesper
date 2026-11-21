@@ -58,6 +58,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var pendingSubtitleOverlayFailure: VesperSubtitleOverlayRenderer.PreparationFailure?
     var currentSubtitleStyle = VesperSubtitleStyle.default
     var currentDashSession: VesperDashSession?
+    var currentRtspSession: VesperRtspSession?
+    var rtspHealthTask: Task<Void, Never>?
+    var retiringRtspHandle: UInt64?
     var dashResourceLoaderDelegate: VesperDashResourceLoaderDelegate?
     var currentSourceNormalizerResource: VesperSourceNormalizerResourceOpenResult?
     var sourceNormalizerResourceSession: VesperSourceNormalizerResourceSession?

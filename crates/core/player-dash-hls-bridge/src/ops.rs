@@ -1,5 +1,9 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
+use player_hls_playlist::{
+    DurationPrecision, Initialization, MediaPlaylistOptions, MediaSegment as PlaylistSegment,
+    PlaylistKind, write_media_playlist,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -14,6 +18,7 @@ use crate::{
         master::{
             dash_startup_video_sort_key, hls_variant_from_dash_representation, rendition_name,
         },
+        media_playlist_error, playlist_byte_range, vod_target_duration,
     },
     mp4::{SidxBox, parse_sidx, remove_top_level_sidx_boxes},
 };
@@ -59,12 +64,14 @@ enum BridgeRequest {
         manifest_type: Option<DashManifestType>,
         duration_ms: Option<u64>,
         segment_template: DashSegmentTemplate,
+        target_duration: Option<u64>,
     },
     BuildExternalMediaPlaylist {
         map: Option<HlsMap>,
         segments: Vec<HlsSegment>,
         playlist_kind: HlsPlaylistKind,
         media_sequence: Option<u64>,
+        target_duration: Option<u64>,
     },
     ExpandTemplate {
         template: String,
@@ -216,21 +223,30 @@ pub fn execute_json(request_json: &str) -> DashHlsResult<String> {
             manifest_type,
             duration_ms,
             segment_template,
-        } => to_json(&template_segments(
-            manifest_type,
-            duration_ms,
-            &segment_template,
-        )?),
+            target_duration,
+        } => {
+            let segments = template_segments(manifest_type, duration_ms, &segment_template)?;
+            if let Some(target_duration) = target_duration {
+                for segment in &segments {
+                    DurationPrecision::Milliseconds
+                        .validate(segment.duration, target_duration)
+                        .map_err(media_playlist_error)?;
+                }
+            }
+            to_json(&segments)
+        }
         BridgeRequest::BuildExternalMediaPlaylist {
             map,
             segments,
             playlist_kind,
             media_sequence,
+            target_duration,
         } => to_json(&build_external_media_playlist(
             map.as_ref(),
             &segments,
             playlist_kind,
             media_sequence,
+            target_duration,
         )?),
         BridgeRequest::ExpandTemplate {
             template,
@@ -868,11 +884,22 @@ fn timeline_template_segments(
     let mut segment_index = 0_u64;
     let mut segments = Vec::new();
 
+    // Visit each explicit boundary once, even across a run of implicit starts.
+    let mut explicit_starts = segment_template
+        .timeline
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| entry.start_time.map(|time| (index, time)))
+        .peekable();
     for (entry_index, entry) in segment_template.timeline.iter().enumerate() {
         let entry_start = entry.start_time.or(next_start).unwrap_or(0);
-        let next_explicit_start = segment_template.timeline[entry_index + 1..]
-            .iter()
-            .find_map(|entry| entry.start_time);
+        if explicit_starts
+            .peek()
+            .is_some_and(|(index, _)| *index == entry_index)
+        {
+            explicit_starts.next();
+        }
+        let next_explicit_start = explicit_starts.peek().map(|(_, time)| *time);
         if let Some(next_explicit_start) = next_explicit_start
             && next_explicit_start <= entry_start
         {
@@ -1032,62 +1059,54 @@ fn build_external_media_playlist(
     segments: &[HlsSegment],
     playlist_kind: HlsPlaylistKind,
     media_sequence: Option<u64>,
+    target_duration: Option<u64>,
 ) -> DashHlsResult<String> {
     if segments.is_empty() {
         return Err(DashHlsError::InvalidMp4(
             "media playlist must contain at least one segment".to_owned(),
         ));
     }
-    let target_duration = segments
-        .iter()
-        .map(|segment| segment.duration)
-        .fold(1.0_f64, f64::max)
-        .ceil()
-        .max(1.0) as u64;
-    let mut lines = vec![
-        "#EXTM3U".to_owned(),
-        "#EXT-X-VERSION:7".to_owned(),
-        format!("#EXT-X-TARGETDURATION:{target_duration}"),
-        format!("#EXT-X-MEDIA-SEQUENCE:{}", media_sequence.unwrap_or(1)),
-        "#EXT-X-INDEPENDENT-SEGMENTS".to_owned(),
-    ];
-    if playlist_kind == HlsPlaylistKind::Vod {
-        lines.push("#EXT-X-PLAYLIST-TYPE:VOD".to_owned());
-    }
-    if let Some(map) = map {
-        if let Some(byte_range) = &map.byte_range {
-            lines.push(format!(
-                "#EXT-X-MAP:URI=\"{}\",BYTERANGE=\"{}@{}\"",
-                escape_attribute(&map.uri),
-                byte_range_len(byte_range, "map byte range")?,
-                byte_range.start
-            ));
+    let (kind, target_duration) = match playlist_kind {
+        HlsPlaylistKind::Vod => (
+            PlaylistKind::Vod,
+            vod_target_duration(segments.iter().map(|segment| segment.duration)),
+        ),
+        HlsPlaylistKind::Live => (
+            PlaylistKind::Live,
+            target_duration.ok_or_else(|| {
+                DashHlsError::InvalidHlsInput(
+                    "live media playlist requires a target duration".to_owned(),
+                )
+            })?,
+        ),
+    };
+    let mut initialization = map.map(|map| Initialization {
+        uri: if map.uri.contains('"') {
+            Cow::Owned(map.uri.replace('"', "%22"))
         } else {
-            lines.push(format!("#EXT-X-MAP:URI=\"{}\"", escape_attribute(&map.uri)));
-        }
-    }
-
-    for segment in segments {
-        if !segment.duration.is_finite() || segment.duration <= 0.0 {
-            return Err(DashHlsError::InvalidHlsInput(
-                "segment duration must be finite and positive".to_owned(),
-            ));
-        }
-        lines.push(format!("#EXTINF:{},", format_decimal(segment.duration)));
-        if let Some(byte_range) = &segment.byte_range {
-            lines.push(format!(
-                "#EXT-X-BYTERANGE:{}@{}",
-                byte_range_len(byte_range, "segment byte range")?,
-                byte_range.start
-            ));
-        }
-        lines.push(segment.uri.clone());
-    }
-    if playlist_kind == HlsPlaylistKind::Vod {
-        lines.push("#EXT-X-ENDLIST".to_owned());
-    }
-    lines.push(String::new());
-    Ok(lines.join("\n"))
+            Cow::Borrowed(map.uri.as_str())
+        },
+        byte_range: map.byte_range.as_ref().map(playlist_byte_range),
+    });
+    let segments = segments.iter().map(|segment| PlaylistSegment {
+        duration_seconds: segment.duration,
+        uri: segment.uri.as_str().into(),
+        byte_range: segment.byte_range.as_ref().map(playlist_byte_range),
+        discontinuity: false,
+        initialization: initialization.take(),
+    });
+    write_media_playlist(
+        MediaPlaylistOptions {
+            kind,
+            target_duration,
+            media_sequence: media_sequence.unwrap_or(1),
+            discontinuity_sequence: None,
+            independent_segments: true,
+            duration_precision: DurationPrecision::Milliseconds,
+        },
+        segments,
+    )
+    .map_err(media_playlist_error)
 }
 
 /// Expands a DASH SegmentTemplate URI against a representation and optional segment markers.
@@ -1241,20 +1260,6 @@ fn format_template_number(value: u64, format: Option<&str>) -> DashHlsResult<Str
 fn checked_add(lhs: u64, rhs: u64, field: &str) -> DashHlsResult<u64> {
     lhs.checked_add(rhs)
         .ok_or_else(|| DashHlsError::InvalidMp4(format!("{field} overflows UInt64")))
-}
-
-fn byte_range_len(range: &ByteRange, field: &str) -> DashHlsResult<u64> {
-    range
-        .len()
-        .ok_or_else(|| DashHlsError::InvalidHlsInput(format!("invalid byte range for {field}")))
-}
-
-fn escape_attribute(value: &str) -> String {
-    value.replace('"', "%22").replace(['\n', '\r'], "")
-}
-
-fn format_decimal(value: f64) -> String {
-    format!("{value:.3}")
 }
 
 #[cfg(test)]
@@ -1754,6 +1759,39 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn expands_long_implicit_timeline_across_multiple_explicit_boundaries() {
+        use crate::dash::DashSegmentTimelineEntry;
+        let mut timeline = vec![
+            DashSegmentTimelineEntry {
+                start_time: None,
+                duration: 1000,
+                repeat_count: 0,
+            };
+            100_000
+        ];
+        timeline[25_000].start_time = Some(26_000_000);
+        timeline[75_000].start_time = Some(77_000_000);
+        let template = DashSegmentTemplate {
+            timescale: 1000,
+            duration: None,
+            start_number: 10,
+            presentation_time_offset: 0,
+            initialization: None,
+            media: "chunk-$Time$.m4s".to_owned(),
+            timeline,
+        };
+        let segments = template_segments(Some(DashManifestType::Static), None, &template)
+            .expect("each implicit entry should produce one segment");
+        assert_eq!(segments.len(), 100_000);
+        assert_eq!(segments[24_999].time, Some(24_999_000));
+        assert_eq!(segments[25_000].time, Some(26_000_000));
+        assert_eq!(segments[74_999].time, Some(75_999_000));
+        assert_eq!(segments[75_000].time, Some(77_000_000));
+        assert_eq!(segments[99_999].number, 100_009);
+        assert_eq!(segments[99_999].time, Some(101_999_000));
     }
 
     #[test]

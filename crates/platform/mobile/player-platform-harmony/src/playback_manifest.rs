@@ -205,8 +205,8 @@ fn hls(text: &str, projection: &mut Projection) -> Result<String, Value> {
             return Err(unsupported());
         }
         if line.starts_with("#EXT-X-I-FRAME-STREAM-INF:") {
-            // API 20 can select trick-play entries as ordinary ABR variants and
-            // stall while parsing their sparse video. This route plays full media.
+            // The playback projection carries full media variants. I-frame
+            // renditions serve trick play and cannot make a master playable.
             variants += 1;
             keep[index] = false;
             continue;

@@ -347,10 +347,12 @@ fn supervise_captured_child(
         if readers.failed() {
             let termination = terminate(&mut child, false);
             let capture = readers.finish(label);
-            termination?;
-            return match capture {
-                Err(error) => Err(error),
-                Ok(_) => Err(ExternalProcessError::worker(format!(
+            return match (capture, termination) {
+                (Err(error), Err(cleanup_error)) => Err(ExternalProcessError::worker(format!(
+                    "{error}. Process cleanup also reported {cleanup_error}"
+                ))),
+                (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+                (Ok(_), Ok(())) => Err(ExternalProcessError::worker(format!(
                     "{label} output capture failed"
                 ))),
             };
@@ -1143,6 +1145,47 @@ mod tests {
                 "unexpected capture error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn capture_overflow_and_cleanup_failure_are_both_reported() {
+        let _guard = process_test_guard();
+        let cancellation = CancellationScope::start("overflow fixture").expect("scope");
+        let child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("fixture child");
+        let readers = CaptureReaders {
+            stdout: std::thread::spawn(|| {
+                Err(CaptureReadError::Overflow {
+                    stream: "stdout",
+                    maximum_bytes: 128,
+                })
+            }),
+            stderr: std::thread::spawn(|| Ok(Vec::new())),
+            failed: Arc::new(AtomicBool::new(true)),
+        };
+        let error = supervise_captured_child(
+            child,
+            &cancellation,
+            readers,
+            "overflow fixture",
+            None,
+            |child, _| {
+                child.wait().expect("reap fixture child");
+                Err(ExternalProcessError::worker("fixture group signal failed"))
+            },
+            || {},
+        )
+        .expect_err("capture overflow must fail");
+
+        assert_eq!(error.kind(), ExternalProcessErrorKind::Worker);
+        let message = error.to_string();
+        assert!(
+            message.starts_with("overflow fixture stdout exceeds 128 bytes"),
+            "{message}"
+        );
+        assert!(message.contains("fixture group signal failed"), "{message}");
     }
 
     #[test]

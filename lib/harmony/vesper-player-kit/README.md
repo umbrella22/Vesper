@@ -2,7 +2,7 @@
 
 The core HarmonyOS preview runs Media Kit AVPlayer and exposes shared Rust source,
 sequence, preload and download semantics. It contains no ArkUI components. The
-runtime floor is API 20 on arm64; the local package version is
+runtime floor is API 26 on arm64. The local package version is
 `0.9.1-harmony.0`. Registry publication is pending; physical-device acceptance
 remains unverified and does not block the scoped preview.
 
@@ -33,7 +33,7 @@ source, cancellation, timeout and disposal settle pending operations and reject
 stale callbacks by playback epoch.
 
 Native presentation preserves the video's aspect ratio and centers it with black
-bars when the Surface has a different shape. The controller sets the API 20
+bars when the Surface has a different shape. The controller sets the native
 scaled-aspect mode after native preparation.
 
 `subscribe()` delivers snapshots and structured events; its return value removes
@@ -98,15 +98,21 @@ the pending resume requirement, reusable bytes and export eligibility.
 
 `VesperSystemSession.create()` integrates AVSession metadata/commands and optional
 background audio. Hosts declare INTERNET for remote playback and
-KEEP_BACKGROUND_RUNNING plus ability `audioPlayback` for background audio. API
-26 constraints/time ranges are runtime-gated; live default-position seeking on
-the resource-loader/loopback routes returns `unsupported`. Dynamic DASH activation
-also returns `unsupported`: the internal bounded AVC/AAC Timeline-to-HLS prototype
-did not pass independent-audio refresh acceptance on the tested API 20/26
-runtimes. Its host contracts do not establish native playback support. Decoder enforcement, HDR and
-physical interruption/route behavior require separate evidence.
+KEEP_BACKGROUND_RUNNING plus ability `audioPlayback` for background audio.
+Live default-position seeking on the resource-loader/loopback routes returns
+`unsupported`. Dynamic DASH activation returns `unsupported` after the bounded
+AVC/AAC Timeline-to-HLS prototype stalled during independent-audio refresh on
+the API 26 simulator. Decoder enforcement, HDR and physical interruption/route
+behavior require separate evidence.
 
 The [platform guide](../README.md) defines media profiles, cancellation, cache,
 download/export, system behavior, diagnostics, build commands and release gaps.
 The [ArkUI binding](../vesper-player-kit-arkui/README.md) supplies a stable native
 Surface when an application uses ArkUI.
+
+## Optional RTSP route
+
+A HAR built with `VESPER_HARMONY_RTSP_BRIDGE=1` accepts supported live remote
+sources registered with `protocol: 'rtsp'`. System AVPlayer consumes the
+bridge's loopback HLS item. The [RTSP runbook](../../../scripts/rtsp/README.md)
+covers inputs, error codes, and the API 26 fixture consumer.

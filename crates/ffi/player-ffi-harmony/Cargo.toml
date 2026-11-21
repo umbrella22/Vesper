@@ -10,5 +10,8 @@ publish = false
 name = "vesper_player_harmony"
 crate-type = ["rlib", "cdylib"]
 
+[features]
+rtsp-bridge = ["player-platform-harmony/rtsp-bridge"]
+
 [dependencies]
 player-platform-harmony = { path = "../../platform/mobile/player-platform-harmony" }

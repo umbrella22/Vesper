@@ -867,6 +867,8 @@ extern PlayerFfiCallStatus player_ffi_ios_native_frame_pipeline_seek(
 
 extern void player_ffi_ios_native_frame_pipeline_close(uint64_t handle);
 
+extern char * player_ffi_ios_rtsp_command(const char *request_json);
+
 extern PlayerFfiCallStatus player_ffi_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
@@ -3845,6 +3847,10 @@ bool vesper_ios_native_frame_pipeline_seek(
 
 void vesper_ios_native_frame_pipeline_close(uint64_t handle) {
   player_ffi_ios_native_frame_pipeline_close(handle);
+}
+
+char * vesper_rtsp_command(const char *request_json) {
+  return player_ffi_ios_rtsp_command(request_json);
 }
 
 bool vesper_dash_bridge_execute_json(

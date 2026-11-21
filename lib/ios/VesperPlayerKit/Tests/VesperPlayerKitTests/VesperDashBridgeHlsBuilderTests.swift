@@ -452,11 +452,13 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
             segments: segments,
             playlistKind: .live,
             mediaSequence: segments.first?.number,
+            targetDuration: 2,
             segmentURI: { _, segment in
                 "http://127.0.0.1:1/dash/session/live/\(segment.number).m4s"
             }
         )
 
+        XCTAssertTrue(media.contains("#EXT-X-TARGETDURATION:2\n"))
         XCTAssertTrue(media.contains("#EXT-X-MEDIA-SEQUENCE:101"))
         XCTAssertTrue(media.contains("http://127.0.0.1:1/dash/session/live/101.m4s"))
         XCTAssertFalse(media.contains("#EXT-X-PLAYLIST-TYPE:VOD"))

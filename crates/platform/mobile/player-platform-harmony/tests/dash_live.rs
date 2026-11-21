@@ -62,6 +62,45 @@ fn failed_refresh_cannot_repoint_segments_or_reset_a_window() {
 }
 
 #[test]
+fn refresh_keeps_the_target_for_a_playlist_uri_and_does_not_commit_an_oversized_tail() {
+    let mut session = HarmonySession::from_config_json(r#"{"kind":"dashLive"}"#)
+        .ok()
+        .unwrap();
+    let first = refresh(&mut session, &manifest(41, 80_000));
+    assert_eq!(first["ok"], true, "{first}");
+
+    let tail = |duration_ms| {
+        manifest(42, 82_000).replace("r=\"5\"/>", &format!("r=\"4\"/><S d=\"{duration_ms}\"/>"))
+    };
+    let rejected = refresh(&mut session, &tail(2_500));
+    assert_eq!(rejected["error"]["code"], "resource_changed", "{rejected}");
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("target duration")
+    );
+
+    let next = refresh(&mut session, &tail(2_250));
+    assert_eq!(next["ok"], true, "{next}");
+    assert_eq!(next["value"]["mediaSequences"], json!(["42", "42"]));
+    for index in 1..=2 {
+        let old = &first["value"]["playlists"][index];
+        let new = &next["value"]["playlists"][index];
+        assert_eq!(old["uri"], new["uri"]);
+        assert!(
+            old["text"]
+                .as_str()
+                .unwrap()
+                .contains("#EXT-X-TARGETDURATION:2\n")
+        );
+        let text = new["text"].as_str().unwrap();
+        assert!(text.contains("#EXT-X-TARGETDURATION:2\n"));
+        assert!(text.contains("#EXTINF:2.250,"));
+    }
+}
+
+#[test]
 fn profile_rejects_unmodeled_timing_protection_and_unbounded_windows() {
     for mpd in [
         manifest(1, 0).replace("r=\"5\"", "r=\"-1\""),

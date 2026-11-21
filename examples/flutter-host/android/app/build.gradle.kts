@@ -135,6 +135,7 @@ extensions.configure<ApplicationExtension>("android") {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         if (!isFlutterSplitPerAbiBuild.get()) {
             ndk {
@@ -198,6 +199,7 @@ flutter {
 }
 
 dependencies {
+    androidTestImplementation("androidx.test:runner:1.3.0")
     implementation(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
     implementation(project.dependencies.project(":vesper-player-kit-external-playback"))
     implementation(project.dependencies.project(":vesper-player-kit-remux-ffmpeg"))

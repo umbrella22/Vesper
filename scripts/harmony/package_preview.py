@@ -124,7 +124,7 @@ Runtime and physical-device tests have not been run by the artifact job.
 - `build-identity.json`: source, toolchain and workflow identifiers.
 
 Open `example-source/` in DevEco Studio with the stable API 26 SDK. Configure
-device signing to run on a phone or tablet. The application targets API 20+
+device signing to run on a phone or tablet. The application targets API 26+
 arm64 devices. [Testing and feedback](TESTING.md) covers installation, local HAR
 integration, diagnostic reports and known capability limits.
 

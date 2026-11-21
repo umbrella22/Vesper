@@ -100,8 +100,9 @@ struct PacketNormalizerSession {
 }
 
 struct TimedFfmpegInput {
+    // Drop the FFmpeg context before releasing the interrupt callback state.
     input: ffmpeg::format::context::Input,
-    interrupt: Box<FfmpegInterruptState>,
+    interrupt: Arc<FfmpegInterruptState>,
     read_idle_timeout_ms: Option<u64>,
 }
 
@@ -279,7 +280,7 @@ struct LeasedPacket {
 impl TimedFfmpegInput {
     fn new(
         input: ffmpeg::format::context::Input,
-        interrupt: Box<FfmpegInterruptState>,
+        interrupt: Arc<FfmpegInterruptState>,
         read_idle_timeout_ms: Option<u64>,
     ) -> Self {
         Self {
@@ -1839,8 +1840,8 @@ fn open_timed_ffmpeg_input(
     })?;
     let input = CString::new(input)
         .map_err(|_| SourceNormalizerError::invalid_input("input must not contain NUL bytes"))?;
-    let mut interrupt = Box::new(FfmpegInterruptState::new(cancel_requested));
-    let interrupt_ptr = (&mut *interrupt) as *mut FfmpegInterruptState;
+    let interrupt = Arc::new(FfmpegInterruptState::new(cancel_requested));
+    let interrupt_ptr = Arc::as_ptr(&interrupt).cast_mut();
     // SAFETY: ownership of the dictionary pointer is transferred to FFmpeg for
     // the open call below, then reclaimed with `Dictionary::own` before return.
     let mut raw_options = unsafe { options.disown() };
@@ -1856,7 +1857,7 @@ fn open_timed_ffmpeg_input(
         ));
     }
     // SAFETY: `context` is a valid AVFormatContext from FFmpeg, and the opaque
-    // pointer targets the boxed interrupt state kept alive by TimedFfmpegInput.
+    // pointer targets the Arc allocation kept alive until after the context closes.
     unsafe {
         (*context).interrupt_callback = ffmpeg::ffi::AVIOInterruptCB {
             callback: Some(ffmpeg_interrupt_callback),
@@ -3574,6 +3575,33 @@ mod tests {
         assert!(format!("{stale_seek_error}").contains("no packet lease is outstanding"));
 
         session.close().expect("close fixture packet session");
+    }
+
+    #[test]
+    fn interrupt_callback_tracks_cancellation_after_input_moves() {
+        let fixture = fixture_path();
+        if !fixture.is_file() {
+            return;
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let input = super::open_timed_ffmpeg_input(
+            &fixture.to_string_lossy(),
+            ffmpeg_next::Dictionary::new(),
+            Some(5000),
+            Some(5000),
+            Some(cancelled),
+        )
+        .expect("open timed input");
+        let mut input = Box::new(input);
+        assert!(input.read_packet().expect("read input packet").is_some());
+        // SAFETY: the input still owns a live FFmpeg context and callback state.
+        let interrupt = unsafe { (*input.input.as_ptr()).interrupt_callback };
+        let callback = interrupt.callback.expect("interrupt callback");
+        // SAFETY: opaque belongs to the live input and the callback only reads atomics.
+        assert_eq!(unsafe { callback(interrupt.opaque) }, 0);
+        input.cancel();
+        // SAFETY: the live input continues to own the same callback allocation.
+        assert_eq!(unsafe { callback(interrupt.opaque) }, 1);
     }
 
     #[test]

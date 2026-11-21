@@ -16,6 +16,9 @@ from candidate_identity import source_identity
 MODULES = ['vesper-player-kit', 'vesper-player-kit-arkui', 'vesper-player-kit-arkui-ui']
 TARGET = 'aarch64-unknown-linux-ohos'
 LIBRARIES = ['libvesper_player_harmony.so', 'libvesper_player_harmony_node.so', 'libc++_shared.so']
+MIN_API_VERSION = 26
+PACKED_MIN_API_VERSION = 260000026
+NATIVE_TARGET = f'aarch64-linux-ohos{MIN_API_VERSION}.0.0'
 
 
 def digest(path):
@@ -59,11 +62,13 @@ def verify_har(path, expected_native):
                 module = json.load(archive.extractfile(entry))
     if native != expected_native:
         raise ValueError('HAR native bytes differ from their staged inputs')
-    if package is None or package.get('compatibleSdkVersion') != 20 or package.get('metadata', {}).get('debug') is not False:
-        raise ValueError('HAR must use compatible API 20 and Release metadata')
+    if (package is None or package.get('compatibleSdkVersion') != MIN_API_VERSION
+            or package.get('metadata', {}).get('debug') is not False):
+        raise ValueError(f'HAR must use compatible API {MIN_API_VERSION} and Release metadata')
     app = module.get('app', {}) if module is not None else {}
-    if app.get('minAPIVersion') != 60000020 or app.get('buildMode') != 'release' or app.get('debug') is not False:
-        raise ValueError('HAR module must retain the packed API 20 floor and Release metadata')
+    if (app.get('minAPIVersion') != PACKED_MIN_API_VERSION
+            or app.get('buildMode') != 'release' or app.get('debug') is not False):
+        raise ValueError(f'HAR module must retain the packed API {MIN_API_VERSION} floor and Release metadata')
     return {'sha256': digest(path), 'entries': len(names), 'nativeSha256': native}
 
 
@@ -89,7 +94,7 @@ def main():
         'RUSTUP_AUTO_INSTALL': '0', 'CARGO_TARGET_DIR': str(base),
         'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER': str(native / 'llvm/bin/clang'),
         'CARGO_PROFILE_RELEASE_DEBUG': '2', 'CARGO_PROFILE_RELEASE_STRIP': 'none',
-        'CARGO_ENCODED_RUSTFLAGS': '\x1f'.join(['-C', 'link-arg=--target=aarch64-linux-ohos',
+        'CARGO_ENCODED_RUSTFLAGS': '\x1f'.join(['-C', f'link-arg=--target={NATIVE_TARGET}',
             '-C', f'link-arg=--sysroot={native / "sysroot"}', '-C', 'link-arg=-Wl,--no-undefined']),
     })
     run(['cbindgen', root / 'crates/ffi/player-ffi-harmony', '--config',
@@ -97,12 +102,15 @@ def main():
          '--output', root / 'include/vesper_harmony.h', '--only-target-dependencies', '--verify'],
         root, environment, log)
     cargo = ['cargo', 'build', '--locked', '--release', '--target', TARGET, '-p', 'player-ffi-harmony']
+    rtsp_bridge = environment.get('VESPER_HARMONY_RTSP_BRIDGE') == '1'
+    if rtsp_bridge:
+        cargo.extend(['--features', 'rtsp-bridge'])
     if options.offline:
         cargo.append('--offline')
     run(cargo, root, environment, log)
     release = base / TARGET / 'release'
-    run([native / 'llvm/bin/clang++', '--target=aarch64-linux-ohos',
-         f'--sysroot={native / "sysroot"}', '-std=c++17', '-D__OHOS_API__=20', '-Wall', '-Wextra',
+    run([native / 'llvm/bin/clang++', f'--target={NATIVE_TARGET}',
+         f'--sysroot={native / "sysroot"}', '-std=c++17', '-Wall', '-Wextra',
          '-Werror', '-fno-exceptions', '-fno-rtti', '-fPIC', '-shared', '-O2', '-g', '-I', root / 'include',
          root / 'lib/harmony/vesper-player-kit/src/main/cpp/native_module.cpp', '-L', release,
          '-lvesper_player_harmony', '-lace_napi.z', '-lnative_media_codecbase', '-Wl,--no-undefined', '-Wl,-rpath,$ORIGIN',
@@ -177,6 +185,7 @@ def main():
     report = {'schemaVersion': 1, 'scope': 'harmony-host-kit-release-build', 'status': 'PASS', 'source': identity,
               'projectDirectory': str(project), 'artifacts': artifacts, 'dynamicDependencies': dependencies,
               'lockfileSha256': digest(root / 'Cargo.lock'), 'symbols': str(symbols),
+              'rtspBridge': rtsp_bridge,
               'unverified': ['Runtime playback', 'Physical devices', 'Registry publication']}
     (dist / 'build-report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

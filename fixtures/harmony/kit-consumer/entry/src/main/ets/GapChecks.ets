@@ -36,12 +36,6 @@ export async function runProfileChecks(surface: string): Promise<string> {
         results.push(JSON.stringify({ profile: profile, rendered: rendered, final: controller.snapshot() }));
       } finally { source.close(); await controller.stop(); }
     }
-    if (controller.capabilities().runtimeApi < 26) {
-      let code = '';
-      try { await controller.timeRanges(); } catch (error) { code = (error as VesperPlayerError).code; }
-      if (code !== 'unsupported') { throw new Error('API 20 must reject the API 26 range query'); }
-      results.push(JSON.stringify({ api20TimeRanges: code }));
-    }
     return JSON.stringify(results);
   } catch (error) { throw new Error(JSON.stringify({ stage: stage, error: `${error}`, observations: results, playback: controller.snapshot() })); }
   finally { await controller.dispose(); sources.close(); }
@@ -82,7 +76,7 @@ export async function runRecoveryIntentChecks(surface: string): Promise<string> 
     await controller.activate(source, { timeoutMs: 15000 });
     await until(() => controller.snapshot().firstFrame && controller.snapshot().availableBitrates.length >= 2);
     stage = 'nondefault-choices';
-    if (controller.capabilities().runtimeApi >= 26) { await controller.setTrackConstraints({ maxVideoBitrate: 1200000 }); }
+    await controller.setTrackConstraints({ maxVideoBitrate: 1200000 });
     const bitrate = Math.min(...controller.snapshot().availableBitrates.filter((value) => value > 0));
     await controller.selectTrack({ kind: 'video', mode: 'bitrate', bitrate: bitrate });
     await controller.selectTrack({ kind: 'subtitle', mode: 'off' });
@@ -113,7 +107,7 @@ export async function runRecoveryIntentChecks(surface: string): Promise<string> 
     if (state.state !== 'recovered' || state.attempts < 1 || after.playbackEpoch === before.playbackEpoch ||
       after.trackSelections?.video?.effective?.bitrate !== bitrate || after.trackSelections?.subtitle?.effective?.mode !== 'off'
       || !after.firstFrame || after.state !== 'playing' || after.playbackRate !== 1.5 || !after.muted || after.volume !== 0.6
-      || controller.capabilities().runtimeApi >= 26 && after.trackConstraints?.requested?.maxVideoBitrate !== 1200000) {
+      || after.trackConstraints?.requested?.maxVideoBitrate !== 1200000) {
       throw new Error(JSON.stringify({ before: before, after: after, recovery: state }));
     }
     return JSON.stringify({ faultCase: faultCase, before: before, after: after, recovery: state,

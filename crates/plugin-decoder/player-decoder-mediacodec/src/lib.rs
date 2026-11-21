@@ -1077,10 +1077,14 @@ mod android_media {
                 AMediaFormat_setInt32(format.as_ptr(), AMEDIAFORMAT_KEY_HEIGHT, height as i32);
             }
             for (index, buffer) in codec_config_buffers(config).iter().take(3).enumerate() {
-                let key = match index {
-                    0 => unsafe { AMEDIAFORMAT_KEY_CSD_0 },
-                    1 => unsafe { AMEDIAFORMAT_KEY_CSD_1 },
-                    _ => unsafe { AMEDIAFORMAT_KEY_CSD_2 },
+                // SAFETY: the NDK exports these keys as immutable pointers to
+                // NUL-terminated strings that remain valid for the process lifetime.
+                let key = unsafe {
+                    match index {
+                        0 => AMEDIAFORMAT_KEY_CSD_0,
+                        1 => AMEDIAFORMAT_KEY_CSD_1,
+                        _ => AMEDIAFORMAT_KEY_CSD_2,
+                    }
                 };
                 // SAFETY: `buffer` is borrowed for this call only and
                 // AMediaFormat copies the provided bytes.
@@ -1494,12 +1498,14 @@ mod android_media {
         format: &MediaFormat,
         fallback: &MediaCodecOutputFormat,
     ) -> MediaCodecOutputFormat {
+        // SAFETY: the NDK owns both immutable C-string keys for the process lifetime.
+        let (width_key, height_key) = unsafe { (AMEDIAFORMAT_KEY_WIDTH, AMEDIAFORMAT_KEY_HEIGHT) };
         let coded_width = format
-            .get_i32(unsafe { AMEDIAFORMAT_KEY_WIDTH })
+            .get_i32(width_key)
             .and_then(non_negative_i32_to_u32)
             .unwrap_or(fallback.coded_width);
         let coded_height = format
-            .get_i32(unsafe { AMEDIAFORMAT_KEY_HEIGHT })
+            .get_i32(height_key)
             .and_then(non_negative_i32_to_u32)
             .unwrap_or(fallback.coded_height);
         let crop_left = format

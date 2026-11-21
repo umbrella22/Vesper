@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
+use ab_glyph_rasterizer::{Point, Rasterizer, point};
+use skrifa::{DrawMemory, Font, GlyphId, PathSink, ScalerFont};
 
 const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Ubuntu-Light.ttf");
 // Media titles can contain arbitrary characters. Keep only a bounded working
@@ -12,8 +13,8 @@ const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Ubuntu-Light.ttf");
 const MAX_CACHED_GLYPHS: usize = 1024;
 
 struct Fonts {
-    body: Option<FontArc>,
-    fallback: Option<FontArc>,
+    body: Option<Font>,
+    fallback: Option<Font>,
 }
 
 struct RasterGlyph {
@@ -33,12 +34,12 @@ thread_local! {
 fn fonts() -> &'static Fonts {
     static FONTS: OnceLock<Fonts> = OnceLock::new();
     FONTS.get_or_init(|| Fonts {
-        body: FontArc::try_from_slice(FONT_BYTES).ok(),
+        body: Font::new(FONT_BYTES, 0),
         fallback: system_fallback(),
     })
 }
 
-fn system_fallback() -> Option<FontArc> {
+fn system_fallback() -> Option<Font> {
     // Optional installed fonts support local media names without copying or
     // redistributing operating-system fonts. Never download a font at runtime.
     #[cfg(target_os = "macos")]
@@ -65,18 +66,22 @@ fn system_fallback() -> Option<FontArc> {
 
     candidates
         .into_iter()
-        .find_map(|path| FontArc::try_from_vec(std::fs::read(path).ok()?).ok())
+        .find_map(|path| Font::new(std::fs::read(path).ok()?, 0))
 }
 
-fn with_font<T>(character: char, render: impl FnOnce(&FontArc) -> T) -> Option<T> {
+fn glyph_id(font: &Font, character: char) -> GlyphId {
+    font.charmap().map_unicode(character).unwrap_or_default()
+}
+
+fn with_font<T>(character: char, render: impl FnOnce(&Font) -> T) -> Option<T> {
     let fonts = fonts();
     let body = fonts.body.as_ref()?;
-    if body.glyph_id(character).0 != 0 {
+    if glyph_id(body, character) != GlyphId::default() {
         Some(render(body))
     } else if let Some(fallback) = fonts
         .fallback
         .as_ref()
-        .filter(|fallback| fallback.glyph_id(character).0 != 0)
+        .filter(|fallback| glyph_id(fallback, character) != GlyphId::default())
     {
         Some(render(fallback))
     } else {
@@ -102,10 +107,68 @@ pub fn measure(text: &str, scale: u32) -> u32 {
 
 fn advance(character: char, scale: u32) -> f32 {
     with_font(character, |font| {
-        let scaled = font.as_scaled(PxScale::from(size(scale)));
-        scaled.h_advance(font.glyph_id(character))
+        let (factor, _) = pixel_scale(font, size(scale))?;
+        Some(font.glyph_metrics().h_advance(glyph_id(font, character)) * factor)
     })
+    .flatten()
     .unwrap_or(0.0)
+}
+
+fn pixel_scale(font: &Font, pixel_height: f32) -> Option<(f32, f32)> {
+    let line = font.metrics().h_line()?;
+    let ascent = line.ascender.to_f32();
+    let height = ascent - line.descender.to_f32();
+    // Overlay sizes describe ascent-to-descent height, not pixels per em.
+    // Keep that convention for both layout advances and outline coordinates.
+    (height > 0.0).then(|| (pixel_height / height, ascent))
+}
+
+struct RasterSink {
+    rasterizer: Rasterizer,
+    factor: f32,
+    offset: Point,
+    start: Point,
+    current: Point,
+}
+
+impl RasterSink {
+    fn transform(&self, x: f32, y: f32) -> Point {
+        point(x * self.factor, -y * self.factor) + self.offset
+    }
+}
+
+impl PathSink for RasterSink {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.current = self.transform(x, y);
+        self.start = self.current;
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let end = self.transform(x, y);
+        self.rasterizer.draw_line(self.current, end);
+        self.current = end;
+    }
+
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let control = self.transform(cx, cy);
+        let end = self.transform(x, y);
+        self.rasterizer.draw_quad(self.current, control, end);
+        self.current = end;
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let control0 = self.transform(cx0, cy0);
+        let control1 = self.transform(cx1, cy1);
+        let end = self.transform(x, y);
+        self.rasterizer
+            .draw_cubic(self.current, control0, control1, end);
+        self.current = end;
+    }
+
+    fn close(&mut self) {
+        self.rasterizer.draw_line(self.current, self.start);
+        self.current = self.start;
+    }
 }
 
 fn rasterize(character: char, scale: u32, density: u32) -> Option<Arc<RasterGlyph>> {
@@ -114,21 +177,39 @@ fn rasterize(character: char, scale: u32, density: u32) -> Option<Arc<RasterGlyp
         return Some(glyph);
     }
     let glyph = with_font(character, |font| {
-        let scaled = font.as_scaled(PxScale::from(size(scale) * density as f32));
-        let glyph = font
-            .glyph_id(character)
-            .with_scale_and_position(size(scale) * density as f32, point(0.0, scaled.ascent()));
-        let outlined = font.outline_glyph(glyph)?;
-        let bounds = outlined.px_bounds();
-        let width = bounds.width() as u32;
-        let height = bounds.height() as u32;
+        let (factor, ascent) = pixel_scale(font, size(scale) * density as f32)?;
+        let baseline = ascent * factor;
+        let id = glyph_id(font, character);
+        let bounds = font.glyph_metrics().extents(id)?;
+        let left = (bounds.x_bearing * factor).floor();
+        let right = ((bounds.x_bearing + bounds.width) * factor).ceil();
+        let top = (-bounds.y_bearing * factor + baseline.fract()).floor() + baseline.trunc();
+        let bottom = ((bounds.height - bounds.y_bearing) * factor + baseline.fract()).ceil()
+            + baseline.trunc();
+        let width = (right - left) as u32;
+        let height = (bottom - top) as u32;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let mut sink = RasterSink {
+            rasterizer: Rasterizer::new(width as usize, height as usize),
+            factor,
+            offset: point(-left, baseline - top),
+            start: point(0.0, 0.0),
+            current: point(0.0, 0.0),
+        };
+        let scaler = ScalerFont::unhinted(font.clone(), None);
+        scaler
+            .outline(id)?
+            .draw(DrawMemory::Scratch, &mut sink)
+            .ok()?;
         let mut coverage = vec![0; width as usize * height as usize];
-        outlined.draw(|x, y, alpha| {
-            coverage[y as usize * width as usize + x as usize] = (alpha * 255.0).round() as u8;
+        sink.rasterizer.for_each_pixel(|index, alpha| {
+            coverage[index] = (alpha * 255.0).round() as u8;
         });
         Some(Arc::new(RasterGlyph {
-            left: bounds.min.x as i32,
-            top: bounds.min.y as i32,
+            left: left as i32,
+            top: top as i32,
             width,
             height,
             coverage,
@@ -161,3 +242,6 @@ pub fn paint(text: &str, scale: u32, density: u32, mut pixel: impl FnMut(i32, i3
         cursor += advance(character, scale) * density as f32;
     }
 }
+
+#[cfg(test)]
+mod tests;

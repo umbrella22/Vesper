@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+player-hls-playlist = { path = "../player-hls-playlist" }
 player-model = { path = "../../model/player-model" }
 quick-xml.workspace = true
 serde.workspace = true

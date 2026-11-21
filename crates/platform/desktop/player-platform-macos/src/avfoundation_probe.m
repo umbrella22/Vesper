@@ -148,7 +148,17 @@ static NSError *player_load_asset(AVURLAsset *asset, NSArray<NSString *> *keys) 
                            dispatch_semaphore_signal(semaphore);
                          }];
 
-    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+    const int64_t load_timeout_ns = 10 * NSEC_PER_SEC;
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, load_timeout_ns)) != 0) {
+        // The copied completion block owns its error storage and semaphore.
+        // A late completion can update or signal them without touching the caller's result.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+          [asset cancelLoading];
+        });
+        return [NSError errorWithDomain:@"player.macos.avfoundation"
+                                  code:NSURLErrorTimedOut
+                              userInfo:@{NSLocalizedDescriptionKey : @"AVFoundation asset probe timed out"}];
+    }
     return load_error;
 }
 

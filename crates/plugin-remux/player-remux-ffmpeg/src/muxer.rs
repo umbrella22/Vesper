@@ -638,7 +638,28 @@ fn open_remux_input(
     token: Arc<AtomicBool>,
 ) -> Result<format::context::Input, ProcessorError> {
     check_cancelled(progress)?;
-    let result = format::input_with_interrupt(path, move || token.load(Ordering::Acquire));
+    let absolute = std::path::absolute(path).map_err(|error| {
+        ProcessorError::MuxFailed(format!(
+            "failed to open input: cannot resolve local path: {error}"
+        ))
+    })?;
+    let local = absolute
+        .to_str()
+        .filter(|value| !value.contains('\0'))
+        .filter(|_| absolute.is_file())
+        .ok_or_else(|| {
+            ProcessorError::MuxFailed(
+                "failed to open input: remux input must be a local file".to_owned(),
+            )
+        })?;
+    let mut options = ffmpeg::Dictionary::new();
+    // The host has downloaded every member. Nested playlist opens also use file I/O.
+    options.set("protocol_whitelist", "file");
+    let result = format::input_with_interrupt_and_dictionary(
+        local,
+        move || token.load(Ordering::Acquire),
+        options,
+    );
     check_cancelled(progress)?;
     result.map_err(|error| {
         FfmpegProcessorError::Remux(format!(
@@ -917,6 +938,25 @@ mod tests {
             if let Ok(mut ratios) = self.ratios.lock() {
                 ratios.push(ratio);
             }
+        }
+    }
+
+    #[test]
+    fn remux_admits_local_files_and_rejects_a_remote_locator() {
+        ffmpeg_next::init().expect("FFmpeg initialization");
+        let progress = RecordingProgress::default();
+        let token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let locator = std::path::Path::new("https://example.test/video.mp4");
+        assert!(
+            matches!(super::open_remux_input(locator, &progress, token.clone()),
+            Err(ProcessorError::MuxFailed(message)) if message == "failed to open input: remux input must be a local file")
+        );
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/media/tiny-h264-aac.m4v");
+        if fixture.is_file() {
+            let input =
+                super::open_remux_input(&fixture, &progress, token).expect("open local input");
+            assert!(input.nb_streams() > 0);
         }
     }
 
