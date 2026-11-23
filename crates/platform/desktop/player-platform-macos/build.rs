@@ -100,6 +100,27 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=vesper_platform_macos_avfoundation_probe");
+    // The Objective-C availability checks use compiler-rt, which rustc's
+    // linker invocation does not pull in automatically.
+    let clang_runtime = run_command(
+        "xcrun",
+        &["--sdk", "macosx", "clang", "--print-libgcc-file-name"],
+        None,
+    );
+    let clang_runtime = Path::new(clang_runtime.trim());
+    assert!(
+        clang_runtime.is_file(),
+        "macOS Clang runtime is missing: {}",
+        clang_runtime.display()
+    );
+    let clang_runtime_directory = clang_runtime
+        .parent()
+        .expect("macOS Clang runtime directory");
+    println!(
+        "cargo:rustc-link-search=native={}",
+        clang_runtime_directory.display()
+    );
+    println!("cargo:rustc-link-lib=static=clang_rt.osx");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=CoreMedia");
