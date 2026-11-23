@@ -238,9 +238,11 @@ mod implementation {
         let destination = resolve_simulator_destination(tools, cancellation)?;
         run_xcode_smoke(
             root,
-            &config,
-            &frameworks,
-            &temporary.path().join("xcode-derived-data"),
+            XcodeSmokePaths {
+                config: &config,
+                frameworks: &frameworks,
+                derived_data: &temporary.path().join("xcode-derived-data"),
+            },
             &destination,
             tools,
             cancellation,
@@ -808,11 +810,15 @@ mod implementation {
         Ok(())
     }
 
+    struct XcodeSmokePaths<'a> {
+        config: &'a Path,
+        frameworks: &'a Path,
+        derived_data: &'a Path,
+    }
+
     fn run_xcode_smoke(
         root: &Path,
-        config: &Path,
-        frameworks: &Path,
-        derived_data: &Path,
+        paths: XcodeSmokePaths<'_>,
         destination: &str,
         tools: &Tools,
         cancellation: &InterruptDeferral,
@@ -859,23 +865,24 @@ mod implementation {
                 destination,
                 "-derivedDataPath",
             ])
-            .arg(derived_data)
+            .arg(paths.derived_data)
             .args(["CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO"]);
         clear_private_child_environment(&mut build);
         let build_result = run_process(&mut build, "iOS native-frame Xcode build", cancellation)?;
         require_success(build_result, "iOS native-frame Xcode build", report)?;
-        let xctestrun = discover_xctestrun(&derived_data.join("Build/Products"))?;
+        let xctestrun = discover_xctestrun(&paths.derived_data.join("Build/Products"))?;
         set_plist_string(
             &xctestrun,
             "VesperPlayerKitTests.EnvironmentVariables.VESPER_IOS_NATIVE_FRAME_SMOKE_CONFIG",
-            config.as_os_str(),
+            paths.config.as_os_str(),
             true,
             tools,
             cancellation,
         )?;
-        let host = derived_data
+        let host = paths
+            .derived_data
             .join("Build/Products/Debug-iphonesimulator/VesperPlayerKitDeviceTestHost.app");
-        stage_test_host_frameworks(&host, frameworks, tools, cancellation)?;
+        stage_test_host_frameworks(&host, paths.frameworks, tools, cancellation)?;
 
         let mut test = Command::new(&tools.xcodebuild);
         test.args(["test-without-building", "-xctestrun"])

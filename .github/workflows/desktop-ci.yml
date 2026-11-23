@@ -119,7 +119,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets ${{ env.LINUX_WORKSPACE_EXCLUDES }} -- -D warnings
+        run: cargo clippy --workspace --all-targets --keep-going ${{ env.LINUX_WORKSPACE_EXCLUDES }} -- -D warnings
 
   msrv-check:
     name: Rust MSRV Check

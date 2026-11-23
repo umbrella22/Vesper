@@ -2256,12 +2256,10 @@ mod tests {
         assert!(normalizer.uses_ffmpeg);
         assert!(normalizer.link_headerpad);
 
-        for plugin in [IosPluginId::DecoderVideoToolbox] {
-            let spec = plugin.spec();
-            assert_eq!(spec.release_ffmpeg_profile, None);
-            assert!(!spec.uses_ffmpeg);
-            assert!(!spec.link_headerpad);
-        }
+        let videotoolbox = IosPluginId::DecoderVideoToolbox.spec();
+        assert_eq!(videotoolbox.release_ffmpeg_profile, None);
+        assert!(!videotoolbox.uses_ffmpeg);
+        assert!(!videotoolbox.link_headerpad);
     }
 
     #[test]

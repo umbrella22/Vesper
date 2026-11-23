@@ -94,6 +94,10 @@ fn packet_error(error: player_plugin::author::PluginError) -> NativeFramePipelin
     NativeFramePipelineError::new("nativeSourceNormalizer", error.to_string())
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Store the frame inline to avoid an extra allocation on every successful poll."
+)]
 pub enum NativeMediaVideoPoll {
     Frame {
         lease: NativeVideoFrame,
