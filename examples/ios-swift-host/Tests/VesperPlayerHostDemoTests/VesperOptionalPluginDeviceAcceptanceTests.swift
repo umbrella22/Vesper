@@ -7,8 +7,7 @@ import XCTest
 @MainActor
 final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
     func testBundledPluginEntriesAndCheckedLoaders() throws {
-        let paths = try bundledPluginPaths()
-        for path in paths.all {
+        for path in try bundledPluginPaths() {
             try assertPluginEntryLoads(at: path)
         }
 
@@ -19,10 +18,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
                 mode: .diagnosticsOnly,
                 pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
-            frameProcessor: VesperFrameProcessorConfiguration(
-                mode: .diagnosticsOnly,
-                pluginReferences: [VesperBundledPluginReferences.frameProcessorDiagnostic]
-            )
+            frameProcessor: VesperFrameProcessorConfiguration()
         )
         XCTAssertTrue(
             diagnostics.contains { diagnostic in
@@ -31,14 +27,6 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
                     diagnostic["status"] as? String == "sourceNormalizerSupported"
             },
             "The bundled SourceNormalizer must pass the checked mobile plugin loader."
-        )
-        XCTAssertTrue(
-            diagnostics.contains { diagnostic in
-                diagnostic["pluginId"] as? String ==
-                    VesperBundledPluginReferences.frameProcessorDiagnostic.pluginId &&
-                    diagnostic["status"] as? String == "frameProcessorSupported"
-            },
-            "The bundled FrameProcessor must pass the checked mobile plugin loader."
         )
         XCTAssertTrue(diagnostics.allSatisfy { $0["path"] == nil })
 
@@ -78,7 +66,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
 #if targetEnvironment(simulator)
         throw XCTSkip("Physical iOS device required for optional plugin playback acceptance.")
 #else
-        let paths = try bundledPluginPaths()
+        _ = try bundledPluginPaths()
         let source = try localSmokeSource()
         let surfaceView = PlayerSurfaceView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         guard surfaceView.supportsNativeFrameMetalPresentation else {
@@ -102,9 +90,6 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
                 decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
-                frameProcessorPluginReferences: [
-                    VesperBundledPluginReferences.frameProcessorDiagnostic
-                ],
                 maxInFlightFrames: 1
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
@@ -137,18 +122,16 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
         XCTAssertTrue(session.play())
         XCTAssertEqual(audioOutput.playerNode?.volume, 0.0)
         let presented = await waitForPluginPlayback(timeout: 10) {
-            session.counters.presentedFrames > 0 &&
-                session.counters.processedFrames > 0
+            session.counters.presentedFrames > 0
         }
 
         XCTAssertTrue(
             presented,
-            "SourceNormalizer, VideoToolbox Decoder, and FrameProcessor must produce and present a frame."
+            "SourceNormalizer and VideoToolbox Decoder must produce a frame for Metal presentation."
         )
         XCTAssertEqual(session.route, "sdkManagedNativeFrame")
         XCTAssertEqual(session.participation, "participated")
         XCTAssertGreaterThan(session.counters.presentedFrames, 0)
-        XCTAssertGreaterThan(session.counters.processedFrames, 0)
         XCTAssertEqual(session.clockSource, "swiftNativeAudioBridge")
         XCTAssertTrue(session.hasAudioTrack)
         XCTAssertTrue(session.seekable)
@@ -218,7 +201,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
 #if targetEnvironment(simulator)
         throw XCTSkip("Physical iOS device required for VideoToolbox B-frame acceptance.")
 #else
-        let paths = try bundledPluginPaths()
+        _ = try bundledPluginPaths()
         let source = try localBFrameSmokeSource()
         let surfaceView = PlayerSurfaceView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
         guard surfaceView.supportsNativeFrameMetalPresentation else {
@@ -313,13 +296,12 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
 #endif
     }
 
-    private func bundledPluginPaths() throws -> BundledPluginPaths {
-        try BundledPluginPaths(
-            remux: XCTUnwrap(bundledDownloadPluginArtifactPaths().first),
-            sourceNormalizer: XCTUnwrap(bundledSourceNormalizerPluginArtifactPaths().first),
-            decoder: XCTUnwrap(bundledDecoderPluginArtifactPaths().first),
-            frameProcessor: XCTUnwrap(bundledFrameProcessorPluginArtifactPaths().first)
-        )
+    private func bundledPluginPaths() throws -> [String] {
+        try [
+            XCTUnwrap(bundledDownloadPluginArtifactPaths().first, "Missing bundled Remux"),
+            XCTUnwrap(bundledSourceNormalizerPluginArtifactPaths().first, "Missing bundled SourceNormalizer"),
+            XCTUnwrap(bundledDecoderPluginArtifactPaths().first, "Missing bundled VideoToolbox Decoder"),
+        ]
     }
 
     private func localSmokeSource() throws -> VesperPlayerSource {
@@ -396,17 +378,6 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(50))
         }
         return condition()
-    }
-}
-
-private struct BundledPluginPaths {
-    let remux: String
-    let sourceNormalizer: String
-    let decoder: String
-    let frameProcessor: String
-
-    var all: [String] {
-        [remux, sourceNormalizer, decoder, frameProcessor]
     }
 }
 

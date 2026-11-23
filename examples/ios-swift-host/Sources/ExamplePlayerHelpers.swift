@@ -625,10 +625,6 @@ func bundledFrameProcessorPluginReferences() -> [VesperPluginReference] {
     []
 }
 
-func bundledFrameProcessorPluginArtifactPaths() -> [String] {
-    []
-}
-
 private func bundledPluginLibraryPaths(
     frameworkName: String,
     binaryName: String
