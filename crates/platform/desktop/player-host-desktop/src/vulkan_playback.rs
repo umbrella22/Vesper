@@ -164,7 +164,7 @@ impl LinuxVulkanPlaybackPresenter {
         let Some(drm_device) = self.drm_device.clone() else {
             return Ok(None);
         };
-        let source = super::normalize_desktop_host_source_uri(source.to_owned())?;
+        let source = super::normalize_desktop_host_source_uri(source)?;
         let options = super::desktop_runtime_options_for_source(&source, options);
         // This reference path is limited to local clear files. The normal Linux
         // adapter still owns network playback and software-only configurations.
@@ -545,8 +545,9 @@ fn staged_nv12_input<'a>(
     let (luma, color) = frame.bytes.split_at(y);
     let (u, v) = color.split_at(uv);
     chroma.resize(uv_pair, 0);
-    for ((u, v), sample) in u.iter().zip(v).zip(chroma.chunks_exact_mut(2)) {
-        sample.copy_from_slice(&[*u, *v]);
+    let (chroma_samples, _) = chroma.as_chunks_mut::<2>();
+    for ((u, v), sample) in u.iter().zip(v).zip(chroma_samples) {
+        *sample = [*u, *v];
     }
     Ok([
         VulkanUploadPlane {

@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
 
@@ -37,12 +37,17 @@ void main() {
             VesperVideoRect(left: 109.375, top: 0, width: 101.25, height: 180));
     Future<void> pump({bool visible = true}) async {
       await tester.pumpWidget(
-          MaterialApp(home: StatefulBuilder(builder: (context, setState) {
-        return VesperPlayerView(
-            controller: controller,
-            visible: visible,
-            onGeometryChanged: (value) => setState(() => values.add(value)));
-      })));
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: StatefulBuilder(builder: (context, setState) {
+            return VesperPlayerView(
+              controller: controller,
+              visible: visible,
+              onGeometryChanged: (value) => setState(() => values.add(value)),
+            );
+          }),
+        ),
+      );
       await tester.pump();
     }
 
@@ -87,8 +92,9 @@ void main() {
     addTearDown(scrollController.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: SizedBox(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
           width: 400,
           height: 800,
           child: SingleChildScrollView(
@@ -128,8 +134,9 @@ void main() {
 
   testWidgets('clips the player surface to its widget bounds', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: SizedBox(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
           width: 320,
           height: 180,
           child: VesperPlayerView(controller: controller),

@@ -346,9 +346,13 @@ extension VesperNativePlayerBridge {
     ) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: subtitleSelectionWaitPolicy.timeout)
-        while publishedSubtitleState.catalogState == .loading {
+        while true {
+            // A newer command can supersede this transaction before a queued wakeup resumes.
             guard isCurrentSubtitleSelection(pending) else {
                 throw CancellationError()
+            }
+            guard publishedSubtitleState.catalogState == .loading else {
+                return
             }
             guard clock.now < deadline else {
                 throw VesperSubtitleSelectionError.selectionTimedOut(
