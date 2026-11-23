@@ -14,7 +14,7 @@ plugins {
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
-val vesperDefaultPublicationVersion = "0.10.0"
+val vesperDefaultPublicationVersion = "0.11.0"
 val vesperPublicationVersion =
     providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 
@@ -86,14 +86,6 @@ val vesperAndroidExternalPlaybackPublications =
 
 val vesperAndroidOptionalPluginPublications =
     mapOf(
-        "vesper-player-kit-performance-diagnostics" to
-            AndroidPublicationMetadata(
-                pomName = "Vesper Player Android Performance Diagnostics Plugin",
-                description =
-                    "Optional Android BenchmarkSink plugin for bounded playback and " +
-                        "overlay-correlated UI performance diagnostics.",
-                licenses = listOf(apacheLicense),
-            ),
         "vesper-player-kit-source-normalizer-ffmpeg" to
             AndroidPublicationMetadata(
                 pomName = "Vesper Player Android SourceNormalizer FFmpeg Plugin",
@@ -139,20 +131,6 @@ val vesperAndroidPluginRegistries =
                 pluginId = "io.github.umbrella22.vesper.remux-ffmpeg",
                 variants = setOf("release"),
             ),
-        "vesper-player-kit-frame-processor-diagnostic" to
-            AndroidPluginRegistryMetadata(
-                manifestPath = "plugins/frame-processor-diagnostic/vesper-plugin.toml",
-                libraryName = "vesper_frame_processor_diagnostic",
-                pluginId = "dev.vesper.frame-processor-diagnostic",
-                variants = setOf("profile", "release"),
-            ),
-        "vesper-player-kit-performance-diagnostics" to
-            AndroidPluginRegistryMetadata(
-                manifestPath = "plugins/performance-diagnostics/vesper-plugin.toml",
-                libraryName = "vesper_performance_diagnostics",
-                pluginId = "io.github.umbrella22.vesper.performance-diagnostics",
-                variants = setOf("profile", "release"),
-            ),
     )
 
 val vesperAndroidNativeLibraryEnvironmentVariables =
@@ -162,10 +140,6 @@ val vesperAndroidNativeLibraryEnvironmentVariables =
         "vesper-player-kit-source-normalizer-ffmpeg" to
             "VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS",
         "vesper-player-kit-remux-ffmpeg" to "VESPER_ANDROID_REMUX_JNI_LIBS",
-        "vesper-player-kit-frame-processor-diagnostic" to
-            "VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS",
-        "vesper-player-kit-performance-diagnostics" to
-            "VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS",
     )
 
 val vesperRepoRoot = rootProject.file("../..").canonicalFile

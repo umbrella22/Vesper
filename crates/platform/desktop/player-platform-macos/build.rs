@@ -16,6 +16,27 @@ fn main() {
     let sdk_path = run_command("xcrun", &["--sdk", "macosx", "--show-sdk-path"], None);
     let sdk_path = sdk_path.trim();
 
+    let root = manifest_dir.join("../../../..");
+    let include = root.join("include");
+    let filter_directory = root.join("plugins/video-filter-reference");
+    let filter_sources = ["metal.mm", "metal_host.mm"];
+    let filter_objects = ["vesper_reference_filter.o", "vesper_reference_metal_host.o"]
+        .map(|name| out_dir.join(name));
+    println!(
+        "cargo:rerun-if-changed={}",
+        include.join("vesper_plugin.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        filter_directory.join("metal_host.h").display()
+    );
+    for source in filter_sources {
+        println!(
+            "cargo:rerun-if-changed={}",
+            filter_directory.join(source).display()
+        );
+    }
+
     let source = manifest_dir.join("src/avfoundation_probe.m");
     let object = out_dir.join("avfoundation_probe.o");
     let library = out_dir.join("libvesper_platform_macos_avfoundation_probe.a");
@@ -26,6 +47,10 @@ fn main() {
             "clang",
             "-fobjc-arc",
             "-fblocks",
+            "-I",
+            path_to_str(&include),
+            "-I",
+            path_to_str(&filter_directory),
             "-isysroot",
             sdk_path,
             "-mmacosx-version-min=11.0",
@@ -36,6 +61,29 @@ fn main() {
         ],
         None,
     );
+    for (source, output) in filter_sources.into_iter().zip(&filter_objects) {
+        run_command(
+            "xcrun",
+            &[
+                "clang++",
+                "-fobjc-arc",
+                "-fblocks",
+                "-std=c++17",
+                "-fvisibility=hidden",
+                "-DVESPER_REFERENCE_EMBEDDED",
+                "-isysroot",
+                sdk_path,
+                "-mmacosx-version-min=11.0",
+                "-I",
+                path_to_str(&include),
+                "-c",
+                path_to_str(&filter_directory.join(source)),
+                "-o",
+                path_to_str(output),
+            ],
+            None,
+        );
+    }
     run_command(
         "xcrun",
         &[
@@ -44,6 +92,8 @@ fn main() {
             "-o",
             path_to_str(&library),
             path_to_str(&object),
+            path_to_str(&filter_objects[0]),
+            path_to_str(&filter_objects[1]),
         ],
         None,
     );
@@ -57,6 +107,7 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=AudioToolbox");
     println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=Metal");
+    println!("cargo:rustc-link-lib=c++");
     println!("cargo:rustc-link-lib=framework=QuartzCore");
 }
 

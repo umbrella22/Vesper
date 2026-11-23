@@ -3,22 +3,10 @@ use crate::diagnostics::{
     decoder_capability_summary, source_normalizer_packet_capability_summary,
     source_normalizer_resource_capability_summary,
 };
-#[cfg(feature = "wasm")]
-use player_plugin::PluginOwnerDisposalError;
 use player_plugin::{
     AudioProcessorPluginFactory, PluginInvocationPolicy, PluginInvocationWorkload, PluginReference,
-    PluginReferenceError, PluginScope, PluginTransport,
+    PluginReferenceError, PluginTransport,
 };
-#[cfg(feature = "installed-catalog")]
-use player_plugin_package::{
-    PluginArtifactTransport, VerifiedInstalledArtifact, VerifiedInstalledPluginCatalog,
-};
-#[cfg(feature = "wasm")]
-use player_plugin_wasm_host::{
-    WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS, WasmPluginRuntime, WasmPluginRuntimeError,
-};
-#[cfg(feature = "installed-catalog")]
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// One native artifact supplied by a host-owned plugin catalog or loaded registry.
@@ -69,6 +57,13 @@ impl NativePluginArtifact {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Returns the plugin if this artifact has already passed admission.
+    pub fn native_plugin(&self) -> Option<crate::native::NativePlugin> {
+        self.loaded
+            .as_ref()
+            .map(|plugin| plugin.native_plugin().clone())
     }
 
     fn load(&self) -> Result<Arc<LoadedNativePlugin>, PluginLoadError> {
@@ -178,35 +173,6 @@ pub enum PluginRegistryBuildError {
         interface_id: [u8; 16],
         instance_id: String,
     },
-    #[cfg(feature = "wasm")]
-    #[error("failed to initialize the WASM plugin runtime: {source}")]
-    WasmRuntime {
-        #[source]
-        source: WasmPluginRuntimeError,
-    },
-    #[cfg(feature = "wasm")]
-    #[error("failed to load WASM plugin artifact `{path}` for `{plugin_id}`: {source}")]
-    WasmLoad {
-        path: String,
-        plugin_id: String,
-        #[source]
-        source: WasmPluginLoadError,
-    },
-    #[cfg(feature = "installed-catalog")]
-    #[error("invalid verified installed plugin artifact: {message}")]
-    InstalledCatalog { message: String },
-    #[cfg(feature = "installed-catalog")]
-    #[error(
-        "installed plugin artifact `{path}` for `{plugin_id}` does not match its declared capabilities: {message}"
-    )]
-    InstalledCapabilityMismatch {
-        path: String,
-        plugin_id: String,
-        message: String,
-    },
-    #[cfg(all(feature = "installed-catalog", not(feature = "wasm")))]
-    #[error("installed WASM plugin `{plugin_id}` requires the loader `wasm` feature")]
-    InstalledWasmUnsupported { plugin_id: String },
 }
 
 /// Aggregated loader-side report for inspected dynamic plugin paths.
@@ -234,8 +200,6 @@ pub struct PluginRegistry {
     records: Vec<PluginDiagnosticRecord>,
     record_references: Vec<Option<PluginReference>>,
     plugins: HashMap<PluginIdentityKey, Arc<LoadedNativePlugin>>,
-    #[cfg(feature = "wasm")]
-    wasm_plugins: HashMap<PluginIdentityKey, Arc<LoadedWasmPlugin>>,
     plugin_paths: HashMap<PluginIdentityKey, PathBuf>,
     interfaces: Vec<RegisteredPluginInterface>,
     interface_index: HashMap<PluginInterfaceKey, usize>,
@@ -256,7 +220,7 @@ impl PluginRegistry {
             let Some(references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::NATIVE_DECODER_INTERFACE_ID.0,
+                crate::capability_ids::NATIVE_DECODER_INTERFACE_ID,
             ) else {
                 continue;
             };
@@ -297,7 +261,7 @@ impl PluginRegistry {
             let Some(references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::FRAME_PROCESSOR_INTERFACE_ID.0,
+                crate::capability_ids::FRAME_PROCESSOR_INTERFACE_ID,
             ) else {
                 continue;
             };
@@ -338,7 +302,7 @@ impl PluginRegistry {
             let Some(references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::FRAME_PROCESSOR_INTERFACE_ID.0,
+                crate::capability_ids::FRAME_PROCESSOR_INTERFACE_ID,
             ) else {
                 continue;
             };
@@ -378,14 +342,14 @@ impl PluginRegistry {
             let Some(packet_references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::SOURCE_NORMALIZER_PACKET_INTERFACE_ID.0,
+                crate::capability_ids::SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
             ) else {
                 continue;
             };
             let Some(resource_references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID.0,
+                crate::capability_ids::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
             ) else {
                 continue;
             };
@@ -434,14 +398,14 @@ impl PluginRegistry {
             let Some(packet_references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::SOURCE_NORMALIZER_PACKET_INTERFACE_ID.0,
+                crate::capability_ids::SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
             ) else {
                 continue;
             };
             let Some(resource_references) = registry.inspected_interface_references(
                 &path,
                 &plugin,
-                player_plugin_abi::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID.0,
+                crate::capability_ids::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
             ) else {
                 continue;
             };
@@ -651,129 +615,6 @@ impl PluginRegistry {
         Ok(())
     }
 
-    #[cfg(feature = "wasm")]
-    pub fn load_wasm_artifacts(
-        artifacts: impl IntoIterator<Item = WasmPluginArtifact>,
-    ) -> Result<Self, PluginRegistryBuildError> {
-        let mut registry = Self::default();
-        registry.extend_wasm_artifacts(artifacts)?;
-        Ok(registry)
-    }
-
-    #[cfg(feature = "wasm")]
-    pub fn load_artifacts(
-        native_artifacts: impl IntoIterator<Item = NativePluginArtifact>,
-        wasm_artifacts: impl IntoIterator<Item = WasmPluginArtifact>,
-    ) -> Result<Self, PluginRegistryBuildError> {
-        let mut registry = Self::default();
-        registry.extend_native_artifacts(native_artifacts)?;
-        registry.extend_wasm_artifacts(wasm_artifacts)?;
-        Ok(registry)
-    }
-
-    #[cfg(feature = "installed-catalog")]
-    pub fn load_verified_installed_catalog(
-        catalog: &VerifiedInstalledPluginCatalog,
-    ) -> Result<Self, PluginRegistryBuildError> {
-        let mut registry = Self::default();
-        #[cfg(feature = "wasm")]
-        let mut wasm_runtime = None;
-        for artifact in catalog.artifacts() {
-            match artifact.transport() {
-                PluginArtifactTransport::Native => {
-                    let plugin = LoadedNativePlugin::load_host_verified(artifact.snapshot_path())
-                        .map_err(|source| PluginRegistryBuildError::Load {
-                        path: artifact.installed_path().display().to_string(),
-                        source,
-                    })?;
-                    if plugin.plugin_id() != artifact.plugin_id() {
-                        return Err(PluginRegistryBuildError::PluginIdentityMismatch {
-                            path: artifact.installed_path().display().to_string(),
-                            expected_plugin_id: artifact.plugin_id().to_owned(),
-                            actual_plugin_id: plugin.plugin_id().to_owned(),
-                        });
-                    }
-                    validate_installed_native_capabilities(artifact, &plugin)?;
-                    registry
-                        .insert_native(artifact.installed_path().to_path_buf(), Arc::new(plugin))?;
-                }
-                PluginArtifactTransport::Wasm => {
-                    #[cfg(feature = "wasm")]
-                    {
-                        let declarations = installed_wasm_declarations(artifact)?;
-                        let declared = WasmPluginArtifact::new(
-                            artifact.plugin_id(),
-                            artifact.snapshot_path(),
-                            declarations,
-                        )
-                        .map_err(|error| {
-                            PluginRegistryBuildError::InstalledCatalog {
-                                message: error.to_string(),
-                            }
-                        })?;
-                        let runtime = match wasm_runtime.as_ref() {
-                            Some(runtime) => runtime,
-                            None => {
-                                wasm_runtime =
-                                    Some(WasmPluginRuntime::new().map_err(|source| {
-                                        PluginRegistryBuildError::WasmRuntime { source }
-                                    })?);
-                                wasm_runtime.as_ref().ok_or_else(|| {
-                                    PluginRegistryBuildError::InstalledCatalog {
-                                        message: "WASM runtime initialization was lost".to_owned(),
-                                    }
-                                })?
-                            }
-                        };
-                        let plugin =
-                            LoadedWasmPlugin::load(&declared, runtime).map_err(|source| {
-                                PluginRegistryBuildError::WasmLoad {
-                                    path: artifact.installed_path().display().to_string(),
-                                    plugin_id: artifact.plugin_id().to_owned(),
-                                    source,
-                                }
-                            })?;
-                        registry.insert_wasm(
-                            artifact.installed_path().to_path_buf(),
-                            Arc::new(plugin),
-                        )?;
-                    }
-                    #[cfg(not(feature = "wasm"))]
-                    return Err(PluginRegistryBuildError::InstalledWasmUnsupported {
-                        plugin_id: artifact.plugin_id().to_owned(),
-                    });
-                }
-            }
-        }
-        Ok(registry)
-    }
-
-    #[cfg(feature = "wasm")]
-    fn extend_wasm_artifacts(
-        &mut self,
-        artifacts: impl IntoIterator<Item = WasmPluginArtifact>,
-    ) -> Result<(), PluginRegistryBuildError> {
-        let mut artifacts = artifacts.into_iter().peekable();
-        if artifacts.peek().is_none() {
-            return Ok(());
-        }
-        let runtime = WasmPluginRuntime::new()
-            .map_err(|source| PluginRegistryBuildError::WasmRuntime { source })?;
-        for artifact in artifacts {
-            let path = artifact.path().to_path_buf();
-            let plugin_id = artifact.plugin_id().to_owned();
-            let plugin = LoadedWasmPlugin::load(&artifact, &runtime).map_err(|source| {
-                PluginRegistryBuildError::WasmLoad {
-                    path: path.display().to_string(),
-                    plugin_id,
-                    source,
-                }
-            })?;
-            self.insert_wasm(path, Arc::new(plugin))?;
-        }
-        Ok(())
-    }
-
     fn insert_native(
         &mut self,
         artifact_path: PathBuf,
@@ -833,102 +674,34 @@ impl PluginRegistry {
         Ok(())
     }
 
-    #[cfg(feature = "wasm")]
-    fn insert_wasm(
-        &mut self,
-        artifact_path: PathBuf,
-        plugin: Arc<LoadedWasmPlugin>,
-    ) -> Result<(), PluginRegistryBuildError> {
-        let identity = PluginIdentityKey {
-            transport: PluginTransport::Wasm,
-            plugin_id: plugin.plugin_id().to_owned(),
-        };
-        if let Some(first_path) = self.plugin_paths.get(&identity) {
-            return Err(PluginRegistryBuildError::DuplicatePluginIdentity {
-                transport: identity.transport,
-                plugin_id: identity.plugin_id,
-                first_path: first_path.display().to_string(),
-                duplicate_path: artifact_path.display().to_string(),
-            });
-        }
-
-        let mut pending = Vec::with_capacity(plugin.interfaces().len());
-        for interface in plugin.interfaces() {
-            let key = PluginInterfaceKey {
-                transport: PluginTransport::Wasm,
-                plugin_id: plugin.plugin_id().to_owned(),
-                interface_id: interface.metadata.interface_id,
-                instance_id: interface.metadata.instance_id.clone(),
-            };
-            if self.interface_index.contains_key(&key)
-                || pending
-                    .iter()
-                    .any(|(pending_key, _): &(PluginInterfaceKey, _)| pending_key == &key)
-            {
-                return Err(PluginRegistryBuildError::DuplicateInterfaceIdentity {
-                    transport: key.transport,
-                    plugin_id: key.plugin_id,
-                    interface_id: key.interface_id,
-                    instance_id: key.instance_id,
-                });
-            }
-            pending.push((
-                key,
-                RegisteredPluginInterface {
-                    artifact_path: artifact_path.clone(),
-                    transport: PluginTransport::Wasm,
-                    plugin_id: plugin.plugin_id().to_owned(),
-                    interface: interface.clone(),
-                },
-            ));
-        }
-
-        self.plugin_paths.insert(identity.clone(), artifact_path);
-        self.wasm_plugins.insert(identity, plugin);
-        for (key, interface) in pending {
-            let index = self.interfaces.len();
-            self.interfaces.push(interface);
-            self.interface_index.insert(key, index);
-        }
-        Ok(())
-    }
-
     pub fn registered_interfaces(&self) -> &[RegisteredPluginInterface] {
         &self.interfaces
     }
 
     pub fn post_download_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::POST_DOWNLOAD_PROCESSOR_INTERFACE_ID.0)
-    }
-
-    pub fn pipeline_event_hook_references(
-        &self,
-    ) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::PIPELINE_EVENT_HOOK_INTERFACE_ID.0)
-    }
-
-    pub fn benchmark_sink_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::BENCHMARK_SINK_INTERFACE_ID.0)
+        self.references_for_interface(crate::capability_ids::POST_DOWNLOAD_PROCESSOR_INTERFACE_ID)
     }
 
     pub fn native_decoder_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::NATIVE_DECODER_INTERFACE_ID.0)
+        self.references_for_interface(crate::capability_ids::NATIVE_DECODER_INTERFACE_ID)
     }
 
     pub fn frame_processor_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::FRAME_PROCESSOR_INTERFACE_ID.0)
+        self.references_for_interface(crate::capability_ids::FRAME_PROCESSOR_INTERFACE_ID)
     }
 
     pub fn audio_processor_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::AUDIO_PROCESSOR_INTERFACE_ID.0)
+        self.references_for_interface(crate::capability_ids::AUDIO_PROCESSOR_INTERFACE_ID)
     }
 
     pub fn source_packet_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::SOURCE_NORMALIZER_PACKET_INTERFACE_ID.0)
+        self.references_for_interface(crate::capability_ids::SOURCE_NORMALIZER_PACKET_INTERFACE_ID)
     }
 
     pub fn source_resource_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
-        self.references_for_interface(player_plugin_abi::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID.0)
+        self.references_for_interface(
+            crate::capability_ids::SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
+        )
     }
 
     fn references_for_interface(
@@ -963,151 +736,6 @@ impl PluginRegistry {
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_post_download_selected(reference)?;
         self.resolved(reference, instance_id, capability)
-    }
-
-    pub fn resolve_pipeline_event_hook(
-        &self,
-        reference: &PluginReference,
-    ) -> Result<ResolvedPluginCapability<dyn PipelineEventHook>, PluginSelectionError> {
-        self.validate_invocation(reference, PluginInvocationWorkload::Observer)?;
-        if reference.transport() == PluginTransport::Wasm {
-            #[cfg(feature = "wasm")]
-            {
-                let plugin = self.wasm_plugin_for(reference)?;
-                plugin.select_pipeline_event_hook(reference)?;
-                return Err(PluginSelectionError::ScopeRequired {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    interface: "PipelineEventHook",
-                });
-            }
-            #[cfg(not(feature = "wasm"))]
-            {
-                return Err(PluginSelectionError::PluginNotFound {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    transport: PluginTransport::Wasm,
-                });
-            }
-        }
-        let plugin = self.plugin_for(reference)?;
-        let (instance_id, capability) = plugin.resolve_pipeline_event_hook_selected(reference)?;
-        self.resolved(reference, instance_id, capability)
-    }
-
-    /// Resolves one EventHook and binds a fresh WASM worker/session to `scope`.
-    /// Native capabilities keep their existing trusted owner semantics.
-    pub fn resolve_pipeline_event_hook_in_scope(
-        &self,
-        reference: &PluginReference,
-        _scope: &PluginScope,
-    ) -> Result<ResolvedPluginCapability<dyn PipelineEventHook>, PluginSelectionError> {
-        self.validate_invocation(reference, PluginInvocationWorkload::Observer)?;
-        if reference.transport() == PluginTransport::Wasm {
-            #[cfg(feature = "wasm")]
-            {
-                let plugin = self.wasm_plugin_for(reference)?;
-                let (instance_id, adapter) = plugin.instantiate_pipeline_event_hook(reference)?;
-                let owner = adapter.clone();
-                if let Err(source) = _scope.add_fallible_owner_disposer(move || {
-                    owner
-                        .close(std::time::Duration::from_millis(
-                            WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
-                        ))
-                        .map_err(|_| PluginOwnerDisposalError)
-                }) {
-                    let _ = adapter.close(std::time::Duration::from_millis(
-                        WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
-                    ));
-                    return Err(PluginSelectionError::ScopeRegistration {
-                        plugin_id: reference.plugin_id().to_owned(),
-                        interface: "PipelineEventHook",
-                        source,
-                    });
-                }
-                let capability: Arc<dyn PipelineEventHook> = adapter;
-                return self.resolved(reference, instance_id, capability);
-            }
-            #[cfg(not(feature = "wasm"))]
-            {
-                return Err(PluginSelectionError::PluginNotFound {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    transport: PluginTransport::Wasm,
-                });
-            }
-        }
-        self.resolve_pipeline_event_hook(reference)
-    }
-
-    pub fn resolve_benchmark_sink(
-        &self,
-        reference: &PluginReference,
-    ) -> Result<ResolvedPluginCapability<dyn BenchmarkSink>, PluginSelectionError> {
-        self.validate_invocation(reference, PluginInvocationWorkload::Offline)?;
-        if reference.transport() == PluginTransport::Wasm {
-            #[cfg(feature = "wasm")]
-            {
-                let plugin = self.wasm_plugin_for(reference)?;
-                plugin.select_benchmark_sink(reference)?;
-                return Err(PluginSelectionError::ScopeRequired {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    interface: "BenchmarkSink",
-                });
-            }
-            #[cfg(not(feature = "wasm"))]
-            {
-                return Err(PluginSelectionError::PluginNotFound {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    transport: PluginTransport::Wasm,
-                });
-            }
-        }
-        let plugin = self.plugin_for(reference)?;
-        let (instance_id, capability) = plugin.resolve_benchmark_sink_selected(reference)?;
-        self.resolved(reference, instance_id, capability)
-    }
-
-    /// Resolves one BenchmarkSink and binds a fresh WASM worker/session to
-    /// `scope`. Native capabilities keep their existing trusted owner semantics.
-    pub fn resolve_benchmark_sink_in_scope(
-        &self,
-        reference: &PluginReference,
-        _scope: &PluginScope,
-    ) -> Result<ResolvedPluginCapability<dyn BenchmarkSink>, PluginSelectionError> {
-        self.validate_invocation(reference, PluginInvocationWorkload::Offline)?;
-        if reference.transport() == PluginTransport::Wasm {
-            #[cfg(feature = "wasm")]
-            {
-                let plugin = self.wasm_plugin_for(reference)?;
-                let (instance_id, adapter) = plugin.instantiate_benchmark_sink(reference)?;
-                let owner = adapter.clone();
-                if let Err(source) = _scope.add_fallible_owner_disposer(move || {
-                    owner
-                        .close(std::time::Duration::from_millis(
-                            WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
-                        ))
-                        .map(|_| ())
-                        .map_err(|_| PluginOwnerDisposalError)
-                }) {
-                    let _ = adapter.close(std::time::Duration::from_millis(
-                        WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
-                    ));
-                    return Err(PluginSelectionError::ScopeRegistration {
-                        plugin_id: reference.plugin_id().to_owned(),
-                        interface: "BenchmarkSink",
-                        source,
-                    });
-                }
-                let capability: Arc<dyn BenchmarkSink> = adapter;
-                return self.resolved(reference, instance_id, capability);
-            }
-            #[cfg(not(feature = "wasm"))]
-            {
-                return Err(PluginSelectionError::PluginNotFound {
-                    plugin_id: reference.plugin_id().to_owned(),
-                    transport: PluginTransport::Wasm,
-                });
-            }
-        }
-        self.resolve_benchmark_sink(reference)
     }
 
     pub fn resolve_native_decoder(
@@ -1219,23 +847,6 @@ impl PluginRegistry {
                 plugin_id: reference.plugin_id().to_owned(),
                 transport: reference.transport(),
             })
-    }
-
-    #[cfg(feature = "wasm")]
-    fn wasm_plugin_for(
-        &self,
-        reference: &PluginReference,
-    ) -> Result<Arc<LoadedWasmPlugin>, PluginSelectionError> {
-        let identity = PluginIdentityKey {
-            transport: reference.transport(),
-            plugin_id: reference.plugin_id().to_owned(),
-        };
-        self.wasm_plugins.get(&identity).cloned().ok_or_else(|| {
-            PluginSelectionError::PluginNotFound {
-                plugin_id: reference.plugin_id().to_owned(),
-                transport: reference.transport(),
-            }
-        })
     }
 
     fn resolved<T: ?Sized>(
@@ -1514,78 +1125,4 @@ impl PluginRegistry {
 
         report
     }
-}
-
-#[cfg(feature = "installed-catalog")]
-fn validate_installed_native_capabilities(
-    artifact: &VerifiedInstalledArtifact,
-    plugin: &LoadedNativePlugin,
-) -> Result<(), PluginRegistryBuildError> {
-    let declared = artifact
-        .capabilities()
-        .iter()
-        .map(|capability| {
-            let interface_id = uuid::Uuid::parse_str(&capability.interface_id)
-                .map(|interface_id| *interface_id.as_bytes())
-                .map_err(|error| PluginRegistryBuildError::InstalledCatalog {
-                    message: format!(
-                        "invalid interface UUID '{}': {error}",
-                        capability.interface_id
-                    ),
-                })?;
-            Ok((
-                interface_id,
-                capability.instance_id.clone(),
-                capability.interface_major,
-                capability.interface_minor,
-            ))
-        })
-        .collect::<Result<BTreeSet<_>, PluginRegistryBuildError>>()?;
-    let actual = plugin
-        .interfaces()
-        .iter()
-        .filter(|interface| interface.state == PluginInterfaceState::Available)
-        .map(|interface| {
-            (
-                interface.metadata.interface_id,
-                interface.metadata.instance_id.clone(),
-                interface.metadata.major,
-                interface.metadata.minor,
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    if declared != actual {
-        return Err(PluginRegistryBuildError::InstalledCapabilityMismatch {
-            path: artifact.installed_path().display().to_string(),
-            plugin_id: artifact.plugin_id().to_owned(),
-            message: format!("declared {declared:?}, Root ABI reported {actual:?}"),
-        });
-    }
-    Ok(())
-}
-
-#[cfg(all(feature = "installed-catalog", feature = "wasm"))]
-fn installed_wasm_declarations(
-    artifact: &VerifiedInstalledArtifact,
-) -> Result<Vec<WasmPluginInterfaceDeclaration>, PluginRegistryBuildError> {
-    artifact
-        .capabilities()
-        .iter()
-        .map(|capability| {
-            let interface_id = uuid::Uuid::parse_str(&capability.interface_id)
-                .map(|interface_id| *interface_id.as_bytes())
-                .map_err(|error| PluginRegistryBuildError::InstalledCatalog {
-                    message: format!(
-                        "invalid interface UUID '{}': {error}",
-                        capability.interface_id
-                    ),
-                })?;
-            Ok(WasmPluginInterfaceDeclaration::new(
-                interface_id,
-                capability.interface_major,
-                capability.interface_minor,
-                capability.instance_id.clone(),
-            ))
-        })
-        .collect()
 }

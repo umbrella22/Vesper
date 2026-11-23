@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.PixelCopy
 import android.view.SurfaceView
@@ -25,6 +26,7 @@ import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.absoluteValue
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -55,6 +57,92 @@ class VesperPlaybackLifecycleDeviceInstrumentationTest {
                     "${sustainedRange?.first},${sustainedRange?.second}," +
                     "${state.timeline.positionMs} droppedVideoFrames=${droppedVideoFrameEvidence(events)}",
             )
+        }
+    }
+
+    @Test
+    fun requiredSourceNormalizerResourcePlaysThroughMedia3AndDisposesOutput() {
+        var normalizedOutput: File? = null
+        withPlaybackSession(
+            testId = "normalized-resource",
+            sourceNormalizerConfiguration =
+                VesperSourceNormalizerConfiguration(
+                    mode = VesperSourceNormalizerMode.RequireNormalized,
+                    pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+                ),
+        ) { _, controller, _, events, _ ->
+            awaitPlaybackProof(controller, events)
+            val diagnostic = controller.pluginDiagnostics.firstOrNull {
+                it["outputRoute"] == "fmp4LocalStream" && it["participation"] == "participated"
+            }
+            checkNotNull(diagnostic) { "Media3 did not use the fMP4 resource: ${controller.pluginDiagnostics}" }
+            val uri = Uri.parse(checkNotNull(diagnostic["playbackUri"] as? String))
+            assertEquals("127.0.0.1", uri.host)
+            normalizedOutput = File(checkNotNull(diagnostic["primaryResource"] as? String))
+            assertTrue("normalized output must exist during playback", normalizedOutput?.isFile == true)
+        }
+        val output = checkNotNull(normalizedOutput)
+        val deadline = SystemClock.elapsedRealtime() + 5_000L
+        while (output.exists() && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(25L)
+        }
+        assertTrue("normalized output must be retired on dispose", !output.exists())
+    }
+
+    @Test
+    fun completedProgressiveDownloadPlaysAfterOriginStops() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val fixture = resolveFixture(context, "offline-download")
+        val outputRoot = kotlin.io.path.createTempDirectory(context.cacheDir.toPath(), "vesper-offline").toFile()
+        val origin = VesperSourceNormalizerLoopbackServer()
+        val downloads = VesperDownloadManager(
+            context,
+            VesperDownloadConfiguration(baseDirectory = outputRoot, restoreTasksOnStartup = false),
+        )
+        try {
+            val registration = origin.register(
+                VesperNormalizedResourceRegistration(
+                    outputRoute = "fmp4LocalStream",
+                    primaryResourcePath = fixture.file.absolutePath,
+                    primaryContentType = "video/mp4",
+                    sessionReadBufferBytes = DEFAULT_NORMALIZED_READ_BUFFER_BYTES,
+                ),
+            )
+            val source = VesperPlayerSource(
+                uri = registration.playbackUri,
+                label = "device offline origin",
+                kind = VesperPlayerSourceKind.Remote,
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+            val taskId = checkNotNull(downloads.createTask("device-offline", VesperDownloadSource(source)))
+            val deadline = SystemClock.elapsedRealtime() + 20_000L
+            var task = checkNotNull(downloads.task(taskId))
+            while (task.state != VesperDownloadState.Completed && SystemClock.elapsedRealtime() < deadline) {
+                check(task.state != VesperDownloadState.Failed) { "download failed: $task" }
+                Thread.sleep(25L)
+                downloads.refresh()
+                task = checkNotNull(downloads.task(taskId))
+            }
+            assertEquals("download must finish before offline playback", VesperDownloadState.Completed, task.state)
+            val completedPath = checkNotNull(task.assetIndex.completedPath)
+            val completedUri = Uri.parse(completedPath)
+            val completedFile = File(if (completedUri.scheme == "file") checkNotNull(completedUri.path) else completedPath)
+            assertTrue(completedFile.isFile)
+            assertEquals(fixture.file.length(), completedFile.length())
+            origin.stop()
+            withSourceSession(
+                testId = "offline-download",
+                source = VesperPlayerSource.local(Uri.fromFile(completedFile).toString(), "completed download"),
+                sourceDurationMs = fixtureDurationMs(completedFile),
+            ) { _, controller, _, events, _ ->
+                awaitPlaybackProof(controller, events)
+                assertTrue(controller.pluginDiagnostics.none { it["outputRoute"] == "fmp4LocalStream" })
+            }
+        } finally {
+            origin.stop()
+            downloads.dispose()
+            outputRoot.deleteRecursively()
+            if (fixture.deleteAfterTest) fixture.file.delete()
         }
     }
 
@@ -569,9 +657,63 @@ class VesperPlaybackLifecycleDeviceInstrumentationTest {
         }
     }
 
+    @Test
+    fun optionalVulkanControllerPresentsAfterSurfaceRecreation() {
+        val expected = InstrumentationRegistry.getArguments().getString("vesperExpectedVulkanRoute")
+        assumeTrue("requires vesperExpectedVulkanRoute=sdkManagedNativeFrame or systemPlayer", expected != null)
+        require(expected == "sdkManagedNativeFrame" || expected == "systemPlayer")
+        withPlaybackSession(
+            testId = "optional-vulkan-surface-recreation",
+            nativeFramePipelineConfiguration =
+                VesperNativeFramePipelineConfiguration(
+                    mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                    decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                ),
+        ) { scenario, controller, host, events, _ ->
+            fun assertRoute(checkpoint: String) {
+                scenario.onActivity {
+                    val diagnostic = controller.pluginDiagnostics.single { it["pluginKind"] == "native_frame_pipeline" }
+                    val evidence = "test=optional-vulkan-surface-recreation checkpoint=$checkpoint " +
+                        "route=${diagnostic["route"]} fallbackReason=${diagnostic["fallbackReason"]} " +
+                        "expected=$expected"
+                    Log.i(EVIDENCE_TAG, evidence)
+                    assertEquals(evidence, expected, diagnostic["route"])
+                    if (expected == "systemPlayer") {
+                        assertTrue(evidence, (diagnostic["fallbackReason"] as? String)?.isNotBlank() == true)
+                    } else {
+                        assertNull(evidence, diagnostic["fallbackReason"])
+                    }
+                }
+            }
+
+            assertTrue(awaitCopiedSurfaceFrame(scenario, host, controller, events).nonBlackSampleCount > 0)
+            assertRoute("initial")
+            scenario.onActivity { controller.detachSurfaceHost(host.value) }
+            scenario.recreate()
+            scenario.onActivity { activity ->
+                host.value = activity.replaceSurfaceHost()
+                controller.attachSurfaceHost(host.value)
+                controller.seekToRatio(0f)
+                controller.play()
+            }
+            assertTrue(awaitCopiedSurfaceFrame(scenario, host, controller, events).nonBlackSampleCount > 0)
+            assertRoute("recreated")
+        }
+    }
+
     private fun withPlaybackSession(
         testId: String,
         requiresLongFixture: Boolean = false,
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration(),
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
+            if (nativeFramePipelineConfiguration.isDisabled) {
+                VesperSourceNormalizerConfiguration()
+            } else {
+                VesperSourceNormalizerConfiguration(
+                    mode = VesperSourceNormalizerMode.PreflightOnly,
+                    pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+                )
+            },
         block: (
             ActivityScenario<VesperSurfaceLayoutTestActivity>,
             VesperPlayerController,
@@ -609,6 +751,8 @@ class VesperPlaybackLifecycleDeviceInstrumentationTest {
                 testId = testId,
                 source = source,
                 sourceDurationMs = fixtureDurationMs,
+                nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                 block = block,
             )
         } finally {
@@ -625,6 +769,8 @@ class VesperPlaybackLifecycleDeviceInstrumentationTest {
         source: VesperPlayerSource,
         sourceDurationMs: Long,
         keepScreenOnDuringPlayback: Boolean = false,
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration(),
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(),
         block: (
             ActivityScenario<VesperSurfaceLayoutTestActivity>,
             VesperPlayerController,
@@ -654,6 +800,8 @@ class VesperPlaybackLifecycleDeviceInstrumentationTest {
                                     enabled = true,
                                     maxBufferedEvents = MAX_BUFFERED_BENCHMARK_EVENTS,
                                 ),
+                            nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                            sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                         ).also { player ->
                             player.attachSurfaceHost(surfaceHost.value)
                             player.initialize()

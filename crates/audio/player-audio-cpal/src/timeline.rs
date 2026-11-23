@@ -86,6 +86,17 @@ pub(crate) struct SharedPlaybackState {
     paused: AtomicBool,
     stream_error_sequence: AtomicU64,
     observed_stream_error_sequence: AtomicU64,
+    active_output_callbacks: AtomicU64,
+    underrun_callbacks: AtomicU64,
+    underrun_frames: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioOutputStats {
+    pub active_callbacks: u64,
+    pub underrun_callbacks: u64,
+    pub underrun_frames: u64,
+    pub stream_errors: u64,
 }
 
 impl std::fmt::Debug for SharedPlaybackState {
@@ -144,6 +155,9 @@ impl SharedPlaybackState {
             paused: AtomicBool::new(start_paused),
             stream_error_sequence: AtomicU64::new(0),
             observed_stream_error_sequence: AtomicU64::new(0),
+            active_output_callbacks: AtomicU64::new(0),
+            underrun_callbacks: AtomicU64::new(0),
+            underrun_frames: AtomicU64::new(0),
         }
     }
 
@@ -489,6 +503,33 @@ impl SharedPlaybackState {
         self.notify_backpressure_waiters();
     }
 
+    pub(crate) fn record_output_callback(&self, generation: u64, silent_frames: u64) {
+        // Initial buffering, flushes, and the partial callback at EOS do not
+        // represent starvation of a running generation.
+        if generation == 0
+            || self.generation() != generation
+            || self.is_paused()
+            || self.played_samples_for_generation(generation) == 0
+        {
+            return;
+        }
+        self.active_output_callbacks.fetch_add(1, Ordering::Relaxed);
+        if silent_frames != 0 && self.completed_generation.load(Ordering::Acquire) != generation {
+            self.underrun_callbacks.fetch_add(1, Ordering::Relaxed);
+            self.underrun_frames
+                .fetch_add(silent_frames, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn output_stats(&self) -> AudioOutputStats {
+        AudioOutputStats {
+            active_callbacks: self.active_output_callbacks.load(Ordering::Relaxed),
+            underrun_callbacks: self.underrun_callbacks.load(Ordering::Relaxed),
+            underrun_frames: self.underrun_frames.load(Ordering::Relaxed),
+            stream_errors: self.stream_error_sequence.load(Ordering::Relaxed),
+        }
+    }
+
     pub(crate) fn take_stream_error(&self) -> bool {
         let latest = self.stream_error_sequence.load(Ordering::Acquire);
         let observed = self
@@ -756,6 +797,50 @@ mod tests {
             state.playback_position(1_000, 2),
             Duration::from_millis(1_004)
         );
+    }
+
+    #[test]
+    fn drained_rate_segments_keep_media_position_continuous_before_seek() {
+        const RATE_HZ: u32 = 48_000;
+        const CHANNELS: u16 = 2;
+        const BLOCK_SAMPLES: usize = 480 * CHANNELS as usize;
+
+        let state = state_with_capacity(BLOCK_SAMPLES);
+        let mut media_position = Duration::from_secs(1);
+        let mut previous = None;
+        for (rate, advance_ms) in [(1.0, 10), (2.0, 20), (0.5, 5)] {
+            let generation = state.begin_generation(CHANNELS, media_position, rate);
+            if let Some(old) = previous {
+                state.mark_samples_played(old, BLOCK_SAMPLES);
+            }
+            assert_eq!(state.playback_position(RATE_HZ, CHANNELS), media_position);
+            assert!(
+                state
+                    .append_samples(generation, vec![0.0; BLOCK_SAMPLES])
+                    .unwrap()
+            );
+            state.finish_generation(generation);
+            let mut played = 0;
+            while let Some(block) = state.pop_audio_block() {
+                assert_eq!(block.generation, generation);
+                state.mark_samples_played(generation, block.len);
+                played += block.len;
+            }
+            assert_eq!(played, BLOCK_SAMPLES);
+            assert!(state.is_generation_complete_and_drained(generation));
+
+            media_position += Duration::from_millis(advance_ms);
+            assert_eq!(state.playback_position(RATE_HZ, CHANNELS), media_position);
+            previous = Some(generation);
+        }
+
+        let seek = Duration::from_secs(7);
+        let old = previous.unwrap();
+        let seek_generation = state.begin_generation(CHANNELS, seek, 0.5);
+        assert!(!state.append_samples(old, vec![0.0; BLOCK_SAMPLES]).unwrap());
+        state.mark_samples_played(old, BLOCK_SAMPLES);
+        assert_eq!(state.buffered_samples(seek_generation), Some(0));
+        assert_eq!(state.playback_position(RATE_HZ, CHANNELS), seek);
     }
 
     #[test]

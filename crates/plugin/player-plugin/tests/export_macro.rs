@@ -1,31 +1,14 @@
 #![deny(unsafe_code)]
 
-use player_plugin::{
-    PipelineEvent, PipelineEventHookFailure, PipelineEventHookOutcome, Plugin, PluginBuildError,
-    PluginEventHook,
-};
-
-struct Hook;
-
-impl PluginEventHook for Hook {
-    fn on_event(
-        &self,
-        _event: &PipelineEvent,
-    ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
-        Ok(PipelineEventHookOutcome::accepted())
-    }
-}
+use player_plugin::author::{Plugin, VesperPluginRoot};
 
 #[player_plugin::export]
-fn fixture_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder("dev.vesper.macro-fixture", "Macro Fixture")?
-        .with_pipeline_event_hook("dev.vesper.macro-fixture.hook", Hook)?
-        .build()
+fn fixture_plugin() -> Plugin {
+    Plugin::new("dev.vesper.macro-fixture", "Macro Fixture")
 }
 
 #[test]
-fn export_macro_generates_the_fixed_native_entry_without_author_unsafe() {
-    let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
-        vesper_plugin_entry;
+fn export_macro_generates_the_native_entry_without_author_unsafe() {
+    let entry: extern "C" fn() -> *const VesperPluginRoot = vesper_native_plugin_entry;
     assert_ne!(entry as usize, 0);
 }

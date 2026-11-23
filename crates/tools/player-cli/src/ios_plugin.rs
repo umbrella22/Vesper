@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ios::IosError;
 
-pub(crate) const IOS_PLUGIN_SPECS: [IosPluginSpec; 5] = [
+pub(crate) const IOS_PLUGIN_SPECS: [IosPluginSpec; 3] = [
     IosPluginSpec {
         id: IosPluginId::RemuxFfmpeg,
         crate_name: "player-remux-ffmpeg",
@@ -31,7 +31,7 @@ pub(crate) const IOS_PLUGIN_SPECS: [IosPluginSpec; 5] = [
         build_directory: "player-source-normalizer-ffmpeg-plugin",
         release_ffmpeg_profile: Some("source-normalizer"),
         uses_ffmpeg: true,
-        link_headerpad: false,
+        link_headerpad: true,
         description: "source normalizer plugin",
     },
     IosPluginSpec {
@@ -46,30 +46,6 @@ pub(crate) const IOS_PLUGIN_SPECS: [IosPluginSpec; 5] = [
         link_headerpad: false,
         description: "VideoToolbox decoder plugin",
     },
-    IosPluginSpec {
-        id: IosPluginId::FrameProcessorDiagnostic,
-        crate_name: "player-frame-processor-diagnostic",
-        dylib_name: "libvesper_frame_processor_diagnostic.dylib",
-        framework_name: "VesperPlayerFrameProcessorDiagnosticPlugin",
-        bundle_identifier: "io.github.umbrella22.vesper.player.frame-processor-diagnostic-plugin",
-        build_directory: "player-frame-processor-diagnostic-plugin",
-        release_ffmpeg_profile: None,
-        uses_ffmpeg: false,
-        link_headerpad: false,
-        description: "frame processor plugin",
-    },
-    IosPluginSpec {
-        id: IosPluginId::PerformanceDiagnostics,
-        crate_name: "player-performance-diagnostics",
-        dylib_name: "libvesper_performance_diagnostics.dylib",
-        framework_name: "VesperPlayerPerformanceDiagnosticsPlugin",
-        bundle_identifier: "io.github.umbrella22.vesper.player.performance-diagnostics-plugin",
-        build_directory: "player-performance-diagnostics-plugin",
-        release_ffmpeg_profile: None,
-        uses_ffmpeg: false,
-        link_headerpad: false,
-        description: "performance diagnostics plugin",
-    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +53,6 @@ pub(crate) enum IosPluginId {
     RemuxFfmpeg,
     SourceNormalizerFfmpeg,
     DecoderVideoToolbox,
-    FrameProcessorDiagnostic,
-    PerformanceDiagnostics,
 }
 
 impl IosPluginId {
@@ -87,8 +61,6 @@ impl IosPluginId {
             Self::RemuxFfmpeg => "remux-ffmpeg",
             Self::SourceNormalizerFfmpeg => "source-normalizer-ffmpeg",
             Self::DecoderVideoToolbox => "decoder-videotoolbox",
-            Self::FrameProcessorDiagnostic => "frame-processor-diagnostic",
-            Self::PerformanceDiagnostics => "performance-diagnostics",
         }
     }
 
@@ -2282,12 +2254,9 @@ mod tests {
         let normalizer = IosPluginId::SourceNormalizerFfmpeg.spec();
         assert_eq!(normalizer.release_ffmpeg_profile, Some("source-normalizer"));
         assert!(normalizer.uses_ffmpeg);
-        assert!(!normalizer.link_headerpad);
+        assert!(normalizer.link_headerpad);
 
-        for plugin in [
-            IosPluginId::DecoderVideoToolbox,
-            IosPluginId::FrameProcessorDiagnostic,
-        ] {
+        for plugin in [IosPluginId::DecoderVideoToolbox] {
             let spec = plugin.spec();
             assert_eq!(spec.release_ffmpeg_profile, None);
             assert!(!spec.uses_ffmpeg);

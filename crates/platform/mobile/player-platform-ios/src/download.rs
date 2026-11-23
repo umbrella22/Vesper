@@ -49,7 +49,6 @@ impl IosDownloadBridgeSession {
         run_post_processors_on_completion: bool,
         registry: &PluginRegistry,
         post_download_references: impl IntoIterator<Item = PluginReference>,
-        event_hook_references: impl IntoIterator<Item = PluginReference>,
     ) -> PlayerResult<Self> {
         let config = mobile_download_manager_config_from_registry(
             "ios",
@@ -57,7 +56,6 @@ impl IosDownloadBridgeSession {
             run_post_processors_on_completion,
             registry,
             post_download_references,
-            event_hook_references,
         )?;
 
         Ok(Self {

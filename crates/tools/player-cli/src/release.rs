@@ -20,7 +20,6 @@ const FLUTTER_PACKAGES: &[&str] = &[
     "vesper_player_external_playback",
     "vesper_player_ios",
     "vesper_player_macos",
-    "vesper_player_performance_diagnostics",
     "vesper_player_platform_interface",
     "vesper_player_remux_ffmpeg",
     "vesper_player_source_normalizer_ffmpeg",
@@ -30,14 +29,12 @@ const FLUTTER_PACKAGES: &[&str] = &[
 const FLUTTER_ANDROID_GRADLE_FILES: &[&str] = &[
     "lib/flutter/vesper_player_android/android/build.gradle",
     "lib/flutter/vesper_player_external_playback/android/build.gradle",
-    "lib/flutter/vesper_player_performance_diagnostics/android/build.gradle",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle",
     "lib/flutter/vesper_player_remux_ffmpeg/android/build.gradle",
 ];
 
 const FLUTTER_IOS_PACKAGE_FILES: &[&str] = &[
     "lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift",
-    "lib/flutter/vesper_player_performance_diagnostics/ios/vesper_player_performance_diagnostics/Package.swift",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/ios/vesper_player_source_normalizer_ffmpeg/Package.swift",
     "lib/flutter/vesper_player_remux_ffmpeg/ios/vesper_player_remux_ffmpeg/Package.swift",
 ];
@@ -54,7 +51,6 @@ const FLUTTER_CHANGELOG_FILES: &[&str] = &[
     "lib/flutter/vesper_player_external_playback/CHANGELOG.md",
     "lib/flutter/vesper_player_platform_interface/CHANGELOG.md",
     "lib/flutter/vesper_player_ios/CHANGELOG.md",
-    "lib/flutter/vesper_player_performance_diagnostics/CHANGELOG.md",
     "lib/flutter/vesper_player_ui/CHANGELOG.md",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/CHANGELOG.md",
     "lib/flutter/vesper_player_remux_ffmpeg/CHANGELOG.md",
@@ -1835,7 +1831,6 @@ fn verify_current_documentation(
         "vesper-player-kit-external-playback",
         "vesper-player-kit-source-normalizer-ffmpeg",
         "vesper-player-kit-remux-ffmpeg",
-        "vesper-player-kit-performance-diagnostics",
     ] {
         expect_documentation_contains(
             root,
@@ -2436,7 +2431,6 @@ mod tests {
             "vesper_player_android",
             "vesper_player_external_playback",
             "vesper_player_ios",
-            "vesper_player_performance_diagnostics",
             "vesper_player_platform_interface",
             "vesper_player_remux_ffmpeg",
             "vesper_player_source_normalizer_ffmpeg",
@@ -2819,16 +2813,16 @@ mod tests {
     }
 
     #[test]
-    fn verification_rejects_optional_diagnostics_native_version_drift() {
+    fn verification_rejects_optional_normalizer_native_version_drift() {
         let directory = release_fixture();
         write_fixture(
             directory.path(),
-            "lib/flutter/vesper_player_performance_diagnostics/android/build.gradle",
+            "lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle",
             "version = \"0.3.9\"\n",
         );
         write_fixture(
             directory.path(),
-            "lib/flutter/vesper_player_performance_diagnostics/ios/vesper_player_performance_diagnostics/Package.swift",
+            "lib/flutter/vesper_player_source_normalizer_ffmpeg/ios/vesper_player_source_normalizer_ffmpeg/Package.swift",
             "private let vesperPlayerKitVersion: Version = \"0.3.9\"\n",
         );
         let context = ReleaseContext::new(
@@ -2838,7 +2832,7 @@ mod tests {
 
         let error = context
             .verify_version("0.4.0", Some("400".to_owned()), Some("400".to_owned()))
-            .expect_err("diagnostics native dependency drift must fail verification");
+            .expect_err("normalizer native dependency drift must fail verification");
 
         assert_eq!(error.kind(), ReleaseErrorKind::Verification);
         assert!(

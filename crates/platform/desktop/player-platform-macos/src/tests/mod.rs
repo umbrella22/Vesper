@@ -1658,53 +1658,6 @@ fn macos_source_normalizer_options_are_cleared_for_fallback_reopen() {
 }
 
 #[test]
-#[ignore = "requires a built player-decoder-fixture shared library artifact"]
-fn macos_runtime_diagnostics_loads_real_decoder_fixture_library() {
-    let Some(plugin_path) = std::env::var_os("VESPER_DECODER_PLUGIN_PATHS")
-        .and_then(|paths| std::env::split_paths(&paths).next())
-    else {
-        eprintln!(
-            "skipping decoder fixture diagnostics test: VESPER_DECODER_PLUGIN_PATHS is not set"
-        );
-        return;
-    };
-    if !plugin_path.is_file() {
-        eprintln!(
-            "skipping decoder fixture diagnostics test: plugin path is missing: {}",
-            plugin_path.display()
-        );
-        return;
-    }
-
-    for codec in ["fixture-video", "H264", "HEVC"] {
-        let media_info = media_info_with_codec(codec);
-        let diagnostics = macos_runtime_diagnostics(
-            &media_info,
-            &PlayerRuntimeOptions::default()
-                .with_decoder_plugin_library_paths([plugin_path.clone()])
-                .with_development_native_plugin_loading(),
-        );
-
-        assert_eq!(diagnostics.plugin_diagnostics.len(), 1);
-        assert_eq!(
-            diagnostics.plugin_diagnostics[0].status,
-            PlayerPluginDiagnosticStatus::DecoderSupported
-        );
-        assert_eq!(
-            diagnostics.plugin_diagnostics[0].plugin_name.as_deref(),
-            Some("player-decoder-fixture")
-        );
-        let fallback = diagnostics
-            .video_decode
-            .fallback_reason
-            .as_deref()
-            .unwrap_or_default();
-        assert!(fallback.contains(codec));
-        assert!(fallback.contains("diagnostic-only"));
-    }
-}
-
-#[test]
 #[ignore = "requires a built player-decoder-videotoolbox shared library artifact"]
 fn macos_runtime_diagnostics_loads_real_videotoolbox_decoder_library() {
     let Some(plugin_path) =
@@ -2035,280 +1988,6 @@ fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
             .as_ref()
             .map(|decode| decode.selected_mode),
         Some(PlayerVideoDecodeMode::Hardware)
-    );
-}
-
-#[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
-#[cfg(target_os = "macos")]
-fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
-    let Some(decoder_plugin_path) =
-        std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping native-frame frame processor test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !decoder_plugin_path.is_file() {
-        eprintln!(
-            "skipping native-frame frame processor test: decoder plugin path is missing: {}",
-            decoder_plugin_path.display()
-        );
-        return;
-    }
-    let Some(frame_processor_path) =
-        std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping native-frame frame processor test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !frame_processor_path.is_file() {
-        eprintln!(
-            "skipping native-frame frame processor test: frame processor plugin path is missing: {}",
-            frame_processor_path.display()
-        );
-        return;
-    }
-    let Some(source) = videotoolbox_smoke_source_path() else {
-        eprintln!(
-            "skipping native-frame frame processor test: no local H264/HEVC smoke source found"
-        );
-        return;
-    };
-
-    let layer = TestPlayerLayer::new();
-    let layer_handle = layer.as_ptr();
-
-    let options = PlayerRuntimeOptions::default()
-        .with_video_surface(PlayerVideoSurfaceTarget {
-            kind: PlayerVideoSurfaceKind::PlayerLayer,
-            handle: layer_handle as usize,
-        })
-        .with_decoder_plugin_library_paths([decoder_plugin_path])
-        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
-        .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::PreferProcessed)
-        .with_development_native_plugin_loading();
-    let bootstrap = open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
-        .expect("macOS host runtime should open the native-frame frame processor path");
-
-    assert!(
-        bootstrap
-            .runtime
-            .capabilities()
-            .supports_external_video_surface
-    );
-    assert!(
-        bootstrap
-            .startup
-            .plugin_diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.status
-                == PlayerPluginDiagnosticStatus::FrameProcessorSupported
-                && diagnostic.plugin_name.as_deref() == Some("player-frame-processor-diagnostic")),
-        "expected frame processor support diagnostic, got {:?}",
-        bootstrap.startup.plugin_diagnostics
-    );
-    assert!(
-        bootstrap
-            .startup
-            .plugin_diagnostics
-            .iter()
-            .any(|diagnostic| {
-                diagnostic.plugin_name.as_deref() == Some("player-frame-processor-diagnostic")
-                    && diagnostic.participation == PlayerPluginParticipation::Selected
-            })
-    );
-    assert!(
-        bootstrap
-            .startup
-            .video_decode
-            .as_ref()
-            .and_then(|info| info.fallback_reason.as_deref())
-            .unwrap_or_default()
-            .contains("selected sdkManagedNativeFrame route for VideoToolbox playback"),
-        "expected native-frame decoder selection diagnostic, got {:?}",
-        bootstrap.startup.video_decode
-    );
-
-    let mut runtime = bootstrap.runtime;
-    runtime
-        .dispatch(PlayerRuntimeCommand::Play)
-        .expect("native-frame playback should start");
-    let mut participated = false;
-    for _ in 0..120 {
-        let _ = runtime
-            .advance()
-            .expect("native-frame playback advance should succeed");
-        for event in runtime.drain_events() {
-            let PlayerRuntimeEvent::Initialized(startup) = event else {
-                continue;
-            };
-            if startup.plugin_diagnostics.iter().any(|diagnostic| {
-                diagnostic.plugin_name.as_deref() == Some("player-frame-processor-diagnostic")
-                    && diagnostic.participation == PlayerPluginParticipation::Participated
-            }) {
-                participated = true;
-            }
-        }
-        if participated {
-            break;
-        }
-    }
-    assert!(
-        participated,
-        "processed route should report participation only after a presented frame"
-    );
-}
-
-#[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
-#[cfg(target_os = "macos")]
-fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_software() {
-    let Some(decoder_plugin_path) =
-        std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping strict frame processor fallback test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !decoder_plugin_path.is_file() {
-        eprintln!(
-            "skipping strict frame processor fallback test: decoder plugin path is missing: {}",
-            decoder_plugin_path.display()
-        );
-        return;
-    }
-    let Some(frame_processor_path) =
-        std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping strict frame processor fallback test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !frame_processor_path.is_file() {
-        eprintln!(
-            "skipping strict frame processor fallback test: frame processor plugin path is missing: {}",
-            frame_processor_path.display()
-        );
-        return;
-    }
-    let Some(source) = videotoolbox_smoke_source_path() else {
-        eprintln!(
-            "skipping strict frame processor fallback test: no local H264/HEVC smoke source found"
-        );
-        return;
-    };
-
-    let layer = TestPlayerLayer::new();
-    let layer_handle = layer.as_ptr();
-
-    let options = PlayerRuntimeOptions::default()
-        .with_video_surface(PlayerVideoSurfaceTarget {
-            kind: PlayerVideoSurfaceKind::PlayerLayer,
-            handle: layer_handle as usize,
-        })
-        .with_decoder_plugin_library_paths([decoder_plugin_path])
-        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
-        .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
-        .with_development_native_plugin_loading();
-    let error = match open_macos_software_runtime_source_with_options_and_interrupt(
-        MediaSource::new(source),
-        options,
-        Arc::new(AtomicBool::new(false)),
-    ) {
-        Ok(_) => panic!("strict frame processor initialization should not fall back"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
-    assert!(
-        error
-            .message()
-            .contains("frame processor initialization failed in strict mode"),
-        "unexpected strict frame processor error: {}",
-        error
-    );
-}
-
-#[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
-#[cfg(target_os = "macos")]
-fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
-    let Some(decoder_plugin_path) =
-        std::env::var_os("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping host strict frame processor error test: VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !decoder_plugin_path.is_file() {
-        eprintln!(
-            "skipping host strict frame processor error test: decoder plugin path is missing: {}",
-            decoder_plugin_path.display()
-        );
-        return;
-    }
-    let Some(frame_processor_path) =
-        std::env::var_os("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH").map(PathBuf::from)
-    else {
-        eprintln!(
-            "skipping host strict frame processor error test: VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH is not set"
-        );
-        return;
-    };
-    if !frame_processor_path.is_file() {
-        eprintln!(
-            "skipping host strict frame processor error test: frame processor plugin path is missing: {}",
-            frame_processor_path.display()
-        );
-        return;
-    }
-    let Some(source) = videotoolbox_smoke_source_path() else {
-        eprintln!(
-            "skipping host strict frame processor error test: no local H264/HEVC smoke source found"
-        );
-        return;
-    };
-
-    let layer = TestPlayerLayer::new();
-    let layer_handle = layer.as_ptr();
-
-    let options = PlayerRuntimeOptions::default()
-        .with_video_surface(PlayerVideoSurfaceTarget {
-            kind: PlayerVideoSurfaceKind::PlayerLayer,
-            handle: layer_handle as usize,
-        })
-        .with_decoder_plugin_library_paths([decoder_plugin_path])
-        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
-        .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
-        .with_development_native_plugin_loading();
-    let error = match open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
-    {
-        Ok(_) => {
-            panic!("strict host frame processor initialization should fail");
-        }
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
-    assert!(
-        error
-            .message()
-            .contains("frame processor initialization failed in strict mode"),
-        "unexpected strict frame processor error: {}",
-        error
-    );
-    assert!(
-        !error.message().contains("software fallback also failed"),
-        "strict frame processor error should not be wrapped as a fallback failure: {}",
-        error
     );
 }
 
@@ -2909,6 +2588,7 @@ fn release_native_frame_tracking_decrements_outstanding_count() {
             coded_height: Some(1080),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            d3d11_subresource_index: None,
             pipeline_profile: Some(
                 player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
             ),
@@ -2949,6 +2629,7 @@ fn present_failure_still_releases_native_frame() {
             coded_height: Some(720),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            d3d11_subresource_index: None,
             pipeline_profile: Some(
                 player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
             ),
@@ -2996,6 +2677,7 @@ fn stale_presentation_epoch_releases_frame_without_presenting() {
             coded_height: Some(360),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            d3d11_subresource_index: None,
             pipeline_profile: Some(
                 player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
             ),
@@ -5533,6 +5215,7 @@ fn test_native_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
             coded_height: Some(180),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+            d3d11_subresource_index: None,
             pipeline_profile: Some(
                 player_plugin::NativeFramePipelineProfile::VideoToolboxCvPixelBuffer,
             ),

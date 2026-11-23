@@ -20,7 +20,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedEffectiveSubtitleTrackId: String?
 
     let backend: PlayerBridgeBackend = .fakeDemo
-    private let benchmarkRecorder: VesperBenchmarkCoordinator
+    private let benchmarkRecorder: VesperBenchmarkRecorder
 
     var uiState: PlayerHostUiState {
         publishedUiState
@@ -90,7 +90,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     ) {
         _ = trackPreferencePolicy
         _ = preloadBudgetPolicy
-        benchmarkRecorder = VesperBenchmarkCoordinator(configuration: benchmarkConfiguration)
+        benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         currentSource = initialSource
         publishedUiState = PlayerHostUiState(
             title: VesperPlayerI18n.playerTitle,
@@ -379,64 +379,6 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func benchmarkSummary() -> VesperBenchmarkSummary {
         benchmarkRecorder.summary()
-    }
-
-    func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
-        await benchmarkRecorder.awaitSinkShutdown(timeout: timeout)
-    }
-
-    func startPerformanceDiagnostics(
-        configuration: VesperPerformanceDiagnosticsConfiguration,
-        probe: VesperPerformanceProbe
-    ) async throws -> String {
-        try await benchmarkRecorder.startPerformance(
-            configuration: configuration,
-            probe: probe,
-            initialPlaybackActive: publishedUiState.playbackState == .playing &&
-                !publishedUiState.isBuffering
-        )
-    }
-
-    func updatePerformanceOverlayState(
-        runId: String,
-        state: VesperPerformanceOverlayState
-    ) throws {
-        try benchmarkRecorder.updateOverlayState(runId: runId, state: state)
-    }
-
-    func recordPerformanceMarker(
-        runId: String,
-        name: String,
-        value: Double?,
-        sequenceIndex: Int?,
-        expectedOverlayActive: Bool?
-    ) throws {
-        try benchmarkRecorder.recordMarker(
-            runId: runId,
-            name: name,
-            value: value,
-            sequenceIndex: sequenceIndex,
-            expectedOverlayActive: expectedOverlayActive
-        )
-    }
-
-    func submitPerformanceFrameSamples(
-        runId: String,
-        samples: [VesperPerformanceFrameSample]
-    ) throws {
-        try benchmarkRecorder.recordPerformanceFrames(runId: runId, samples: samples)
-    }
-
-    func performanceDiagnosticsSnapshot(
-        runId: String
-    ) async throws -> VesperPerformanceDiagnosticsReport {
-        try await benchmarkRecorder.snapshot(runId: runId, player: nil)
-    }
-
-    func stopPerformanceDiagnostics(
-        runId: String
-    ) async throws -> VesperPerformanceDiagnosticsReport {
-        try await benchmarkRecorder.stop(runId: runId, player: nil)
     }
 
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {

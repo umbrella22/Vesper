@@ -17,6 +17,9 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 
 use crate::external_process;
+use crate::ios_release::{
+    OPTIONAL_RELEASE_FRAMEWORKS as APP_STORE_FRAMEWORKS, RETIRED_FRAME_PROCESSOR_FRAMEWORK,
+};
 
 const MAX_BRIDGE_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUST_FFI_SOURCE_BYTES: usize = 16 * 1024 * 1024;
@@ -36,17 +39,6 @@ const EMBEDDED_PLUGIN_REGISTRY_FILE: &str = "vesper-plugin-registry.json";
 const IOS_DEVICE_PLUGIN_TARGET: &str = "aarch64-apple-ios";
 const IOS_PLUGIN_ARCHITECTURE: &str = "arm64";
 
-const APP_STORE_FRAMEWORKS: [&str; 8] = [
-    "VesperFFmpegAVCodec",
-    "VesperFFmpegAVFormat",
-    "VesperFFmpegAVUtil",
-    "VesperPlayerRemuxFfmpegPlugin",
-    "VesperPlayerSourceNormalizerFfmpegPlugin",
-    "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
-];
-
 const APP_STORE_FFMPEG_FRAMEWORKS: [&str; 5] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
@@ -55,12 +47,10 @@ const APP_STORE_FFMPEG_FRAMEWORKS: [&str; 5] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
 ];
 
-const APP_STORE_PLUGIN_FRAMEWORKS: [&str; 5] = [
+const APP_STORE_PLUGIN_FRAMEWORKS: [&str; 3] = [
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -521,6 +511,15 @@ pub(crate) fn verify_embedded_optional_framework_contract(
         return Err(IosError::conformance(format!(
             "The legacy umbrella FFmpeg runtime framework is not distributable:\n  {}",
             legacy_runtime.display()
+        )));
+    }
+
+    let retired_plugin =
+        frameworks_directory.join(format!("{RETIRED_FRAME_PROCESSOR_FRAMEWORK}.framework"));
+    if path_exists_without_following_symlinks(&retired_plugin)? {
+        return Err(IosError::conformance(format!(
+            "The retired FrameProcessor diagnostic framework is not distributable:\n  {}",
+            retired_plugin.display()
         )));
     }
 
@@ -2019,7 +2018,6 @@ fn collect_unconditional_rust_exports(items: &[syn::Item], exported: &mut BTreeS
 
 fn is_unconditional_c_export(function: &syn::ItemFn) -> bool {
     matches!(function.vis, syn::Visibility::Public(_))
-        && matches!(&function.sig.safety, syn::Safety::Unsafe(_))
         && function
             .sig
             .abi

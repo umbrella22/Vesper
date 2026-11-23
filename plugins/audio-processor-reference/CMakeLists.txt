@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(vesper_audio_reference LANGUAGES CXX)
+set(VESPER_PLUGIN_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/../../include" CACHE PATH "Directory with vesper_plugin.h")
+add_library(vesper_audio_reference SHARED processor.cpp)
+target_include_directories(vesper_audio_reference PRIVATE "${VESPER_PLUGIN_HEADERS}")
+target_compile_definitions(vesper_audio_reference PRIVATE VESPER_PLUGIN_BUILD)
+target_compile_features(vesper_audio_reference PRIVATE cxx_std_17)
+set_target_properties(vesper_audio_reference PROPERTIES CXX_VISIBILITY_PRESET hidden CXX_EXTENSIONS OFF)

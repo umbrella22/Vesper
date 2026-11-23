@@ -14,7 +14,6 @@
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		D8A1A4F62F4A5D0100C10206 /* VesperPlayerDecoderVideoToolboxPlugin.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D8A1A4E62F4A5D0100C10106 /* VesperPlayerDecoderVideoToolboxPlugin.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		D8A1A4F72F4A5D0100C10207 /* VesperPlayerFrameProcessorDiagnosticPlugin.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D8A1A4E72F4A5D0100C10107 /* VesperPlayerFrameProcessorDiagnosticPlugin.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -38,7 +37,6 @@
 			dstSubfolderSpec = 10;
 			files = (
 				D8A1A4F62F4A5D0100C10206 /* VesperPlayerDecoderVideoToolboxPlugin.xcframework in Embed Frameworks */,
-				D8A1A4F72F4A5D0100C10207 /* VesperPlayerFrameProcessorDiagnosticPlugin.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -57,7 +55,6 @@
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		D8A1A4E62F4A5D0100C10106 /* VesperPlayerDecoderVideoToolboxPlugin.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = VesperPlayerDecoderVideoToolboxPlugin.xcframework; path = ../../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerDecoderVideoToolboxPlugin.xcframework; sourceTree = "<group>"; };
-		D8A1A4E72F4A5D0100C10107 /* VesperPlayerFrameProcessorDiagnosticPlugin.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = VesperPlayerFrameProcessorDiagnosticPlugin.xcframework; path = ../../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -110,7 +107,6 @@
 			isa = PBXGroup;
 			children = (
 				D8A1A4E62F4A5D0100C10106 /* VesperPlayerDecoderVideoToolboxPlugin.xcframework */,
-				D8A1A4E72F4A5D0100C10107 /* VesperPlayerFrameProcessorDiagnosticPlugin.xcframework */,
 			);
 			name = "Optional Plugin XCFrameworks";
 			sourceTree = "<group>";

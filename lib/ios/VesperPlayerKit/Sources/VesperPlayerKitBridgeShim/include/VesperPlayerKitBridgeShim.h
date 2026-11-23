@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <CoreVideo/CoreVideo.h>
 
 typedef enum PlayerFfiErrorCode {
   PlayerFfiErrorCodeNone = 0,
@@ -237,7 +238,6 @@ typedef struct VesperRuntimeDownloadConfig {
   bool run_post_processors_on_completion;
   uint64_t plugin_registry_handle;
   char *post_download_plugin_references_json;
-  char *event_hook_plugin_references_json;
 } VesperRuntimeDownloadConfig;
 
 typedef enum VesperRuntimeDownloadContentFormat {
@@ -713,56 +713,6 @@ void vesper_runtime_ios_plugin_registry_dispose(uint64_t handle);
 
 void vesper_runtime_ios_plugin_string_free(char *value);
 
-bool vesper_runtime_benchmark_sink_session_create_with_references_json(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    char **out_error_message);
-
-void vesper_runtime_benchmark_sink_session_dispose(uint64_t handle);
-
-bool vesper_runtime_benchmark_sink_session_submit_json(
-    uint64_t handle,
-    const char *batch_json,
-    char **out_report_json,
-    char **out_error_message);
-
-bool vesper_runtime_benchmark_sink_session_flush_json(
-    uint64_t handle,
-    char **out_report_json,
-    char **out_error_message);
-
-bool vesper_runtime_playback_event_hook_session_create(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    char **out_error_message);
-
-bool vesper_runtime_playback_event_hook_session_submit_json(
-    uint64_t handle,
-    const char *event_json,
-    char **out_error_message);
-
-bool vesper_runtime_playback_event_hook_session_flush(
-    uint64_t handle,
-    uint64_t timeout_ms,
-    char **out_error_message);
-
-bool vesper_runtime_playback_event_hook_session_drain_json(
-    uint64_t handle,
-    char **out_report_json,
-    char **out_error_message);
-
-bool vesper_runtime_playback_event_hook_session_close(
-    uint64_t handle,
-    char **out_error_message);
-
-void vesper_runtime_playback_event_hook_session_dispose(uint64_t handle);
-
-void vesper_runtime_playback_event_hook_report_string_free(char *value);
-
-void vesper_runtime_benchmark_string_free(char *value);
-
 bool vesper_ios_plugin_abi_summary_json(
     char **out_json,
     char **out_error_message);
@@ -851,5 +801,42 @@ bool vesper_dash_bridge_parse_sidx(
     char **out_error_details_json);
 
 void vesper_dash_bridge_string_free(char *value);
+
+void * vesper_ios_metal_filter_create(
+    const void *device,
+    const void *queue,
+    const uint8_t *parameters,
+    size_t parameters_len);
+
+void vesper_ios_metal_filter_destroy(void *host);
+
+uint32_t vesper_ios_metal_filter_encode(
+    void *host,
+    const void *command,
+    CVPixelBufferRef pixel_buffer,
+    const void **out_texture);
+
+void * vesper_ios_native_frame_pipeline_take_presentation_lease(
+    uint64_t handle,
+    uint64_t frame_handle);
+
+void vesper_ios_native_frame_pipeline_finish_presentation_lease(
+    void *lease,
+    bool presented);
+
+uint64_t vesper_ios_native_frame_audio_open(
+    const char *binding,
+    size_t length,
+    uint32_t sample_rate,
+    uint16_t channels,
+    uint64_t epoch);
+
+bool vesper_ios_native_frame_audio_process(
+    uint64_t handle,
+    float *samples,
+    size_t sample_count,
+    int64_t pts_us);
+
+void vesper_ios_native_frame_audio_close(uint64_t handle);
 
 #endif

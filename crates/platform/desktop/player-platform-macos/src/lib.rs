@@ -102,6 +102,8 @@ mod diagnostics;
 mod fallback;
 mod frame_processor;
 mod native_frame;
+#[cfg(target_os = "macos")]
+mod native_media;
 mod selection;
 mod source_normalizer;
 

@@ -9,8 +9,6 @@ private let artifactNames = [
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
 ]
 
 private let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()

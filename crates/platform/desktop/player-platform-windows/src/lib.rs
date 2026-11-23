@@ -94,6 +94,13 @@ struct WindowsRuntimeAdapterInitializer {
     runtime_fallback: Option<WindowsRuntimeActiveFallback>,
 }
 
+#[cfg(target_os = "windows")]
+mod d3d11_filter;
+#[cfg(target_os = "windows")]
+mod native_media;
+#[cfg(target_os = "windows")]
+mod vulkan_presenter;
+
 #[derive(Debug, Clone)]
 struct WindowsNativeFrameSelection {
     preferred_backend: WindowsNativeFrameBackendKind,
@@ -140,7 +147,7 @@ trait WindowsNativeFramePresenter: Send {
     fn decoder_device_context(&self) -> Option<DecoderNativeDeviceContext>;
     fn attach(&mut self, target: WindowsSurfaceAttachTarget) -> PlayerResult<()>;
     fn reset(&mut self) -> PlayerResult<()>;
-    fn present(&mut self, handle: usize) -> PlayerResult<()>;
+    fn present(&mut self, handle: usize, subresource_index: u32) -> PlayerResult<()>;
 }
 
 #[cfg(any(test, not(target_os = "windows")))]
@@ -185,7 +192,7 @@ impl WindowsNativeFramePresenter for WindowsD3D11NativeFramePresenterSkeleton {
         Ok(())
     }
 
-    fn present(&mut self, _handle: usize) -> PlayerResult<()> {
+    fn present(&mut self, _handle: usize, _subresource_index: u32) -> PlayerResult<()> {
         if self.state == WindowsD3D11PresenterState::Detached {
             return Err(PlayerError::new(
                 PlayerErrorCode::BackendFailure,
@@ -226,9 +233,7 @@ fn windows_native_frame_presenter_for_backend(
 mod windows_d3d11_presenter {
     use std::ffi::c_void;
 
-    use player_plugin::{
-        DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeHandleKind,
-    };
+    use player_plugin::{DecoderNativeDeviceContext, DecoderNativeHandleKind};
     use player_runtime::{PlayerError, PlayerErrorCode, PlayerResult};
     use windows::Win32::Foundation::{HMODULE, HWND, RECT};
     use windows::Win32::Graphics::Direct3D::{
@@ -249,7 +254,8 @@ mod windows_d3d11_presenter {
     };
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
-        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_RATIONAL,
+        DXGI_SAMPLE_DESC,
     };
     use windows::Win32::Graphics::Dxgi::{
         DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
@@ -285,6 +291,7 @@ mod windows_d3d11_presenter {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct Nv12InputViewKey {
         texture_ptr: usize,
+        subresource_index: u32,
         width: u32,
         height: u32,
         format: DXGI_FORMAT,
@@ -313,6 +320,14 @@ mod windows_d3d11_presenter {
     }
 
     impl WindowsD3D11NativeFramePresenter {
+        pub(super) fn device(&self) -> &ID3D11Device {
+            &self.device
+        }
+
+        pub(super) fn immediate_context(&self) -> &ID3D11DeviceContext {
+            &self.context
+        }
+
         pub fn new() -> PlayerResult<Self> {
             let feature_levels = [
                 D3D_FEATURE_LEVEL_11_1,
@@ -449,15 +464,31 @@ mod windows_d3d11_presenter {
             Ok(())
         }
 
-        fn present_texture(&mut self, texture: &ID3D11Texture2D) -> PlayerResult<()> {
+        fn present_texture(
+            &mut self,
+            texture: &ID3D11Texture2D,
+            subresource_index: u32,
+        ) -> PlayerResult<()> {
             self.ensure_swap_chain()?;
             let swap_chain = self.swap_chain()?.clone();
             let back_buffer = self.back_buffer()?;
             let mut desc = Default::default();
             // SAFETY: texture is a valid borrowed D3D11 texture interface.
             unsafe { texture.GetDesc(&mut desc) };
-            if is_nv12(desc.Format) {
-                return self.present_nv12_texture(texture, &desc, &back_buffer, &swap_chain);
+            if desc.MipLevels != 1 || subresource_index >= desc.ArraySize {
+                return Err(PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
+                    "invalid D3D11 decoder texture subresource",
+                ));
+            }
+            if is_nv12(desc.Format) || desc.Format == DXGI_FORMAT_P010 {
+                return self.present_video_processor_texture(
+                    texture,
+                    subresource_index,
+                    &desc,
+                    &back_buffer,
+                    &swap_chain,
+                );
             }
             if !is_bgra_swapchain_compatible(desc.Format) {
                 return Err(PlayerError::new(
@@ -477,7 +508,16 @@ mod windows_d3d11_presenter {
             // SAFETY: both textures belong to the same D3D11 device when the
             // plugin honors the shared native_device_context contract.
             unsafe {
-                self.context.CopyResource(&target, &source);
+                self.context.CopySubresourceRegion(
+                    &target,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &source,
+                    subresource_index,
+                    None,
+                );
                 self.context.Flush();
             }
             // SAFETY: the swapchain is valid and owned by this presenter.
@@ -486,9 +526,23 @@ mod windows_d3d11_presenter {
                 .map_err(|error| player_error("IDXGISwapChain::Present", error))
         }
 
-        fn present_nv12_texture(
+        pub(super) fn present_filtered_texture(
             &mut self,
             texture: &ID3D11Texture2D,
+        ) -> PlayerResult<()> {
+            self.ensure_swap_chain()?;
+            let swap_chain = self.swap_chain()?.clone();
+            let back_buffer = self.back_buffer()?;
+            let mut desc = Default::default();
+            // SAFETY: the filtered texture is live on the presenter's device.
+            unsafe { texture.GetDesc(&mut desc) };
+            self.present_video_processor_texture(texture, 0, &desc, &back_buffer, &swap_chain)
+        }
+
+        fn present_video_processor_texture(
+            &mut self,
+            texture: &ID3D11Texture2D,
+            subresource_index: u32,
             desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
             back_buffer: &ID3D11Texture2D,
             swap_chain: &IDXGISwapChain1,
@@ -520,6 +574,7 @@ mod windows_d3d11_presenter {
                 &video_device,
                 desc,
                 texture,
+                subresource_index,
                 &source,
                 &back_buffer_desc,
                 back_buffer,
@@ -569,6 +624,7 @@ mod windows_d3d11_presenter {
             video_device: &ID3D11VideoDevice,
             input_desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
             texture: &ID3D11Texture2D,
+            subresource_index: u32,
             source: &ID3D11Resource,
             output_desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
             back_buffer: &ID3D11Texture2D,
@@ -639,6 +695,7 @@ mod windows_d3d11_presenter {
             })?;
             let input_key = Nv12InputViewKey {
                 texture_ptr: texture.as_raw() as usize,
+                subresource_index,
                 width: input_desc.Width,
                 height: input_desc.Height,
                 format: input_desc.Format,
@@ -654,7 +711,7 @@ mod windows_d3d11_presenter {
                     Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
                         Texture2D: D3D11_TEX2D_VPIV {
                             MipSlice: 0,
-                            ArraySlice: 0,
+                            ArraySlice: subresource_index,
                         },
                     },
                 };
@@ -800,7 +857,7 @@ mod windows_d3d11_presenter {
             Ok(())
         }
 
-        fn present(&mut self, handle: usize) -> PlayerResult<()> {
+        fn present(&mut self, handle: usize, subresource_index: u32) -> PlayerResult<()> {
             if handle == 0 {
                 return Err(PlayerError::new(
                     PlayerErrorCode::BackendFailure,
@@ -821,7 +878,7 @@ mod windows_d3d11_presenter {
                     })?
                     .clone()
             };
-            self.present_texture(&texture)
+            self.present_texture(&texture, subresource_index)
         }
     }
 
@@ -1167,11 +1224,18 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
             );
         }
 
-        let mut presenter = windows_native_frame_presenter_for_backend(self.preferred_backend)?;
         let surface_target = WindowsSurfaceAttachTarget {
             kind: self.video_surface.kind,
             handle: self.video_surface.handle,
         };
+        #[cfg(target_os = "windows")]
+        if let Some(plugin) = registry
+            .native_artifact(&self.plugin_reference)?
+            .native_plugin()
+        {
+            return native_media::open(packet_source, probe, plugin, surface_target);
+        }
+        let mut presenter = windows_native_frame_presenter_for_backend(self.preferred_backend)?;
         presenter.attach(surface_target)?;
         let session = factory
             .open_native_session(&DecoderSessionConfig {
@@ -1496,7 +1560,10 @@ fn windows_native_frame_poll_with_presenter_protected(
         );
     }
     let present_result = presenter
-        .present(frame.handle)
+        .present(
+            frame.handle,
+            frame.metadata.d3d11_subresource_index.unwrap_or(0),
+        )
         .map_err(|error| anyhow::anyhow!(error.message().to_owned()));
     let release_result = release_windows_native_frame(session, breaker, frame);
     present_result.and(release_result)?;
@@ -2652,7 +2719,7 @@ mod tests {
         let mut presenter = WindowsD3D11NativeFramePresenterSkeleton::default();
 
         let first = presenter
-            .present(1)
+            .present(1, 0)
             .expect_err("first present should fail as unattached");
         assert!(
             first
@@ -2666,7 +2733,7 @@ mod tests {
             })
             .expect("attach should succeed");
         let second = presenter
-            .present(1)
+            .present(1, 0)
             .expect_err("second present should hit skeleton path");
         assert!(
             second
@@ -2674,12 +2741,12 @@ mod tests {
                 .contains("not attached to a device/context yet")
         );
         let third = presenter
-            .present(1)
+            .present(1, 0)
             .expect_err("third present should hit skeleton path");
         assert!(third.message().contains("skeleton is not implemented yet"));
         presenter.reset().expect("reset should succeed");
         let fourth = presenter
-            .present(1)
+            .present(1, 0)
             .expect_err("present after reset should be detached again");
         assert!(
             fourth
@@ -2717,6 +2784,7 @@ mod tests {
                     coded_height: Some(1080),
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::DxgiSurface,
+                    d3d11_subresource_index: None,
                     pipeline_profile: Some(player_plugin::NativeFramePipelineProfile::Unknown(
                         "dxgi_surface".to_owned(),
                     )),
@@ -2773,6 +2841,7 @@ mod tests {
                     coded_height: Some(1080),
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                    d3d11_subresource_index: None,
                     pipeline_profile: Some(
                         player_plugin::NativeFramePipelineProfile::D3D11Texture2D,
                     ),
@@ -3017,7 +3086,7 @@ mod tests {
             Ok(())
         }
 
-        fn present(&mut self, handle: usize) -> PlayerResult<()> {
+        fn present(&mut self, handle: usize, _subresource_index: u32) -> PlayerResult<()> {
             self.presented_handles
                 .lock()
                 .expect("presented handles")

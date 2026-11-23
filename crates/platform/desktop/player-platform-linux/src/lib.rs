@@ -14,9 +14,11 @@ use std::sync::atomic::AtomicBool;
 
 use player_model::MediaSource;
 use player_platform_desktop::{
+    DesktopVideoSourceFactory,
     diagnostics::{append_plugin_diagnostics, unsupported_plugin_diagnostic},
     open_platform_desktop_source_with_options_and_interrupt,
-    probe_platform_desktop_source_with_options,
+    open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt,
+    probe_platform_desktop_source_with_options, software_desktop_capabilities,
 };
 use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
@@ -195,6 +197,33 @@ impl PlayerRuntimeAdapterInitializer for LinuxRuntimeAdapterInitializer {
     fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
         self.inner.initialize()
     }
+}
+
+/// Opens an experimental Linux video source within the shared desktop runtime.
+pub fn open_linux_host_runtime_source_with_video_source_factory(
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+    video_source: Arc<dyn DesktopVideoSourceFactory>,
+) -> PlayerResult<PlayerRuntimeBootstrap> {
+    const ADAPTER: &str = "linux_vulkan_reference";
+    let mut bootstrap =
+        open_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
+            ADAPTER,
+            source,
+            options.clone(),
+            interrupt_flag,
+            video_source,
+            software_desktop_capabilities(),
+        )?;
+    bootstrap.startup =
+        linux_startup_with_unsupported_plugin_diagnostics(bootstrap.startup, &options);
+    Ok(PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+        ADAPTER,
+        bootstrap,
+        options.pipeline_event_dispatcher,
+        options.pipeline_event_platform,
+    ))
 }
 
 fn linux_startup_with_unsupported_plugin_diagnostics(

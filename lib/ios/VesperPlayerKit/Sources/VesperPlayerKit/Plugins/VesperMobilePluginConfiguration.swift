@@ -1,24 +1,6 @@
 import Foundation
 @_implementationOnly import VesperPlayerKitBridgeShim
 
-/// Native playback EventHook plugins selected for this player instance.
-///
-/// The host resolves references against build-time embedded artifacts before
-/// creating the Rust dispatcher.
-public struct VesperPipelineEventHookConfiguration: Equatable {
-    public let pluginReferences: [VesperPluginReference]
-
-    public init(
-        pluginReferences: [VesperPluginReference] = []
-    ) {
-        self.pluginReferences = pluginReferences
-    }
-
-    var isDisabled: Bool {
-        pluginReferences.isEmpty
-    }
-}
-
 public enum VesperSourceNormalizerMode: String, Equatable {
     case disabled
     case diagnosticsOnly
@@ -118,17 +100,22 @@ public struct VesperNativeFramePipelineConfiguration: Equatable {
     /// Explicit frame processor plugin identities resolved by the build-time registry.
     public let frameProcessorPluginReferences: [VesperPluginReference]
     public let maxInFlightFrames: Int?
+    /// Optional bundled fixed-block processor for SDK-managed local-file audio.
+    /// AVPlayer and protected media cannot use this processor.
+    public let audioProcessorReference: VesperPluginReference?
 
     public init(
         mode: VesperNativeFramePipelineMode = .disabled,
         decoderPluginReferences: [VesperPluginReference] = [],
         frameProcessorPluginReferences: [VesperPluginReference] = [],
-        maxInFlightFrames: Int? = nil
+        maxInFlightFrames: Int? = nil,
+        audioProcessorReference: VesperPluginReference? = nil
     ) {
         self.mode = mode
         self.decoderPluginReferences = decoderPluginReferences
         self.frameProcessorPluginReferences = frameProcessorPluginReferences
         self.maxInFlightFrames = maxInFlightFrames
+        self.audioProcessorReference = audioProcessorReference
     }
 
     var isDisabled: Bool {

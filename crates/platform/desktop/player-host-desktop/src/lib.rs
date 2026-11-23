@@ -1,3 +1,4 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
 #![allow(
     clippy::result_large_err,
     reason = "desktop preload helpers preserve the shared player-runtime error contract instead of introducing a host-only boxed error"
@@ -8,6 +9,11 @@
 //! This crate is an internal host-facing bridge over the platform runtime
 //! adapters. It is not a published SDK artifact; native distribution is owned
 //! by the `lib/` packages and standalone desktop examples.
+
+#[cfg(target_os = "linux")]
+mod vulkan_playback;
+#[cfg(target_os = "linux")]
+pub use vulkan_playback::LinuxVulkanPlaybackPresenter;
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;

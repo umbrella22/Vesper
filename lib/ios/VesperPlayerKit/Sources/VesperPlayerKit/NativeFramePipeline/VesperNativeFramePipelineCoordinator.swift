@@ -197,6 +197,14 @@ final class VesperNativeFramePipelineCoordinator {
         switch configuration.mode {
         case .disabled, .diagnosticsOnly:
             surfaceHost?.setNativeFramePresentationEnabled(false)
+            if configuration.audioProcessorReference != nil {
+                let issue = VesperNativeFramePipelineIssue(
+                    kind: .unsupportedOperation,
+                    message: "AVPlayer does not support a custom audio processor. Select an SDK-managed native-frame mode."
+                )
+                routeIssue = issue
+                return .fail(issue)
+            }
             return .systemPlayer
         case .preferNativeFrame, .requireNativeFrame:
             break

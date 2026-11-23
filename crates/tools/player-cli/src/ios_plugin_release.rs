@@ -6703,8 +6703,6 @@ mod implementation {
             "remux-ffmpeg" => Ok(IosPluginId::RemuxFfmpeg),
             "source-normalizer-ffmpeg" => Ok(IosPluginId::SourceNormalizerFfmpeg),
             "decoder-videotoolbox" => Ok(IosPluginId::DecoderVideoToolbox),
-            "frame-processor-diagnostic" => Ok(IosPluginId::FrameProcessorDiagnostic),
-            "performance-diagnostics" => Ok(IosPluginId::PerformanceDiagnostics),
             _ => Err(IosError::storage(format!(
                 "iOS plugin release journal contains an unknown plugin ID: {value}"
             ))),
@@ -8403,7 +8401,7 @@ printf '%s\n' '{"AvailableLibraries":['"$entries"'],"XCFrameworkFormatVersion":"
                     "fixture output directory",
                 )
                 .expect("fixture output identity"),
-                plugin_id: IosPluginId::FrameProcessorDiagnostic.as_str().to_owned(),
+                plugin_id: IosPluginId::DecoderVideoToolbox.as_str().to_owned(),
                 owners: vec![
                     PreparedOwner {
                         role: PreparedOwnerRole::Build,
@@ -8517,7 +8515,7 @@ printf '%s\n' '{"AvailableLibraries":['"$entries"'],"XCFrameworkFormatVersion":"
                     "fixture output directory",
                 )
                 .expect("fixture output identity"),
-                plugin_id: IosPluginId::FrameProcessorDiagnostic.as_str().to_owned(),
+                plugin_id: IosPluginId::DecoderVideoToolbox.as_str().to_owned(),
                 owners: vec![
                     PreparedOwner {
                         role: PreparedOwnerRole::Build,
@@ -8727,7 +8725,7 @@ stability = "stable"
         #[test]
         fn ios_release_reads_the_complete_plugin_project_manifest() {
             let directory = tempfile::tempdir().expect("create plugin project fixture");
-            let manifest_directory = directory.path().join("plugins/frame-processor-diagnostic");
+            let manifest_directory = directory.path().join("plugins/decoder-videotoolbox");
             fs::create_dir_all(&manifest_directory).expect("create plugin manifest directory");
             fs::write(
                 manifest_directory.join("vesper-plugin.toml"),
@@ -8735,7 +8733,7 @@ stability = "stable"
 schema_version = 1
 
 [plugin]
-id = "dev.vesper.frame-processor-diagnostic"
+id = "dev.vesper.decoder-videotoolbox"
 name = "Vesper Diagnostic Frame Processor"
 version = "0.4.0"
 description = "Diagnostic FrameProcessor fixture"
@@ -8744,13 +8742,13 @@ publisher = "io.github.umbrella22"
 
 [compatibility]
 host_sdk = ">=0.4.0, <0.5.0"
-abi_major = 1
+abi_major = 2
 abi_minor_min = 0
 abi_minor_max = 0
 
 [[capabilities]]
-interface_id = "fc050597-b7b7-5c81-83b9-b42555f8b825"
-instance_id = "dev.vesper.frame-processor-diagnostic.frame"
+interface_id = "d68be0ed-1958-5922-8b7a-bc6761646b43"
+instance_id = "dev.vesper.decoder-videotoolbox.native"
 interface_major = 1
 interface_minor = 0
 stability = "experimental"
@@ -8759,10 +8757,10 @@ stability = "experimental"
 transport = "native"
 target = "aarch64-apple-darwin"
 format = "dylib"
-source = "dist/libvesper_frame_processor_diagnostic.dylib"
-path = "artifacts/aarch64-apple-darwin/libvesper_frame_processor_diagnostic.dylib"
+source = "dist/libvesper_decoder_videotoolbox.dylib"
+path = "artifacts/aarch64-apple-darwin/libvesper_decoder_videotoolbox.dylib"
 architecture = "arm64"
-capabilities = [{ interface_id = "fc050597-b7b7-5c81-83b9-b42555f8b825", instance_id = "dev.vesper.frame-processor-diagnostic.frame" }]
+capabilities = [{ interface_id = "d68be0ed-1958-5922-8b7a-bc6761646b43", instance_id = "dev.vesper.decoder-videotoolbox.native" }]
 
 [[package_files]]
 source = "../../LICENSE"
@@ -8778,12 +8776,12 @@ kind = "notice"
             .expect("write complete plugin project manifest");
 
             let descriptor =
-                read_ios_plugin_descriptor(directory.path(), IosPluginId::FrameProcessorDiagnostic)
+                read_ios_plugin_descriptor(directory.path(), IosPluginId::DecoderVideoToolbox)
                     .expect("read complete plugin project manifest");
 
             assert_eq!(
                 descriptor.descriptor().plugin.id,
-                "dev.vesper.frame-processor-diagnostic"
+                "dev.vesper.decoder-videotoolbox"
             );
             let canonical_json =
                 std::str::from_utf8(descriptor.json()).expect("canonical descriptor UTF-8");

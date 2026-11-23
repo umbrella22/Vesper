@@ -51,7 +51,8 @@ let package = Package(
             name: "VesperPlayerKitBridgeShim",
             dependencies: ["VesperPlayerFFI"],
             path: "Sources/VesperPlayerKitBridgeShim",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("c++")]
         ),
         .target(
             name: "VesperPlayerKit",

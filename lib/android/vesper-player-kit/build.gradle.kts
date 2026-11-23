@@ -17,6 +17,7 @@ val vesperCli = repoRoot.resolve("scripts/vesper")
 // The Rust CLI deliberately restricts test JNI publication to this module-owned tree.
 // Keep that boundary stable when Flutter rehomes Gradle build directories.
 val androidTestJniLibsDir = layout.projectDirectory.dir("build/generated/androidTestJniLibs")
+val androidTestRegistryAssets = layout.buildDirectory.dir("generated/androidTestPluginRegistryAssets")
 val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
 val hostJniLibraries =
     providers
@@ -75,6 +76,40 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
     outputs.upToDateWhen { false }
 }
 
+// Match registry hashes to the exact stripped ELF bytes that enter the signed test APK.
+val testPluginRegistries = listOf(
+    Triple("DecoderMediaCodec", "decoder-mediacodec", "vesper_decoder_mediacodec"),
+    Triple("SourceNormalizerFfmpeg", "source-normalizer-ffmpeg", "vesper_source_normalizer_ffmpeg"),
+).map { (name, plugin, library) ->
+    val manifest = repoRoot.resolve("plugins/$plugin/vesper-plugin.toml")
+    val artifact = layout.buildDirectory.file(
+        "intermediates/stripped_native_libs/debugAndroidTest/stripDebugAndroidTestDebugSymbols/out/lib/arm64-v8a/lib$library.so",
+    )
+    val registry = androidTestRegistryAssets.map {
+        it.file("vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.$plugin.json")
+    }
+    tasks.register<Exec>("generateAndroidTest${name}Registry") {
+        dependsOn("stripDebugAndroidTestDebugSymbols")
+        inputs.files(vesperCli, manifest, artifact)
+        outputs.file(registry)
+        outputs.upToDateWhen { false }
+        workingDir = repoRoot
+        doFirst {
+            val output = registry.get().asFile
+            output.parentFile.mkdirs()
+            commandLine(
+                vesperCli.absolutePath, "plugin", "registry-fragment", manifest.absolutePath,
+                "--platform", "android", "--target", "aarch64-linux-android",
+                "--architecture", "arm64-v8a", "--minimum-os", "26", "--locator-name", library,
+                "--artifact", artifact.get().asFile.absolutePath, "--output", output.absolutePath,
+            )
+        }
+    }
+}
+tasks.matching { it.name == "mergeDebugAndroidTestAssets" }.configureEach {
+    dependsOn(testPluginRegistries)
+}
+
 extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android"
     compileSdk = 37
@@ -115,6 +150,7 @@ extensions.configure<LibraryExtension>("android") {
 
     sourceSets.getByName("androidTest").apply {
         assets.directories.add(repoRoot.resolve("fixtures/media").absolutePath)
+        assets.directories.add(androidTestRegistryAssets.get().asFile.absolutePath)
         jniLibs.directories.add(androidTestJniLibsDir.asFile.absolutePath)
     }
 

@@ -32,7 +32,6 @@ import io.github.umbrella22.vesper.player.android.VesperPlayerSourceKind
 import io.github.umbrella22.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.umbrella22.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.umbrella22.vesper.player.android.VesperPreloadBudgetPolicy
-import io.github.umbrella22.vesper.player.android.VesperPipelineEventHookConfiguration
 import io.github.umbrella22.vesper.player.android.VesperRetryBackoff
 import io.github.umbrella22.vesper.player.android.VesperRetryPolicy
 import io.github.umbrella22.vesper.player.android.VesperSourceNormalizerConfiguration
@@ -138,12 +137,6 @@ internal fun Map<String, Any?>?.toNativeFramePipelineConfiguration():
         maxInFlightFrames = (this["maxInFlightFrames"] as? Number)?.toInt(),
     )
 }
-
-internal fun Map<String, Any?>.toPipelineEventHookConfiguration():
-    VesperPipelineEventHookConfiguration =
-    VesperPipelineEventHookConfiguration(
-        pluginReferences = decodeVesperPluginReferences(this["eventHookPluginReferences"]),
-    )
 
 internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
     VesperPlaybackCapabilityProbeRequest =
@@ -299,9 +292,6 @@ internal fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfigur
         baseDirectory = (this["baseDirectory"] as? String)?.let(::File),
         postDownloadPluginReferences = decodeVesperPluginReferences(
             this["postDownloadPluginReferences"],
-        ),
-        eventHookPluginReferences = decodeVesperPluginReferences(
-            this["eventHookPluginReferences"],
         ),
         rangeChunkBytes = (this["rangeChunkBytes"] as? Number)?.toLong(),
         minProgressBytes = (this["minProgressBytes"] as? Number)?.toLong() ?: 512L * 1024L,

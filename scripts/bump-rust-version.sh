@@ -4,8 +4,7 @@
 #
 # The build toolchain is pinned in rust-toolchain.toml. The MSRV is declared by
 # rust-version in the workspace Cargo.toml and is inherited by generated plugin
-# scaffolds at build time. First-party plugin manifests under plugins/ are
-# standalone packages, so they carry their own copy of the MSRV.
+# scaffolds at build time.
 
 set -euo pipefail
 
@@ -18,16 +17,9 @@ readonly WORKSPACE_MANIFEST="$REPO_ROOT/Cargo.toml"
 readonly SCAFFOLD_ASSETS="$REPO_ROOT/crates/tools/player-cli/src/plugin_scaffold_assets.rs"
 
 GENERATED_TEMPLATES=(
-  "$REPO_ROOT/templates/vesper-plugin/native/Cargo.toml.template"
-  "$REPO_ROOT/templates/vesper-plugin/wasm/Cargo.toml.template"
+  "$REPO_ROOT/templates/vesper-plugin/rust-native/Cargo.toml.template"
 )
 readonly GENERATED_TEMPLATES
-
-PLUGIN_MANIFESTS=(
-  "$REPO_ROOT/plugins/audio-processor-diagnostic/Cargo.toml"
-  "$REPO_ROOT/plugins/wasm-observer-diagnostic/Cargo.toml"
-)
-readonly PLUGIN_MANIFESTS
 
 usage() {
   cat <<'EOF'
@@ -38,9 +30,8 @@ Usage:
 
 Commands:
   bump <version>   Pin the build toolchain in rust-toolchain.toml. With
-                   --msrv, also raise the workspace and plugin MSRVs to the
-                   same version.
-  msrv <version>   Update the workspace and first-party plugin MSRVs only.
+                   --msrv, also raise the workspace MSRV to the same version.
+  msrv <version>   Update the workspace MSRV only.
   check            Verify every pin agrees and that the build toolchain is not
                    older than the workspace MSRV.
 
@@ -77,10 +68,6 @@ workspace_msrv() {
       exit
     }
   ' "$WORKSPACE_MANIFEST"
-}
-
-declared_msrv() {
-  sed -n 's/^[[:space:]]*rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$1"
 }
 
 validate_version() {
@@ -147,7 +134,6 @@ check_pins() {
   local failures=0
   local toolchain
   local msrv
-  local value
   local file
 
   toolchain="$(toolchain_version)"
@@ -173,14 +159,6 @@ check_pins() {
     echo "error: build toolchain $toolchain is older than workspace MSRV $msrv" >&2
     failures=$((failures + 1))
   fi
-
-  for file in "${PLUGIN_MANIFESTS[@]}"; do
-    value="$(declared_msrv "$file")"
-    if [[ "$value" != "$msrv" ]]; then
-      echo "error: ${file#"$REPO_ROOT"/} declares rust-version '$value', expected '$msrv'" >&2
-      failures=$((failures + 1))
-    fi
-  done
 
   for file in "${GENERATED_TEMPLATES[@]}"; do
     if ! grep -q 'rust-version = "{{RUST_VERSION}}"' "$file"; then
@@ -208,7 +186,6 @@ check_pins() {
   echo "Rust version pins are consistent."
   echo "  build toolchain:  $toolchain (rust-toolchain.toml)"
   echo "  workspace MSRV:   $msrv (Cargo.toml)"
-  echo "  plugin manifests: $msrv (${#PLUGIN_MANIFESTS[@]} files)"
 }
 
 bump_toolchain() {
@@ -228,8 +205,6 @@ bump_toolchain() {
 bump_msrv() {
   local version="$1"
   local toolchain
-  local file
-
   validate_version "$version" "MSRV"
   toolchain="$(toolchain_version)"
   validate_version "$toolchain" "toolchain version"
@@ -238,15 +213,8 @@ bump_msrv() {
   fi
 
   require_single_match "$WORKSPACE_MANIFEST" '^[[:space:]]*rust-version[[:space:]]*='
-  for file in "${PLUGIN_MANIFESTS[@]}"; do
-    require_single_match "$file" '^[[:space:]]*rust-version[[:space:]]*='
-  done
-
   replace_single_line "$WORKSPACE_MANIFEST" '^[[:space:]]*rust-version[[:space:]]*=' "rust-version = \"$version\""
-  for file in "${PLUGIN_MANIFESTS[@]}"; do
-    replace_single_line "$file" '^[[:space:]]*rust-version[[:space:]]*=' "rust-version = \"$version\""
-  done
-  echo "Updated workspace and first-party plugin MSRVs to $version."
+  echo "Updated workspace MSRV to $version."
 }
 
 main() {

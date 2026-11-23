@@ -1,59 +1,15 @@
-use std::collections::BTreeMap;
-#[cfg(all(
-    feature = "installed-catalog",
-    target_os = "macos",
-    target_arch = "aarch64"
-))]
-use std::fs;
-use std::mem::size_of;
-
-use player_plugin::{
-    AudioPitchMode, AudioPlaybackPolicy, AudioProcessorSessionConfig, BenchmarkEvent,
-    BenchmarkEventBatch, DecoderFrameFormat, DecoderPcmFrame, DecoderPcmFrameMetadata,
-    DecoderPcmSampleLayout, PipelineEvent, PluginReference, PluginTransport,
-};
+use player_plugin::{PluginReference, PluginTransport};
 use sha2::{Digest, Sha256};
 
-#[cfg(all(
-    feature = "installed-catalog",
-    target_os = "macos",
-    target_arch = "aarch64"
-))]
-use player_plugin_package::{
-    PluginHostTarget, PluginProjectManifest, PluginSigningKey, PluginTrustStore,
-    build_signed_plugin_package, install_verified_plugin_package, verify_installed_plugin_catalog,
-    verify_signed_plugin_package,
-};
-
 use crate::{
-    BenchmarkSinkPluginSession, EmbeddedPluginLocator, EmbeddedPluginRegistry,
-    EmbeddedPluginRegistryError, LoadedNativePlugin, NativePluginArtifact, PluginInterfaceState,
-    PluginRegistry, PluginRegistryBuildError, PluginSelectionError,
+    EmbeddedPluginLocator, EmbeddedPluginRegistry, EmbeddedPluginRegistryError, LoadedNativePlugin,
+    NativePluginArtifact, PluginInterfaceState, PluginRegistry, PluginRegistryBuildError,
+    PluginSelectionError,
 };
 
-#[cfg(all(
-    feature = "installed-catalog",
-    target_os = "macos",
-    target_arch = "aarch64"
-))]
-use super::workspace_root;
 use super::{resolve_plugin_path, resolve_plugin_path_with_override};
 
-fn pipeline_event(event_name: &str, session_id: &str) -> PipelineEvent {
-    PipelineEvent {
-        run_id: "fixture-run".to_owned(),
-        session_id: session_id.to_owned(),
-        platform: "test".to_owned(),
-        protocol: None,
-        event_name: event_name.to_owned(),
-        timestamp_ns: 1,
-        thread: None,
-        resource_identity: Some(format!("download-task:{session_id}")),
-        attributes: BTreeMap::new(),
-        diagnostic: None,
-    }
-}
-
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn assert_native_decoder_plugin(
     environment_variable: &str,
     stem: &str,
@@ -109,7 +65,7 @@ fn native_plugin_artifact_preserves_and_validates_the_declared_identity() {
 
 #[test]
 #[ignore = "requires a built player-plugin-fixture shared library artifact"]
-fn native_dynamic_loader_opens_safe_rust_fixture_and_calls_hook() {
+fn native_dynamic_loader_opens_fixture_and_resolves_post_download() {
     let plugin_path = resolve_plugin_path("vesper_plugin_fixture")
         .unwrap_or_else(|error| panic!("failed to resolve Plugin fixture path: {error}"));
     let plugin = LoadedNativePlugin::load_development(&plugin_path).unwrap_or_else(|error| {
@@ -125,192 +81,16 @@ fn native_dynamic_loader_opens_safe_rust_fixture_and_calls_hook() {
     let reference =
         PluginReference::new("dev.vesper.plugin-fixture", None, PluginTransport::Native)
             .expect("valid fixture reference");
-    let hook = plugin
-        .resolve_pipeline_event_hook(&reference)
-        .expect("unique event hook");
-    let outcome = hook
-        .on_event(&pipeline_event("download.task.completed", "fixture-task"))
-        .expect("event hook outcome");
-    assert!(outcome.accepted);
-}
-
-#[test]
-#[ignore = "requires the built audio-processor-diagnostic shared library artifact"]
-fn rewrite_red_native_dynamic_loader_opens_audio_processor_diagnostic() {
-    const AUDIO_PROCESSOR_INTERFACE_ID: [u8; 16] = [
-        0xf3, 0xfc, 0x5d, 0x7c, 0x58, 0x1f, 0x5e, 0x0a, 0x85, 0xbf, 0xdf, 0x00, 0xd7, 0xad, 0xb1,
-        0x3e,
-    ];
-
-    let plugin_path = resolve_plugin_path_with_override(
-        "VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-        "vesper_audio_processor_diagnostic",
-    )
-    .unwrap_or_else(|error| panic!("failed to resolve audio processor plugin path: {error}"));
-    let plugin = LoadedNativePlugin::load_development(&plugin_path).unwrap_or_else(|error| {
-        panic!(
-            "failed to load audio processor plugin shared library '{}': {error}",
-            plugin_path.display()
-        )
-    });
-
-    assert_eq!(plugin.plugin_id(), "dev.vesper.audio-processor-diagnostic");
-    assert_eq!(plugin.plugin_name(), "Vesper Audio Processor Diagnostic");
-    assert!(plugin.diagnostics().is_empty());
-    assert!(plugin.interfaces().iter().any(|interface| {
-        interface.metadata.interface_id == AUDIO_PROCESSOR_INTERFACE_ID
-            && interface.metadata.instance_id == "dev.vesper.audio-processor-diagnostic.audio"
-            && interface.state == PluginInterfaceState::Available
-    }));
-
-    let reference = PluginReference::new(
-        "dev.vesper.audio-processor-diagnostic",
-        Some("dev.vesper.audio-processor-diagnostic.audio".to_owned()),
-        PluginTransport::Native,
-    )
-    .expect("valid audio processor reference");
-    let factory = plugin
-        .resolve_audio_processor(&reference)
-        .expect("checked audio processor factory");
-    let metadata = DecoderPcmFrameMetadata::audio(
-        "diagnostic-pcm",
-        DecoderFrameFormat::F32,
-        48_000,
-        1,
-        DecoderPcmSampleLayout::Interleaved,
-        48_000,
-    );
-    let policy = AudioPlaybackPolicy {
-        playback_rate: 2.0,
-        pitch_mode: AudioPitchMode::PreservePitch,
-    };
-    let mut session = factory
-        .open_session(&AudioProcessorSessionConfig {
-            processor_index: 0,
-            input_metadata: metadata.clone(),
-            playback_policy: policy,
-            max_in_flight_frames: Some(1),
-        })
-        .expect("open checked audio processor session");
-    session
-        .configure(policy)
-        .expect("configure checked session");
-    let output = session
-        .process(DecoderPcmFrame {
-            metadata,
-            data: vec![0; 48_000 * size_of::<f32>()],
-        })
-        .expect("process PCM through dynamic ABI");
-    output.validate().expect("valid plugin-owned PCM output");
-    assert_eq!(output.metadata.frame_count, 24_000);
-    assert_eq!(output.data.len(), 24_000 * size_of::<f32>());
-    session.flush().expect("flush checked session");
-    session.close().expect("close checked session");
-    session.close().expect("idempotent checked close");
-}
-
-#[cfg(all(
-    feature = "installed-catalog",
-    target_os = "macos",
-    target_arch = "aarch64"
-))]
-#[test]
-#[ignore = "requires the staged official frame-processor-diagnostic dylib"]
-fn signed_installed_native_catalog_loads_and_resolves_the_official_frame_processor() {
-    let root = workspace_root().expect("workspace root");
-    let plugin_directory = root.join("plugins/frame-processor-diagnostic");
-    let manifest_path = plugin_directory.join("vesper-plugin.toml");
-    let manifest_source = fs::read_to_string(&manifest_path).expect("official plugin manifest");
-    let project =
-        PluginProjectManifest::from_toml(&manifest_source).expect("valid official plugin manifest");
-    let temporary = tempfile::tempdir().expect("temporary native catalog");
-    let signing_key = PluginSigningKey::generate("io.github.umbrella22").expect("publisher key");
-    let package_path = temporary.path().join("frame-processor.vesper-plugin");
-    build_signed_plugin_package(&project, &plugin_directory, &signing_key, &package_path)
-        .expect("signed Native plugin package");
-    let mut trust_store = PluginTrustStore::empty();
-    trust_store
-        .insert(signing_key.public_key())
-        .expect("trusted publisher key");
-    let package =
-        verify_signed_plugin_package(&package_path, &trust_store).expect("verified package");
-    let install_root = temporary.path().join("installed");
-    install_verified_plugin_package(&package, &install_root).expect("installed package");
-
-    let reference = PluginReference::new(
-        "dev.vesper.frame-processor-diagnostic",
-        Some("dev.vesper.frame-processor-diagnostic.frame".to_owned()),
-        PluginTransport::Native,
-    )
-    .expect("official FrameProcessor reference");
-    let host = PluginHostTarget::new(
-        semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("host SDK version"),
-        "aarch64-apple-darwin",
-        "arm64",
-    )
-    .expect("Native host target");
-    let catalog = verify_installed_plugin_catalog(
-        &install_root,
-        &trust_store,
-        &host,
-        std::slice::from_ref(&reference),
-        &[],
-    )
-    .expect("verified installed Native catalog");
-    let registry = PluginRegistry::load_verified_installed_catalog(&catalog)
-        .expect("registry from verified installed Native catalog");
-    drop(catalog);
-
-    let resolved = registry
-        .resolve_frame_processor(&reference)
-        .expect("resolved installed FrameProcessor");
-    assert_eq!(resolved.reference(), &reference);
-    let capabilities = resolved.capability().capabilities();
-    assert!(capabilities.supports_video_frames);
-
-    let mismatched_project = PluginProjectManifest::from_toml(
-        &manifest_source.replace("interface_minor = 0", "interface_minor = 1"),
-    )
-    .expect("valid mismatched project manifest");
-    let mismatched_package_path = temporary.path().join("mismatched.vesper-plugin");
-    build_signed_plugin_package(
-        &mismatched_project,
-        &plugin_directory,
-        &signing_key,
-        &mismatched_package_path,
-    )
-    .expect("signed mismatched Native plugin package");
-    let mismatched_package = verify_signed_plugin_package(&mismatched_package_path, &trust_store)
-        .expect("verified mismatched package");
-    let mismatched_install_root = temporary.path().join("mismatched-installed");
-    install_verified_plugin_package(&mismatched_package, &mismatched_install_root)
-        .expect("installed mismatched package");
-    let mismatched_catalog = verify_installed_plugin_catalog(
-        &mismatched_install_root,
-        &trust_store,
-        &host,
-        std::slice::from_ref(&reference),
-        &[],
-    )
-    .expect("verified mismatched installed catalog");
-    assert!(matches!(
-        PluginRegistry::load_verified_installed_catalog(&mismatched_catalog),
-        Err(PluginRegistryBuildError::InstalledCapabilityMismatch { .. })
-    ));
-}
-
-#[test]
-#[ignore = "requires a built player-decoder-fixture shared library artifact"]
-fn native_dynamic_loader_opens_decoder_fixture() {
-    assert_native_decoder_plugin(
-        "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
-        "vesper_decoder_fixture",
-        "dev.vesper.decoder-fixture",
-        "dev.vesper.decoder-fixture.native",
-        "player-decoder-fixture",
+    let processor = plugin
+        .resolve_post_download(&reference)
+        .expect("post-download fixture");
+    assert_eq!(
+        processor.supported_input_formats(),
+        &[player_plugin::ContentFormatKind::SingleFile]
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires a built player-decoder-videotoolbox shared library artifact"]
 fn native_dynamic_loader_opens_videotoolbox_decoder() {
@@ -323,6 +103,7 @@ fn native_dynamic_loader_opens_videotoolbox_decoder() {
     );
 }
 
+#[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a built player-decoder-d3d11 shared library artifact"]
 fn native_dynamic_loader_opens_d3d11_decoder() {
@@ -431,7 +212,7 @@ fn native_registry_retains_root_and_returns_canonical_selection() {
         .unwrap_or_else(|error| panic!("failed to resolve Plugin fixture path: {error}"));
     let registry = PluginRegistry::load_native_development([&plugin_path])
         .unwrap_or_else(|error| panic!("failed to build plugin registry: {error}"));
-    assert_eq!(registry.registered_interfaces().len(), 3);
+    assert_eq!(registry.registered_interfaces().len(), 1);
     assert!(
         registry
             .registered_interfaces()
@@ -442,53 +223,20 @@ fn native_registry_retains_root_and_returns_canonical_selection() {
     let implicit = PluginReference::new("dev.vesper.plugin-fixture", None, PluginTransport::Native)
         .expect("valid fixture reference");
     let resolved = registry
-        .resolve_pipeline_event_hook(&implicit)
-        .expect("unique event hook");
-    assert_eq!(
-        resolved.reference().capability_instance_id(),
-        Some("dev.vesper.plugin-fixture.event-hook")
-    );
-    let hook = resolved.capability();
-    let post_download = registry
         .resolve_post_download(&implicit)
         .expect("unique post-download processor");
     assert_eq!(
-        post_download.reference().capability_instance_id(),
+        resolved.reference().capability_instance_id(),
         Some("dev.vesper.plugin-fixture.post-download")
     );
-    assert_eq!(post_download.capability().name(), "Vesper Plugin Fixture");
-
-    let benchmark = BenchmarkSinkPluginSession::from_registry(&registry, [implicit.clone()])
-        .expect("unique benchmark sink");
-    assert_eq!(
-        benchmark.references()[0].capability_instance_id(),
-        Some("dev.vesper.plugin-fixture.benchmark")
-    );
-    let report = benchmark.on_event_batch(&BenchmarkEventBatch {
-        events: vec![BenchmarkEvent {
-            run_id: "run".to_owned(),
-            session_id: "session".to_owned(),
-            platform: "test".to_owned(),
-            source_protocol: None,
-            event_name: "frame".to_owned(),
-            timestamp_ns: 1,
-            elapsed_ns: 1,
-            thread: None,
-            attributes: BTreeMap::new(),
-        }],
-    });
-    assert_eq!(report.accepted_events, 1);
+    let processor = resolved.capability();
     drop(resolved);
-    drop(post_download);
-    drop(benchmark);
     drop(registry);
-    let outcome = hook
-        .on_event(&pipeline_event(
-            "download.task.completed",
-            "after-registry-drop",
-        ))
-        .expect("retained event hook");
-    assert!(outcome.accepted);
+    assert_eq!(processor.name(), "Vesper Plugin Fixture");
+    assert_eq!(
+        processor.capabilities().supported_input_formats,
+        [player_plugin::ContentFormatKind::SingleFile]
+    );
 }
 
 #[test]
@@ -506,96 +254,17 @@ fn native_inspection_keeps_the_loaded_root_without_legacy_symbol_fallback() {
         registry.records()[0].status,
         crate::PluginDiagnosticStatus::UnsupportedKind
     );
-    assert_eq!(registry.registered_interfaces().len(), 3);
+    assert_eq!(registry.registered_interfaces().len(), 1);
 
     let reference =
         PluginReference::new("dev.vesper.plugin-fixture", None, PluginTransport::Native)
             .expect("valid fixture reference");
     let resolved = registry
-        .resolve_pipeline_event_hook(&reference)
+        .resolve_post_download(&reference)
         .expect("inspection retains the native plugin root");
     assert_eq!(
         resolved.reference().capability_instance_id(),
-        Some("dev.vesper.plugin-fixture.event-hook")
-    );
-}
-
-#[test]
-#[ignore = "requires built decoder, frame processor, and source normalizer artifacts"]
-fn native_inspection_resolves_experimental_capabilities_from_canonical_records() {
-    let decoder_path = resolve_plugin_path("vesper_decoder_fixture")
-        .unwrap_or_else(|error| panic!("failed to resolve decoder fixture: {error}"));
-    let decoder_request = crate::DecoderPluginMatchRequest::video("fixture-video");
-    let decoder_registry = PluginRegistry::inspect_decoder_support_development(
-        [&decoder_path],
-        decoder_request.clone(),
-    );
-    let decoder_record = decoder_registry
-        .best_native_decoder_for(&decoder_request)
-        .expect("native decoder record");
-    let decoder_reference = decoder_registry
-        .reference_for_record(decoder_record)
-        .expect("canonical decoder reference");
-    assert_eq!(
-        decoder_reference.capability_instance_id(),
-        Some("dev.vesper.decoder-fixture.native")
-    );
-    let decoder = decoder_registry
-        .resolve_native_decoder(decoder_reference)
-        .expect("resolved decoder")
-        .capability();
-    assert!(
-        decoder
-            .capabilities()
-            .supports_codec("fixture-video", player_plugin::DecoderMediaKind::Video)
-    );
-
-    let frame_path = resolve_plugin_path("vesper_frame_processor_diagnostic")
-        .unwrap_or_else(|error| panic!("failed to resolve frame processor fixture: {error}"));
-    let frame_artifact =
-        NativePluginArtifact::new("dev.vesper.frame-processor-diagnostic", &frame_path)
-            .expect("valid frame processor artifact");
-    let frame_registry =
-        PluginRegistry::inspect_frame_processor_support_artifacts([frame_artifact]);
-    let frame_record = frame_registry
-        .records()
-        .iter()
-        .find(|record| record.status == crate::PluginDiagnosticStatus::FrameProcessorSupported)
-        .expect("frame processor record");
-    let frame_reference = frame_registry
-        .reference_for_record(frame_record)
-        .expect("canonical frame processor reference");
-    let frame_processor = frame_registry
-        .resolve_frame_processor(frame_reference)
-        .expect("resolved frame processor")
-        .capability();
-    assert!(frame_processor.capabilities().supports_video_frames);
-
-    let source_path = resolve_plugin_path("vesper_source_normalizer_diagnostic")
-        .unwrap_or_else(|error| panic!("failed to resolve source normalizer fixture: {error}"));
-    let source_artifact = NativePluginArtifact::new(
-        "io.github.umbrella22.vesper.source-normalizer-diagnostic",
-        &source_path,
-    )
-    .expect("valid source normalizer artifact");
-    let source_registry =
-        PluginRegistry::inspect_source_normalizer_support_artifacts([source_artifact]);
-    let source_record = source_registry
-        .best_source_normalizer_packet_for_profile("diagnostic-packet")
-        .expect("source normalizer packet record");
-    let source_reference = source_registry
-        .reference_for_record(source_record)
-        .expect("canonical source packet reference");
-    let source = source_registry
-        .resolve_source_packet(source_reference)
-        .expect("resolved source packet")
-        .capability();
-    assert!(
-        source
-            .packet_capabilities()
-            .supported_runtime_profiles
-            .iter()
-            .any(|profile| profile == "diagnostic-packet")
+        Some("dev.vesper.plugin-fixture.post-download")
     );
 }
 
@@ -620,7 +289,7 @@ fn native_registry_rejects_duplicate_root_identity_and_transport_fallback() {
     let wasm = PluginReference::new("dev.vesper.plugin-fixture", None, PluginTransport::Wasm)
         .expect("valid fixture reference");
     let error = registry
-        .resolve_pipeline_event_hook(&wasm)
+        .resolve_post_download(&wasm)
         .expect_err("transport fallback must be rejected");
     assert_eq!(
         error,
@@ -698,7 +367,7 @@ fn embedded_registry_verifies_checksum_identity_and_root_capabilities() {
             Ok(plugin_path.clone())
         })
         .expect("checksum, identity, and capabilities match the fixture Root ABI");
-    assert_eq!(registry.registered_interfaces().len(), 3);
+    assert_eq!(registry.registered_interfaces().len(), 1);
 
     let mismatched = EmbeddedPluginRegistry::parse(
         fixture_embedded_registry_json(&"0".repeat(64)).as_bytes(),
@@ -736,8 +405,8 @@ fn registered_native_artifact_retains_verified_library_without_reopening_path() 
         .load_native(|_| Ok(path.clone()))
         .expect("verified library");
     let reference = registry
-        .pipeline_event_hook_references()
-        .expect("hook references")
+        .post_download_references()
+        .expect("post-download references")
         .remove(0);
     let artifact = registry
         .native_artifact(&reference)
@@ -747,14 +416,10 @@ fn registered_native_artifact_retains_verified_library_without_reopening_path() 
 
     let consumer =
         PluginRegistry::load_native_artifacts([artifact]).expect("must reuse the loaded library");
-    let hook = consumer
-        .resolve_pipeline_event_hook(&reference)
-        .expect("retained hook");
-    assert!(
-        hook.capability()
-            .on_event(&pipeline_event("retained", "session"))
-            .is_ok()
-    );
+    let processor = consumer
+        .resolve_post_download(&reference)
+        .expect("retained processor");
+    assert_eq!(processor.capability().name(), "Vesper Plugin Fixture");
 }
 
 fn fixture_embedded_registry_json(checksum: &str) -> String {
@@ -784,18 +449,6 @@ fn fixture_embedded_registry_json(checksum: &str) -> String {
                     {{
                         "interface_id": "e9479dbc-42d2-575e-b39e-a24bc512fbc7",
                         "instance_id": "dev.vesper.plugin-fixture.post-download",
-                        "interface_major": 1,
-                        "interface_minor": 0
-                    }},
-                    {{
-                        "interface_id": "c7a69475-79b2-5b5e-a477-08844a5da5d1",
-                        "instance_id": "dev.vesper.plugin-fixture.event-hook",
-                        "interface_major": 1,
-                        "interface_minor": 0
-                    }},
-                    {{
-                        "interface_id": "2d8e5be8-b1de-5e83-8fe0-6118aabc5118",
-                        "instance_id": "dev.vesper.plugin-fixture.benchmark",
                         "interface_major": 1,
                         "interface_minor": 0
                     }}

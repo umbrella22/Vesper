@@ -27,7 +27,6 @@ final class PlayerSession {
     var pictureInPictureActive = false
     var lastOutputPictureInPictureState = "inactive"
     var lastOutputPictureInPictureActive = false
-    var performanceDiagnosticsSession: VesperPerformanceDiagnosticsSession?
 
     init(
         id: String,

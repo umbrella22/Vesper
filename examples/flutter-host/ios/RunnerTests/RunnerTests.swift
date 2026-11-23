@@ -48,12 +48,10 @@ class RunnerTests: XCTestCase {
 
   func testBundledOptionalPluginFrameworkEntriesLoad() throws {
     let frameworksURL = try XCTUnwrap(Bundle.main.privateFrameworksURL)
-    for frameworkName in [
-      "VesperPlayerRemuxFfmpegPlugin",
-      "VesperPlayerSourceNormalizerFfmpegPlugin",
-      "VesperPlayerDecoderVideoToolboxPlugin",
-      "VesperPlayerFrameProcessorDiagnosticPlugin",
-      "VesperPlayerPerformanceDiagnosticsPlugin",
+    for (frameworkName, entrySymbol) in [
+      ("VesperPlayerRemuxFfmpegPlugin", "vesper_native_plugin_entry"),
+      ("VesperPlayerSourceNormalizerFfmpegPlugin", "vesper_native_plugin_entry"),
+      ("VesperPlayerDecoderVideoToolboxPlugin", "vesper_native_plugin_entry"),
     ] {
       let binaryURL = frameworksURL
         .appendingPathComponent("\(frameworkName).framework", isDirectory: true)
@@ -71,8 +69,8 @@ class RunnerTests: XCTestCase {
       defer { dlclose(handle) }
 
       dlerror()
-      guard dlsym(handle, "vesper_plugin_entry") != nil else {
-        XCTFail("Missing vesper_plugin_entry in \(frameworkName): \(dynamicLoaderMessage())")
+      guard dlsym(handle, entrySymbol) != nil else {
+        XCTFail("Missing \(entrySymbol) in \(frameworkName): \(dynamicLoaderMessage())")
         continue
       }
     }

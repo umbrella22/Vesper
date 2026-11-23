@@ -355,13 +355,6 @@ void main() {
           transport: VesperPluginTransport.native,
         ),
       ],
-      eventHookPluginReferences: <VesperPluginReference>[
-        VesperPluginReference(
-          pluginId: 'dev.vesper.event-hook',
-          transport: VesperPluginTransport.unknown,
-          transportRawValue: 'future-sandbox',
-        ),
-      ],
     );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -409,21 +402,10 @@ void main() {
       ],
       maxInFlightFrames: 2,
     );
-    final pipelineEventHookConfiguration = VesperPipelineEventHookConfiguration(
-      pluginReferences: <VesperPluginReference>[
-        VesperPluginReference(
-          pluginId: 'dev.vesper.pipeline-hook',
-          capabilityInstanceId: 'dev.vesper.pipeline-hook.default',
-          transport: VesperPluginTransport.native,
-        ),
-      ],
-    );
-
     await platform.createPlayer(
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       frameProcessorConfiguration: frameProcessorConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
-      pipelineEventHookConfiguration: pipelineEventHookConfiguration,
     );
 
     expect(calls, hasLength(1));
@@ -442,13 +424,8 @@ void main() {
         nativeFramePipelineConfiguration.toMap(),
       ),
     );
-    expect(
-      Map<Object?, Object?>.from(calls.single.arguments as Map),
-      containsPair('pipelineEventHook', pipelineEventHookConfiguration.toMap()),
-    );
     final arguments = Map<Object?, Object?>.from(calls.single.arguments as Map);
     for (final configurationKey in <String>[
-      'pipelineEventHook',
       'sourceNormalizer',
       'frameProcessor',
       'nativeFramePipeline',

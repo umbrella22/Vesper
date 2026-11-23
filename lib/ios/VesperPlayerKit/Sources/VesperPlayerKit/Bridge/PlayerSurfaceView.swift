@@ -5,6 +5,7 @@ import Metal
 import QuartzCore
 import SwiftUI
 import UIKit
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 struct VesperSubtitleOverlayFrameSnapshot: Codable, Equatable {
     let x: Double
@@ -168,6 +169,10 @@ public final class PlayerSurfaceView: UIView {
     private var metalDevice: MTLDevice?
     private var metalCommandQueue: MTLCommandQueue?
     private var ciContext: CIContext?
+    private var metalFilter: VesperBundledMetalFilter?
+    private lazy var bundledFilterLibrary = Bundle.main.url(
+        forResource: "vesper-color-filter", withExtension: "metallib"
+    )
     private let subtitleLabel = UILabel()
     var onReadyForDisplay: ((AVPlayer, AVPlayerItem) -> Void)?
     var onOutputPathChanged: (() -> Void)?
@@ -188,6 +193,15 @@ public final class PlayerSurfaceView: UIView {
         configurePlayerLayer()
         configureSubtitleLabel()
         configureOutputPathObservation()
+    }
+
+    convenience init(frame: CGRect, bundledFilterLibrary: URL) {
+        self.init(frame: frame)
+        self.bundledFilterLibrary = bundledFilterLibrary
+    }
+
+    var isBundledMetalFilterReady: Bool {
+        metalFilter != nil
     }
 
     // Tests inject one primary layer before any binding. Production retains
@@ -439,8 +453,13 @@ public final class PlayerSurfaceView: UIView {
                 metalLayer = layer
                 bringSubviewToFront(subtitleLabel)
             }
+            if metalFilter == nil, let library = bundledFilterLibrary,
+               let queue = metalCommandQueue {
+                metalFilter = VesperBundledMetalFilter(device: device, queue: queue, library: library)
+            }
             metalLayer?.isHidden = false
         } else {
+            metalFilter = nil
             metalLayer?.isHidden = true
             playerLayer.isHidden = false
         }
@@ -451,20 +470,20 @@ public final class PlayerSurfaceView: UIView {
             let metalLayer,
             let commandQueue = metalCommandQueue,
             let ciContext,
-            let drawable = metalLayer.nextDrawable()
+            let drawable = metalLayer.nextDrawable(),
+            let commandBuffer = commandQueue.makeCommandBuffer()
         else {
             completion(false)
             return
         }
 
-        let retainedPixelBuffer = Unmanaged.passRetained(pixelBuffer)
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let image = metalFilter?.encode(pixelBuffer: pixelBuffer, into: commandBuffer)
+            ?? CIImage(cvPixelBuffer: pixelBuffer)
         let drawableBounds = CGRect(origin: .zero, size: metalLayer.drawableSize)
         let imageExtent = image.extent
         guard imageExtent.width > 0, imageExtent.height > 0,
             drawableBounds.width > 0, drawableBounds.height > 0
         else {
-            retainedPixelBuffer.release()
             completion(false)
             return
         }
@@ -486,11 +505,6 @@ public final class PlayerSurfaceView: UIView {
             )
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-            retainedPixelBuffer.release()
-            completion(false)
-            return
-        }
         let clearPass = MTLRenderPassDescriptor()
         clearPass.colorAttachments[0].texture = drawable.texture
         clearPass.colorAttachments[0].loadAction = .clear
@@ -499,7 +513,6 @@ public final class PlayerSurfaceView: UIView {
             red: 0, green: 0, blue: 0, alpha: 1)
         guard let clearEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: clearPass)
         else {
-            retainedPixelBuffer.release()
             completion(false)
             return
         }
@@ -512,11 +525,13 @@ public final class PlayerSurfaceView: UIView {
             colorSpace: nativeFrameRenderColorSpace()
         )
         commandBuffer.present(drawable)
-        commandBuffer.addCompletedHandler { _ in
+        let retainedPixelBuffer = Unmanaged.passRetained(pixelBuffer)
+        commandBuffer.addCompletedHandler { finished in
             retainedPixelBuffer.release()
+            let presented = finished.status == .completed
+            Task { @MainActor in completion(presented) }
         }
         commandBuffer.commit()
-        completion(true)
     }
 
     private func configurePlayerLayer() {

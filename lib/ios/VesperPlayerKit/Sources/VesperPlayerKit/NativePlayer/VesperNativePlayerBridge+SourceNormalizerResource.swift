@@ -128,15 +128,20 @@ extension VesperNativePlayerBridge {
         guard let resource = currentSourceNormalizerResource else {
             return
         }
+        let loader = sourceNormalizerResourceLoaderDelegate
         currentSourceNormalizerResource = nil
         sourceNormalizerResourceSession = nil
         sourceNormalizerResourceLoaderDelegate = nil
-        disposeSourceNormalizerResourceOffMain(handle: resource.handle)
+        disposeSourceNormalizerResourceOffMain(handle: resource.handle, retiring: loader)
     }
 
-    func disposeSourceNormalizerResourceOffMain(handle: UInt64) {
+    func disposeSourceNormalizerResourceOffMain(
+        handle: UInt64,
+        retiring loader: VesperSourceNormalizerResourceLoaderDelegate? = nil
+    ) {
         guard handle != 0 else { return }
         Task {
+            await loader?.invalidate()
             await VesperBoundedUtilityQueue.shared.runRequiredVoid {
                 VesperMobileSourceNormalizerResource.dispose(handle: handle)
             }

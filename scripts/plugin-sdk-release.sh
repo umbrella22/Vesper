@@ -20,11 +20,8 @@ readonly REGISTRY_REQUEST_TIMEOUT_SECONDS=30
 readonly PACKAGES=(
   vesper-player-plugin-abi
   vesper-player-plugin-macros
-  vesper-player-plugin-wasm
   vesper-player-platform-process
   vesper-player-plugin
-  vesper-player-plugin-package
-  vesper-player-plugin-wasm-host
   vesper-player-plugin-loader
   vesper-player-cli
 )
@@ -135,18 +132,9 @@ resolve_package_patches() {
       add_package_patch vesper-player-plugin-abi crates/plugin/player-plugin-abi
       add_package_patch vesper-player-plugin-macros crates/plugin/player-plugin-macros
       ;;
-    vesper-player-plugin-package)
-      add_package_patch vesper-player-plugin crates/plugin/player-plugin
-      add_package_patch vesper-player-plugin-abi crates/plugin/player-plugin-abi
-      ;;
-    vesper-player-plugin-wasm-host)
-      add_package_patch vesper-player-plugin crates/plugin/player-plugin
-      ;;
     vesper-player-plugin-loader)
       add_package_patch vesper-player-plugin crates/plugin/player-plugin
       add_package_patch vesper-player-plugin-abi crates/plugin/player-plugin-abi
-      add_package_patch vesper-player-plugin-package crates/plugin/player-plugin-package
-      add_package_patch vesper-player-plugin-wasm-host crates/plugin/player-plugin-wasm-host
       ;;
     vesper-player-cli)
       add_package_patch vesper-player-platform-process \
@@ -154,8 +142,6 @@ resolve_package_patches() {
       add_package_patch vesper-player-plugin crates/plugin/player-plugin
       add_package_patch vesper-player-plugin-abi crates/plugin/player-plugin-abi
       add_package_patch vesper-player-plugin-loader crates/plugin/player-plugin-loader
-      add_package_patch vesper-player-plugin-package crates/plugin/player-plugin-package
-      add_package_patch vesper-player-plugin-wasm-host crates/plugin/player-plugin-wasm-host
       ;;
   esac
 }

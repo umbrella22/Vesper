@@ -422,7 +422,6 @@ pub struct PlayerFfiDownloadConfig {
     pub run_post_processors_on_completion: bool,
     pub plugin_registry_handle: u64,
     pub post_download_plugin_references_json: *const c_char,
-    pub event_hook_plugin_references_json: *const c_char,
 }
 
 #[derive(Debug, Default)]
@@ -431,7 +430,6 @@ pub(crate) struct ResolvedDownloadConfig {
     pub(crate) run_post_processors_on_completion: bool,
     pub(crate) plugin_registry_handle: u64,
     pub(crate) post_download_plugin_references: Vec<player_plugin::PluginReference>,
-    pub(crate) event_hook_plugin_references: Vec<player_plugin::PluginReference>,
 }
 
 #[repr(C)]

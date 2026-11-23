@@ -5,6 +5,9 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[[example]]
+name = "native_plugin_probe"
+
 [dependencies]
 anyhow.workspace = true
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
@@ -16,3 +19,12 @@ player-platform-desktop = { path = "../../common/player-platform-desktop" }
 player-platform-native-frame = { path = "../../common/player-platform-native-frame" }
 player-runtime = { path = "../../../core/player-runtime" }
 tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+cpal.workspace = true
+libloading.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+crossbeam-queue.workspace = true
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../../plugin/player-plugin-abi" }
+serde_json.workspace = true

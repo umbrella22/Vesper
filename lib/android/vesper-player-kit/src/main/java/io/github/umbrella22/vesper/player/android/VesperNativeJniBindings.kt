@@ -12,7 +12,6 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -39,6 +38,9 @@ import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.hls.playlist.DefaultHlsPlaylistTracker
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -68,13 +70,12 @@ internal class VesperNativeJniBindings(
     context: Context,
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     internal val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkCoordinator(),
+    private val fixedBlockAudioProcessorId: String? = null,
+    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkRecorder(),
     internal val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
         VesperSourceNormalizerConfiguration(),
     internal val resolvedPluginArtifacts: VesperResolvedMobilePluginArtifacts =
         VesperResolvedMobilePluginArtifacts(),
-    internal val pipelineEventHookRegistryHandle: Long = 0L,
-    internal val pipelineEventHookReferencesJson: String = "[]",
     preloadBindings: VesperNativePreloadCoordinator.PreloadBindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
 ) : VesperNativeBindings {
     override val playbackDiagnosticsTracker = VesperPlaybackDiagnosticsTracker()
@@ -88,8 +89,6 @@ internal class VesperNativeJniBindings(
     internal var nativeFramePipelineHandle: Long? = null
     @Volatile
     internal var nativeFramePipelineStatus: Map<String, Any?>? = null
-    @Volatile
-    internal var finalizedPipelineEventHookReports: VesperPipelineEventHookReportBatch? = null
     internal val isDisposed = AtomicBoolean(false)
     internal val systemPlaybackCallbackGeneration = AtomicLong(0L)
     internal val subtitleSelectionCommandGenerationState = AtomicLong(0L)
@@ -157,6 +156,7 @@ internal class VesperNativeJniBindings(
         BehindLiveWindowRecoveryState(MAX_CONSECUTIVE_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS)
     internal val behindLiveWindowInternalSeekSuppression =
         BehindLiveWindowInternalSeekSuppression(BEHIND_LIVE_WINDOW_INTERNAL_SEEK_TIMEOUT_MS)
+    internal var pendingLiveWindowRecovery: Pair<Long, Int>? = null
     internal var behindLiveWindowStableResetRunnable: Runnable? = null
     internal var firstFrameWatchdogSource: VesperPlayerSource? = null
     internal var firstFrameWatchdogRunnable: Runnable? = null
@@ -175,7 +175,6 @@ internal class VesperNativeJniBindings(
 
     companion object {
         private const val MAX_LOCAL_BRIDGE_EVENTS = 256
-        private const val PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT_MS = 2_000L
         internal const val EXO_SNAPSHOT_LOG_INTERVAL_MS = 2_000L
     }
     internal val preloadCoordinator =
@@ -290,6 +289,7 @@ internal class VesperNativeJniBindings(
             currentRuntimeTrackRejectionState = null
             currentFixedTrackCommandState = null
             terminalErrorReportedForCurrentSource = false
+            pendingLiveWindowRecovery = null
             behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
             behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
             currentDrmRuntimeErrorCount = 0
@@ -302,11 +302,6 @@ internal class VesperNativeJniBindings(
             val handle =
                 VesperNativeJni.createSession(
                     sourceUri = source.uri,
-                    pipelineEventHookConfig =
-                        NativePipelineEventHookConfig(
-                            pluginRegistryHandle = pipelineEventHookRegistryHandle,
-                            pluginReferencesJson = pipelineEventHookReferencesJson,
-                        ),
                 )
             check(handle != 0L) { "native session handle must not be zero" }
             sessionHandle = handle
@@ -329,14 +324,33 @@ internal class VesperNativeJniBindings(
                 playbackSource.externalSubtitles.count { it.isDefault }
             currentSubtitleSelectionModeOrdinal =
                 resolvedTrackPreferences.subtitleSelection.toNativePayload().modeOrdinal
+            val audioDsp = fixedBlockAudioProcessorId?.let { id ->
+                when {
+                    source.drmConfiguration != null || playbackSource.drmConfiguration != null -> {
+                        Log.i(NATIVE_JNI_BINDINGS_TAG, "Fixed-block DSP excluded for protected playback")
+                        null
+                    }
+                    decoderBackend != VesperDecoderBackend.SystemOnly ||
+                        !systemPlaybackVideoEnabled || normalizedResource != null -> {
+                        Log.i(NATIVE_JNI_BINDINGS_TAG, "Fixed-block DSP unavailable on this playback route")
+                        null
+                    }
+                    else -> VesperMedia3AudioProcessor(id)
+                }
+            }
             val renderersFactory =
-                VesperExternalSubtitleRenderersFactory(appContext)
+                VesperExternalSubtitleRenderersFactory(appContext, audioDsp)
                     .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
                     .setMediaCodecSelector(VesperHardwareMediaCodecSelector)
 
             val loadErrorHandlingPolicy =
                 buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
-                    VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
+                    mainHandler.post {
+                        if (isCurrentSystemPlaybackCallback(callbackGeneration) && sessionHandle == handle) {
+                            VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
+                            notifyNativeUpdate()
+                        }
+                    }
                 }
             val playbackDataSourceFactory =
                 if (preparedRtspBridge != null) {
@@ -376,6 +390,9 @@ internal class VesperNativeJniBindings(
                 ExoPlayer.Builder(appContext, renderersFactory)
                     .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                     .setMediaSourceFactory(mediaSourceFactory)
+                    .apply {
+                        audioDsp?.let { setTrackSelector(VesperMedia3DspTrackSelector(appContext, it)) }
+                    }
                     .build()
             player = exoPlayer
             exoPlayer.setAudioAttributes(
@@ -491,6 +508,7 @@ internal class VesperNativeJniBindings(
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration,
         surfaceKind: NativeVideoSurfaceKind,
     ): Map<String, Any?>? {
+        require(source.drmConfiguration == null) { "Protected media cannot enter the native-frame pipeline" }
         closeNativeFramePipeline()
         VesperNativeLibrary.ensureLoaded()
         val packetSource = openNativeFramePacketSource(source)
@@ -517,12 +535,7 @@ internal class VesperNativeJniBindings(
                         resolvedPluginArtifacts.decoderArtifacts,
                         registryHandle,
                     ),
-                    VesperHardwareMediaCodecSelector.preferredHardwareDecoderName(
-                        MimeTypes.VIDEO_H264,
-                    ),
-                    VesperHardwareMediaCodecSelector.preferredHardwareDecoderName(
-                        MimeTypes.VIDEO_H265,
-                    ),
+                    VesperHardwareMediaCodecSelector,
                     encodeVesperResolvedMobilePluginArtifacts(
                         resolvedPluginArtifacts.nativeFrameProcessorArtifacts,
                         registryHandle,
@@ -723,6 +736,22 @@ internal class VesperNativeJniBindings(
         }
     }
 
+    override fun restoreSystemPlaybackVideo() {
+        if (isDisposed.get() || nativeFramePipelineOwnsSurface.get()) {
+            return
+        }
+        val exoPlayer = player ?: return
+        runPlayerSurfaceOperation(exoPlayer, "native-frame fallback video enable") { current ->
+            if (player === current && !nativeFramePipelineOwnsSurface.get()) {
+                current.setVideoSurface(attachedSurface?.takeIf { it.isValid })
+                current.trackSelectionParameters =
+                    current.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+                        .build()
+            }
+        }
+    }
+
     private fun restoreMedia3SurfaceAfterNativeFramePipeline(): Result<Unit> =
         runCatching {
             player?.let { exoPlayer ->
@@ -778,6 +807,7 @@ internal class VesperNativeJniBindings(
         cancelPendingSeekCommand("seekSourceChanged")
         val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
         cancelBehindLiveWindowStableReset()
+        pendingLiveWindowRecovery = null
         behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
         behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
         localBridgeEvents.clear()
@@ -794,6 +824,7 @@ internal class VesperNativeJniBindings(
         cancelPendingSeekCommand("seekCommandDisposed")
         val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
         cancelBehindLiveWindowStableReset()
+        pendingLiveWindowRecovery = null
         behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
         behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
         Log.i(NATIVE_JNI_BINDINGS_TAG, "dispose")
@@ -834,42 +865,6 @@ internal class VesperNativeJniBindings(
                 // dispatchRustCommand invocations see a null handle and bail
                 // out rather than passing a stale handle to native code.
                 sessionHandle = null
-                runCatching {
-                    VesperNativeJni.flushPipelineEventHooks(
-                        handle,
-                        PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT_MS,
-                    )
-                }.onFailure { error ->
-                    Log.w(
-                        NATIVE_JNI_BINDINGS_TAG,
-                        "failed to flush playback pipeline event hooks failure=${diagnosticPlaybackFailure(error)}",
-                    )
-                }
-                runCatching { VesperNativeJni.closePipelineEventHooks(handle) }
-                    .onFailure { error ->
-                        Log.w(
-                            NATIVE_JNI_BINDINGS_TAG,
-                            "failed to close playback pipeline event hooks failure=${diagnosticPlaybackFailure(error)}",
-                        )
-                    }
-                runCatching {
-                    VesperNativeJni.drainPipelineEventHookReports(handle)
-                        ?.let(::parsePipelineEventHookReportsJson)
-                }.onSuccess { reports ->
-                    if (reports != null &&
-                        (reports.reports.isNotEmpty() ||
-                            reports.droppedEvents != 0L ||
-                            reports.droppedReports != 0L ||
-                            reports.dispatcherError != null)
-                    ) {
-                        finalizedPipelineEventHookReports = reports
-                    }
-                }.onFailure { error ->
-                    Log.w(
-                        NATIVE_JNI_BINDINGS_TAG,
-                        "failed to drain final playback pipeline event-hook reports failure=${diagnosticPlaybackFailure(error)}",
-                    )
-                }
                 runCatching { VesperNativeJni.disposeSession(handle) }
                     .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session failure=${diagnosticPlaybackFailure(error)}") }
             }
@@ -1111,19 +1106,6 @@ internal class VesperNativeJniBindings(
             localEvents + (sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList())
         }
 
-    override fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch {
-        finalizedPipelineEventHookReports?.let { reports ->
-            finalizedPipelineEventHookReports = null
-            return reports
-        }
-        if (isDisposed.get()) {
-            return VesperPipelineEventHookReportBatch()
-        }
-        val json = sessionHandle?.let(VesperNativeJni::drainPipelineEventHookReports)
-            ?: return VesperPipelineEventHookReportBatch()
-        return parsePipelineEventHookReportsJson(json)
-    }
-
     override fun play() {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "play")
         recordBenchmark("native_play_command")
@@ -1144,12 +1126,27 @@ internal class VesperNativeJniBindings(
         dispatchRustCommand { handle -> VesperNativeJni.stop(handle) }
     }
 
-    override fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long, commandId: Long, sourceEpoch: Long, timeoutMs: Long) {
+        beginMedia3Seek(positionMs, commandId, sourceEpoch, timeoutMs) { result ->
+            val failure = result.exceptionOrNull() as? VesperPlayerCommandException
+            if (failure != null && failure.errorState.details["obsolete"] != true) {
+                publishPlaybackObservation(VesperPlaybackEvent.SeekFailed(failure.errorState))
+            }
+        }
+    }
+
+    internal fun dispatchSeekToMedia3(handle: Long, positionMs: Long): Boolean {
         playbackDiagnosticsTracker.stallDetector.resetWindow()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "seekTo positionMs=$positionMs")
         recordBenchmark("native_seek_command", mapOf("positionMs" to positionMs.toString()))
         cancelFirstFrameWatchdog()
-        dispatchRustCommand { handle -> VesperNativeJni.seekTo(handle, positionMs) }
+        if (!VesperNativeJni.seekTo(handle, positionMs) || !drainAndApplyNativeCommands()) {
+            return false
+        }
+        pushSnapshotToRust()
+        pushTrackStateToRust()
+        notifyNativeUpdate()
+        return true
     }
 
     override fun setPlaybackRate(rate: Float) {
@@ -1244,7 +1241,47 @@ internal class VesperNativeJniBindings(
 @OptIn(UnstableApi::class, ExperimentalApi::class)
 internal class VesperExternalSubtitleRenderersFactory(
     context: Context,
+    private val audioDsp: VesperMedia3AudioProcessor? = null,
 ) : DefaultRenderersFactory(context) {
+    override fun buildAudioSink(
+        context: Context,
+        enableFloatOutput: Boolean,
+        enableAudioOutputPlaybackParameters: Boolean,
+    ): AudioSink? {
+        val processor = audioDsp ?: return super.buildAudioSink(
+            context, enableFloatOutput, enableAudioOutputPlaybackParameters,
+        )
+        return DefaultAudioSink.Builder(context)
+            .setEnableFloatOutput(false)
+            .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParameters)
+            .setAudioProcessors(arrayOf(processor))
+            .build()
+    }
+
+    override fun buildAudioRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        audioSink: AudioSink,
+        eventHandler: Handler,
+        eventListener: AudioRendererEventListener,
+        out: ArrayList<Renderer>,
+    ) {
+        val processor = audioDsp
+        if (processor == null) {
+            super.buildAudioRenderers(
+                context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
+                audioSink, eventHandler, eventListener, out,
+            )
+            return
+        }
+        out.add(VesperMedia3DspAudioRenderer(
+            context, getCodecAdapterFactory(), mediaCodecSelector, enableDecoderFallback,
+            eventHandler, eventListener, audioSink, processor,
+        ))
+    }
+
     override fun buildVideoRenderers(
         context: Context,
         extensionRendererMode: Int,

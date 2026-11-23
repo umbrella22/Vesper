@@ -9,8 +9,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dalvik.system.BaseDexClassLoader
 import io.github.umbrella22.vesper.player.android.VesperBundledPluginReferences
-import io.github.umbrella22.vesper.player.android.VesperFrameProcessorConfiguration
-import io.github.umbrella22.vesper.player.android.VesperFrameProcessorMode
 import io.github.umbrella22.vesper.player.android.VesperNativeFramePipelineConfiguration
 import io.github.umbrella22.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.umbrella22.vesper.player.android.VesperPlayerController
@@ -39,7 +37,6 @@ class VesperStagedAarInstrumentationTest {
 
         assertEquals(
             setOf(
-                "dev.vesper.frame-processor-diagnostic.json",
                 "io.github.umbrella22.vesper.decoder-mediacodec.json",
                 "io.github.umbrella22.vesper.remux-ffmpeg.json",
                 "io.github.umbrella22.vesper.source-normalizer-ffmpeg.json",
@@ -52,7 +49,6 @@ class VesperStagedAarInstrumentationTest {
             "vesper_source_normalizer_ffmpeg",
             "vesper_remux_ffmpeg",
             "vesper_decoder_mediacodec",
-            "vesper_frame_processor_diagnostic",
             "avcodec",
             "avformat",
             "avutil",
@@ -75,7 +71,6 @@ class VesperStagedAarInstrumentationTest {
             controller.initializeAsync()
             val diagnostics = awaitOpenPluginDiagnostics(controller)
             assertDiagnostic(diagnostics, "source_normalizer", "sourceNormalizerSupported")
-            assertDiagnostic(diagnostics, "frame_processor", "frameProcessorSupported")
             val nativeFrame =
                 diagnostics.single { diagnostic ->
                     diagnostic["pluginKind"] == "native_frame_pipeline"
@@ -92,7 +87,7 @@ class VesperStagedAarInstrumentationTest {
     }
 
     @Test
-    fun publicSurfaceRouteExecutesDecoderAndFrameProcessorFromRawAars() {
+    fun publicSurfaceRouteExecutesV2DecoderFromRawAars() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val fixtureDirectory = prepareMediaFixture(context, "execute")
         val scenario = ActivityScenario.launch(VesperSurfaceHostActivity::class.java)
@@ -114,7 +109,6 @@ class VesperStagedAarInstrumentationTest {
 
             val diagnostics = awaitPresentedPluginDiagnostics(activeController)
             assertDiagnostic(diagnostics, "source_normalizer", "sourceNormalizerSupported")
-            assertDiagnostic(diagnostics, "frame_processor", "frameProcessorSupported")
             val nativeFrame =
                 diagnostics.single { diagnostic ->
                     diagnostic["pluginKind"] == "native_frame_pipeline"
@@ -169,19 +163,11 @@ private fun createRawAarController(
                 pluginReferences =
                     listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
             ),
-        frameProcessorConfiguration =
-            VesperFrameProcessorConfiguration(
-                mode = VesperFrameProcessorMode.DiagnosticsOnly,
-                pluginReferences =
-                    listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
-            ),
         nativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(
                 mode = VesperNativeFramePipelineMode.RequireNativeFrame,
                 decoderPluginReferences =
                     listOf(VesperBundledPluginReferences.decoderMediaCodec),
-                frameProcessorPluginReferences =
-                    listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                 maxInFlightFrames = 3,
             ),
     )

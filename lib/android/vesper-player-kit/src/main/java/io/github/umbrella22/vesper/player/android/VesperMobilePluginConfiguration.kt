@@ -88,17 +88,6 @@ data class VesperNativeFramePipelineConfiguration(
     }
 }
 
-/**
- * Selects the native playback event hooks used by one Android host kit.
- *
- * Android playback only accepts explicitly selected native references. WASM
- * event hooks are desktop/tooling capabilities and are rejected by the native
- * Android registry during session creation.
- */
-data class VesperPipelineEventHookConfiguration(
-    val pluginReferences: List<VesperPluginReference> = emptyList(),
-)
-
 internal fun parsePluginDiagnosticsJson(json: String?): List<Map<String, Any?>> {
     if (json.isNullOrBlank()) {
         return emptyList()

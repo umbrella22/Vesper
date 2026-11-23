@@ -692,8 +692,4 @@ extension VesperNativePlayerBridge {
     func benchmarkSummary() -> VesperBenchmarkSummary {
         benchmarkRecorder.summary()
     }
-
-    func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
-        await benchmarkRecorder.awaitSinkShutdown(timeout: timeout)
-    }
 }

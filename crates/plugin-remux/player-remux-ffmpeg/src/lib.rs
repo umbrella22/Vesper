@@ -2,32 +2,27 @@
 
 mod error;
 mod muxer;
+mod plugin_export;
 
-use player_plugin::{Plugin, PluginBuildError};
+pub use plugin_export::vesper_native_plugin_entry;
 
 pub use muxer::FfmpegRemuxProcessor;
 
-#[player_plugin::export]
-fn ffmpeg_remux_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder(
-        "io.github.umbrella22.vesper.remux-ffmpeg",
-        "player-remux-ffmpeg",
-    )?
-    .with_post_download_processor(
-        "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
-        FfmpegRemuxProcessor::new(),
-    )?
-    .build()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::vesper_plugin_entry;
+    use super::vesper_native_plugin_entry;
 
     #[test]
     fn exports_plugin_entry() {
-        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
-            vesper_plugin_entry;
-        assert!(!entry().is_null());
+        let root = vesper_native_plugin_entry();
+        assert!(!root.is_null());
+        // SAFETY: the native entry returned one live root owner.
+        let root = unsafe { root.read() };
+        assert_eq!(root.abi_major, 2);
+        assert_eq!(root.interface_count, 1);
+        if let Some(destroy) = root.destroy_owner {
+            // SAFETY: this test consumes the returned owner once.
+            unsafe { destroy(root.owner) };
+        }
     }
 }

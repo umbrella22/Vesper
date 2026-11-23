@@ -60,13 +60,6 @@ sealed class VesperPlayerEvent {
           playerId: playerId,
           warning: VesperRuntimeWarning.fromMap(warningMap),
         );
-      case 'pipelineEventHookReports':
-        return VesperPlayerPipelineEventHookReportsEvent(
-          playerId: playerId,
-          reports: VesperPipelineEventHookReportBatch.fromMap(
-            vesperDecodeMap(map['reports']),
-          ),
-        );
       case 'snapshot':
         final rawSnapshot = map['snapshot'];
         final snapshotMap = vesperDecodeMap(rawSnapshot);
@@ -123,16 +116,6 @@ final class VesperPlayerWarningEvent extends VesperPlayerEvent {
   });
 
   final VesperRuntimeWarning warning;
-}
-
-final class VesperPlayerPipelineEventHookReportsEvent
-    extends VesperPlayerEvent {
-  const VesperPlayerPipelineEventHookReportsEvent({
-    required super.playerId,
-    required this.reports,
-  });
-
-  final VesperPipelineEventHookReportBatch reports;
 }
 
 final class VesperPlayerPictureInPictureEvent extends VesperPlayerEvent {

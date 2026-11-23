@@ -24,7 +24,6 @@ val vesperAarNames =
         "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar",
         "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar",
         "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar",
-        "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
     )
 val vesperAars = vesperReleaseDir?.let { directory -> vesperAarNames.map(directory::resolve) }
 vesperAars?.let { artifacts ->

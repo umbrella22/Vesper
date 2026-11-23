@@ -325,9 +325,9 @@ jobs:
           cargo install vesper-player-cli --version ${VERSION} --locked
           \`\`\`
 
-          Native author projects depend on the \`vesper-player-plugin\` package while retaining the \`player_plugin\` Rust import name. WASM guest projects use \`vesper-player-plugin-wasm\` and \`player_plugin_wasm\` respectively.
+          Native author projects depend on the \`vesper-player-plugin\` package while retaining the \`player_plugin\` Rust import name.
 
-          This release also publishes the ABI, macro, packaging, loader, WASM host, and process-supervision support crates at the same version. Prebuilt \`vesper\` CLI archives for Linux x86_64, Apple Silicon macOS, and Windows x86_64 are attached with \`SHA256SUMS.txt\`.
+          This release also publishes the ABI, macro, loader, and process-supervision support crates at the same version. Prebuilt \`vesper\` CLI archives for Linux x86_64, Apple Silicon macOS, and Windows x86_64 are attached with \`SHA256SUMS.txt\`.
 
           Release tag: \`${RELEASE_TAG}\` at \`${TAG_COMMIT}\`.
           CLI and registry artifacts were built from \`${SOURCE_COMMIT}\`.

@@ -2,16 +2,38 @@ package io.github.umbrella22.vesper.player.android
 
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 
 internal fun VesperNativePlayerBridge.openNativeFramePipelineAfterSystemStartup(
     epoch: Long,
     source: VesperPlayerSource,
     startupDiagnostics: List<Map<String, Any?>>,
+    requiredStartup: CompletableDeferred<Unit>?,
 ): Boolean {
     if (!isCurrentSourceLoad(epoch)) {
+        requiredStartup?.cancel()
         return false
     }
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
+    nativeFramePipelineOpeningEpoch = epoch
+    pendingNativeFrameStartupSeekMs = null
+    fun publishOpenResult(result: Result<Pair<Map<String, Any?>, Map<String, Any?>?>>) {
+        runOnMainThread {
+            if (!isCurrentSourceLoad(epoch) || source != currentSource) {
+                requiredStartup?.cancel()
+                return@runOnMainThread
+            }
+            applyNativeFramePipelineOpenResult(source, startupDiagnostics, result)
+            if (requiredStartup != null) {
+                val error = _uiState.value.lastError
+                if (isRequiredNativeFramePipelineFailureActive() && error != null) {
+                    requiredStartup.completeExceptionally(VesperPlayerCommandException(error))
+                } else {
+                    requiredStartup.complete(Unit)
+                }
+            }
+        }
+    }
     nativeFramePipelinePumpScheduler.executeCommand(
         NativeFramePipelineRuntimeCommand(
             operation = "open",
@@ -40,36 +62,42 @@ internal fun VesperNativePlayerBridge.openNativeFramePipelineAfterSystemStartup(
                     }
                 if (!isCurrentSourceLoad(epoch)) {
                     discardStaleNativeFramePipelineOpenResult(result)
+                    requiredStartup?.cancel()
                     return@openCommand
                 }
-                runOnMainThread {
-                    applyNativeFramePipelineOpenResult(epoch, source, startupDiagnostics, result)
-                }
+                publishOpenResult(result)
+            },
+            onRejected = {
+                publishOpenResult(Result.failure(IllegalStateException("Android native-frame runtime rejected open.")))
             },
         )
     )
     return !isRequiredNativeFramePipelineFailureActive()
 }
 
-internal fun VesperNativePlayerBridge.applyNativeFramePipelineOpenResult(
-    epoch: Long,
+private fun VesperNativePlayerBridge.applyNativeFramePipelineOpenResult(
     source: VesperPlayerSource,
     startupDiagnostics: List<Map<String, Any?>>,
     result: Result<Pair<Map<String, Any?>, Map<String, Any?>?>>,
 ) {
-    if (!isCurrentSourceLoad(epoch) || source != currentSource) {
-        return
-    }
+    val startupSeekMs = pendingNativeFrameStartupSeekMs
+    clearNativeFrameStartupSeek()
     result
         .onSuccess { opened ->
             nativeFramePipelineOpenStatus = opened.first
+            if (startupSeekMs != null) {
+                flushNativeFramePipeline()
+                if (nativeFramePipelineOpenStatus == null) return
+                seekNativeFramePipelineOnRuntime(startupSeekMs)
+                if (nativeFramePipelineOpenStatus == null) return
+            }
             Log.i(
                 NATIVE_PLAYER_BRIDGE_TAG,
                 "native-frame pipeline opened route=${nativeFramePipelineOpenStatus?.get("route")} " +
                     "presenter=${nativeFramePipelineOpenStatus?.get("presenterProfile")} " +
                     "surfaceAttached=${nativeFramePipelineOpenStatus?.get("surfaceAttached")}",
             )
-            nativeFramePipelineLastStatus = opened.second
+            nativeFramePipelineLastStatus = if (startupSeekMs == null) opened.second else null
             Log.i(
                 NATIVE_PLAYER_BRIDGE_TAG,
                 "native-frame pipeline first advance status=${nativeFramePipelineLastStatus?.get("status")} " +
@@ -111,12 +139,17 @@ internal fun VesperNativePlayerBridge.handleNativeFramePipelineOpenFailure(
     nativeFramePipelineFallbackReason = reason
     nativeFramePipelineRequiredFailure =
         nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame
-    closeNativeFramePipelineOnRuntime()
+    closeNativeFramePipelineOnRuntime(
+        restoreSystemVideoForEpoch = sourceLoadEpoch.get().takeUnless { nativeFramePipelineRequiredFailure },
+    )
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(startupDiagnostics)
 
     if (nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
         recordBenchmark("native_frame_pipeline_failed", mapOf("reason" to reason))
-        failRequiredNativeFramePipeline(reason, source)
+        failRequiredNativeFramePipeline(
+            reason, source, operation = "open",
+            unsupported = error is UnsupportedOperationException,
+        )
         return
     }
 
@@ -124,7 +157,11 @@ internal fun VesperNativePlayerBridge.handleNativeFramePipelineOpenFailure(
     Log.i(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline open failed; continuing system playback: $reason")
 }
 
-internal fun VesperNativePlayerBridge.seekBindingsTo(positionMs: Long): Boolean {
+internal fun VesperNativePlayerBridge.seekBindingsTo(
+    positionMs: Long,
+    commandId: Long = seekCommandGeneration.incrementAndGet(),
+    sourceEpoch: Long = sourceCommandGeneration.get(),
+): Boolean {
     val shouldResumeNativeFramePump =
         nativeFramePipelinePumpRunning || _uiState.value.playbackState == PlaybackStateUi.Playing
     stopNativeFramePipelinePump()
@@ -132,12 +169,17 @@ internal fun VesperNativePlayerBridge.seekBindingsTo(positionMs: Long): Boolean 
     if (isRequiredNativeFramePipelineFailureActive()) {
         return false
     }
-    bindings.seekTo(positionMs)
+    bindings.seekTo(positionMs, commandId, sourceEpoch, seekCommandTimeoutMs)
     flushNativeFramePipeline()
     if (isRequiredNativeFramePipelineFailureActive()) {
         return false
     }
     if (nativeFramePipelineOpenStatus == null) {
+        if (isNativeFramePipelineOpening() && seekCommandGeneration.get() == commandId &&
+            sourceCommandGeneration.get() == sourceEpoch
+        ) {
+            pendingNativeFrameStartupSeekMs = positionMs
+        }
         return true
     }
     seekNativeFramePipelineOnRuntime(positionMs)
@@ -148,6 +190,14 @@ internal fun VesperNativePlayerBridge.seekBindingsTo(positionMs: Long): Boolean 
         startNativeFramePipelinePump("seek")
     }
     return true
+}
+
+internal fun VesperNativePlayerBridge.isNativeFramePipelineOpening(): Boolean =
+    nativeFramePipelineOpeningEpoch == sourceLoadEpoch.get()
+
+internal fun VesperNativePlayerBridge.clearNativeFrameStartupSeek() {
+    nativeFramePipelineOpeningEpoch = null
+    pendingNativeFrameStartupSeekMs = null
 }
 
 internal fun VesperNativePlayerBridge.flushNativeFramePipeline() {
@@ -261,7 +311,9 @@ internal fun VesperNativePlayerBridge.currentNativeFramePipelineStatusOnRuntime(
     }
 }
 
-internal fun VesperNativePlayerBridge.closeNativeFramePipelineOnRuntime() {
+internal fun VesperNativePlayerBridge.closeNativeFramePipelineOnRuntime(
+    restoreSystemVideoForEpoch: Long? = null,
+) {
     nativeFramePipelinePumpScheduler.executeCommand(
         NativeFramePipelineRuntimeCommand(
             operation = "close",
@@ -273,6 +325,14 @@ internal fun VesperNativePlayerBridge.closeNativeFramePipelineOnRuntime() {
                 runCatching {
                     releasePendingTimedNativeFrameFromRuntime(presented = false)
                     bindings.closeNativeFramePipeline()
+                }.onSuccess {
+                    if (restoreSystemVideoForEpoch != null) {
+                        runOnMainThread {
+                            if (isCurrentSourceLoad(restoreSystemVideoForEpoch)) {
+                                bindings.restoreSystemPlaybackVideo()
+                            }
+                        }
+                    }
                 }.onFailure { error ->
                     runOnMainThread {
                         Log.w(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline close failed failure=${diagnosticPlaybackFailure(error)}")
@@ -337,10 +397,12 @@ internal fun VesperNativePlayerBridge.handleNativeFramePipelineRuntimeFailure(op
         if (isDisposed.get()) {
             return@runOnMainThread
         }
-        closeNativeFramePipelineOnRuntime()
+        closeNativeFramePipelineOnRuntime(
+            restoreSystemVideoForEpoch = sourceLoadEpoch.get().takeUnless { shouldFailRequiredNativeFrame },
+        )
         if (shouldFailRequiredNativeFrame) {
             recordBenchmark("native_frame_pipeline_failed", mapOf("reason" to reason))
-            failRequiredNativeFramePipeline(reason, currentSource)
+            failRequiredNativeFramePipeline(reason, currentSource, operation)
         }
     }
 }
@@ -356,19 +418,37 @@ internal fun VesperNativePlayerBridge.runOnMainThread(action: () -> Unit) {
     }
 }
 
-internal fun VesperNativePlayerBridge.failRequiredNativeFramePipeline(reason: String, source: VesperPlayerSource?) {
+private fun VesperNativePlayerBridge.failRequiredNativeFramePipeline(
+    reason: String,
+    source: VesperPlayerSource?,
+    operation: String,
+    unsupported: Boolean = false,
+) {
     hasInitializedSource = false
     pendingAutoPlay = false
     nativeFramePipelinePlaybackRequested = false
     runCatching { bindings.clearSystemPlayback() }
     clearTrackState()
     surfaceHost.reattachIfAvailable()
+    val terminalError = VesperPlayerErrorState(
+        message = reason,
+        code = if (unsupported) VesperPlayerErrorCode.Unsupported else VesperPlayerErrorCode.BackendFailure,
+        category = if (unsupported) VesperPlayerErrorCategory.Capability else VesperPlayerErrorCategory.Platform,
+        retriable = false,
+        details = mapOf(
+            "reason" to if (operation == "open") "nativeFramePipelineOpenFailed" else "nativeFramePipelineRuntimeFailed",
+            "route" to "nativeFrame",
+            "operation" to operation,
+        ),
+    )
     updateState {
         copy(
             subtitle = i18n.stubError(reason),
             sourceLabel = source?.label ?: sourceLabel,
             playbackState = PlaybackStateUi.Ready,
             isBuffering = false,
+            isInterrupted = false,
+            lastError = terminalError,
         )
     }
 }

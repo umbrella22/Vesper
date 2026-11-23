@@ -32,7 +32,6 @@ data class VesperDownloadConfiguration(
     val restoreTasksOnStartup: Boolean = true,
     val baseDirectory: File? = null,
     val postDownloadPluginReferences: List<VesperPluginReference> = emptyList(),
-    val eventHookPluginReferences: List<VesperPluginReference> = emptyList(),
     val rangeChunkBytes: Long? = null,
     val minProgressBytes: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_BYTES,
     val minProgressIntervalMs: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_INTERVAL_MS,

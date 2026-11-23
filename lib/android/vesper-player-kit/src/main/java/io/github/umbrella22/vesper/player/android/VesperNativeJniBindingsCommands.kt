@@ -144,10 +144,32 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SeekCompletion(
     commandId: Long,
     sourceEpoch: Long,
     timeoutMs: Long,
-): Long {
-    check(Looper.myLooper() == Looper.getMainLooper()) {
-        "seek completion must be awaited on the Android main looper"
+): Long = suspendCancellableCoroutine { continuation ->
+    val cancel = beginMedia3Seek(positionMs, commandId, sourceEpoch, timeoutMs) { result ->
+        if (continuation.isActive) result.fold(continuation::resume, continuation::resumeWithException)
     }
+    continuation.invokeOnCancellation {
+        if (Looper.myLooper() == Looper.getMainLooper()) cancel() else mainHandler.post { cancel() }
+    }
+}
+
+internal fun VesperNativeJniBindings.beginMedia3Seek(
+    positionMs: Long,
+    commandId: Long,
+    sourceEpoch: Long,
+    timeoutMs: Long,
+    onCompletion: (Result<Long>) -> Unit,
+): () -> Unit {
+    check(Looper.myLooper() == Looper.getMainLooper()) { "Media3 seek requires the Android main looper" }
+    fun rejected(message: String, reason: String = "seekCommandRejected") = commandFailure(
+        message = message,
+        code = VesperPlayerErrorCode.SeekFailure,
+        category = VesperPlayerErrorCategory.Playback,
+        reason = reason,
+        commandId = commandId,
+        sourceEpoch = sourceEpoch,
+    )
+
     if (isRtspBridgeActive) {
         throw commandFailure(
             message = "Seeking is unavailable for the RTSP bridge.",
@@ -158,122 +180,125 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SeekCompletion(
             sourceEpoch = sourceEpoch,
         )
     }
-    val exoPlayer = player ?: throw commandFailure(
-        message = "Android system playback is not ready for seek.",
-        code = VesperPlayerErrorCode.InvalidState,
+    val handle = sessionHandle
+        ?: throw rejected("The Android seek session is unavailable.", "seekRouteUnavailable")
+    val exoPlayer = player
+        ?: throw rejected("Android system playback is unavailable for seek.", "seekRouteUnavailable")
+    val callbackGeneration = systemPlaybackCallbackGeneration.get()
+    if (isDisposed.get() || exoPlayer.currentTimeline.isEmpty || exoPlayer.isPlayingAd) {
+        throw rejected("The current Android media item cannot accept a seek.", "seekCommandNotReady")
+    }
+    val targetMs = positionMs.coerceAtLeast(0L)
+    var dispatching = false
+    var accepted = false
+    val targetWindowPositionMs = exoPlayer.windowPositionForTimelinePosition(targetMs)
+    var maskedWindowPositionMs: Long? = null
+    var adjustedPositionMs: Long? = null
+    var observedInternalDiscontinuity = false
+    var settled = false
+    lateinit var listener: Player.Listener
+    lateinit var timeout: Runnable
+
+    fun cleanup() {
+        exoPlayer.removeListener(listener)
+        mainHandler.removeCallbacks(timeout)
+        if (pendingSeekCommandId == commandId) {
+            pendingSeekCommandId = null
+            pendingSeekCommandCancellation = null
+        }
+    }
+
+    fun settle(result: Result<Long>) {
+        if (settled) return
+        settled = true
+        cleanup()
+        onCompletion(result)
+    }
+
+    fun obsolete(reason: String) = obsoleteCommandFailure(
+        message = "Android seek command is no longer current.",
         category = VesperPlayerErrorCategory.Playback,
-        reason = "seekRouteUnavailable",
+        reason = reason,
         commandId = commandId,
         sourceEpoch = sourceEpoch,
     )
-    val callbackGeneration = systemPlaybackCallbackGeneration.get()
-    val targetMs = positionMs.coerceAtLeast(0L)
 
-    try {
-        return withTimeout(timeoutMs.coerceAtLeast(1L)) {
-            suspendCancellableCoroutine { continuation ->
-                var settled = false
-                var observedSeekDiscontinuity = false
-                lateinit var listener: Player.Listener
+    fun confirmFromReadback() {
+        if (!accepted || settled || maskedWindowPositionMs == null) return
+        if (systemPlaybackCallbackGeneration.get() != callbackGeneration || player !== exoPlayer ||
+            pendingSeekCommandId != commandId || isDisposed.get()
+        ) {
+            settle(Result.failure(obsolete("seekSourceChanged")))
+            return
+        }
+        exoPlayer.playerError?.let {
+            settle(Result.failure(it.toCommandFailure(commandId, sourceEpoch, "seekFailed")))
+            return
+        }
+        if (exoPlayer.playbackState != Player.STATE_READY && exoPlayer.playbackState != Player.STATE_ENDED) {
+            return
+        }
+        val adjustedMs = adjustedPositionMs
+        val completedMs = adjustedMs ?: exoPlayer.currentTimelineSample().timelinePositionMs
+        val positionChanged = (completedMs - targetMs).absoluteValue > SEEK_READBACK_TOLERANCE_MS
+        if (adjustedMs == null && observedInternalDiscontinuity && positionChanged) {
+            settle(Result.failure(rejected(
+                "Android playback moved to $completedMs ms during seek.",
+                "seekInterruptedByDiscontinuity",
+            )))
+            return
+        }
+        val event = if (adjustedMs != null || positionChanged) {
+            VesperPlaybackEvent.SeekAdjusted(targetMs, completedMs)
+        } else {
+            VesperPlaybackEvent.SeekCompleted(targetMs, completedMs)
+        }
+        // Remove the observer before publishing. A collector can submit a new seek immediately.
+        settled = true
+        cleanup()
+        VesperNativeJni.reportSeekCompleted(handle, completedMs)
+        pushSnapshotToRust()
+        publishPlaybackObservation(event)
+        onCompletion(Result.success(completedMs))
+    }
 
-                fun cleanup() {
-                    exoPlayer.removeListener(listener)
-                    if (pendingSeekCommandId == commandId) {
-                        pendingSeekCommandId = null
-                        pendingSeekCommandCancellation = null
-                    }
+    listener = object : Player.Listener {
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (settled || systemPlaybackCallbackGeneration.get() != callbackGeneration || player !== exoPlayer) {
+                return
+            }
+            when (reason) {
+                // A reentrant seek can defer delivery of the masking callback until after dispatch.
+                Player.DISCONTINUITY_REASON_SEEK -> if (dispatching ||
+                    (accepted && (targetWindowPositionMs - newPosition.positionMs).absoluteValue <= 1L)
+                ) {
+                    maskedWindowPositionMs = newPosition.positionMs
                 }
-
-                fun fail(error: Throwable) {
-                    if (settled) return
-                    settled = true
-                    cleanup()
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(error)
-                    }
+                Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT -> if (accepted &&
+                    oldPosition.positionMs == maskedWindowPositionMs
+                ) {
+                    adjustedPositionMs = exoPlayer.timelinePositionForWindowPosition(newPosition.positionMs)
                 }
-
-                fun confirmFromReadback() {
-                    if (settled) return
-                    if (systemPlaybackCallbackGeneration.get() != callbackGeneration || player !== exoPlayer) {
-                        fail(
-                            obsoleteCommandFailure(
-                                message = "Android seek was superseded by a source change.",
-                                category = VesperPlayerErrorCategory.Playback,
-                                reason = "seekSourceChanged",
-                                commandId = commandId,
-                                sourceEpoch = sourceEpoch,
-                            )
-                        )
-                        return
-                    }
-                    exoPlayer.playerError?.let { error ->
-                        fail(error.toCommandFailure(commandId, sourceEpoch, "seekFailed"))
-                        return
-                    }
-                    val completedMs = exoPlayer.currentTimelineSample().timelinePositionMs
-                    if (!observedSeekDiscontinuity ||
-                        (completedMs - targetMs).absoluteValue > SEEK_READBACK_TOLERANCE_MS
-                    ) {
-                        return
-                    }
-                    settled = true
-                    cleanup()
-                    if (continuation.isActive) {
-                        continuation.resume(completedMs)
-                    }
-                }
-
-                listener =
-                    object : Player.Listener {
-                        override fun onPositionDiscontinuity(
-                            oldPosition: Player.PositionInfo,
-                            newPosition: Player.PositionInfo,
-                            reason: Int,
-                        ) {
-                            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                                observedSeekDiscontinuity = true
-                                confirmFromReadback()
-                            }
-                        }
-
-                        override fun onPlayerError(error: PlaybackException) {
-                            fail(error.toCommandFailure(commandId, sourceEpoch, "seekFailed"))
-                        }
-                    }
-                pendingSeekCommandCancellation?.invoke("seekCommandSuperseded")
-                pendingSeekCommandId = commandId
-                pendingSeekCommandCancellation = { reason ->
-                    fail(
-                        obsoleteCommandFailure(
-                            message = "Android seek command is no longer current.",
-                            category = VesperPlayerErrorCategory.Playback,
-                            reason = reason,
-                            commandId = commandId,
-                            sourceEpoch = sourceEpoch,
-                        )
-                    )
-                }
-                exoPlayer.addListener(listener)
-                continuation.invokeOnCancellation {
-                    if (!settled) {
-                        settled = true
-                        exoPlayer.removeListener(listener)
-                        if (pendingSeekCommandId == commandId) {
-                            pendingSeekCommandId = null
-                            pendingSeekCommandCancellation = null
-                        }
-                    }
-                }
-                seekTo(targetMs)
-                mainHandler.post { confirmFromReadback() }
+                Player.DISCONTINUITY_REASON_INTERNAL -> if (accepted) observedInternalDiscontinuity = true
             }
         }
-    } catch (error: TimeoutCancellationException) {
-        if (!currentCoroutineContext().isActive) {
-            throw error
+
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.containsAny(Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) {
+                confirmFromReadback()
+            }
         }
-        throw commandFailure(
+
+        override fun onPlayerError(error: PlaybackException) {
+            if (accepted) settle(Result.failure(error.toCommandFailure(commandId, sourceEpoch, "seekFailed")))
+        }
+    }
+    timeout = Runnable {
+        settle(Result.failure(commandFailure(
             message = "Android seek did not complete before the deadline.",
             code = VesperPlayerErrorCode.Timeout,
             category = VesperPlayerErrorCategory.Playback,
@@ -281,8 +306,33 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SeekCompletion(
             commandId = commandId,
             sourceEpoch = sourceEpoch,
             retriable = true,
-        )
+        )))
     }
+    cancelPendingSeekCommandInternal("seekCommandSuperseded")
+    pendingSeekCommandId = commandId
+    pendingSeekCommandCancellation = { reason -> settle(Result.failure(obsolete(reason))) }
+    exoPlayer.addListener(listener)
+    dispatching = true
+    val dispatched = try {
+        dispatchSeekToMedia3(handle, targetMs)
+    } catch (error: RuntimeException) {
+        cleanup()
+        throw rejected(error.message ?: "Android seek dispatch failed.")
+    } finally {
+        dispatching = false
+    }
+    if (settled) return {}
+    if (!dispatched) {
+        cleanup()
+        throw rejected("The Android playback route rejected the seek.")
+    }
+    accepted = true
+    if (!mainHandler.postDelayed(timeout, timeoutMs.coerceAtLeast(1L))) {
+        cleanup()
+        throw rejected("Android seek could not schedule its completion deadline.")
+    }
+    confirmFromReadback()
+    return { settle(Result.failure(obsolete("seekCommandCancelled"))) }
 }
 
 internal fun VesperNativeJniBindings.cancelPendingSourceCommandInternal(reason: String) {

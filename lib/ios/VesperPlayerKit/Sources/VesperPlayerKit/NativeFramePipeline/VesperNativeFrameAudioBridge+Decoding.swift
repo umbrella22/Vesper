@@ -49,7 +49,7 @@ extension VesperNativeFrameAudioOutput {
     nonisolated static func streamPcmBuffers(
         asset: AVURLAsset,
         startMs: Int64,
-        onBuffer: (AVAudioPCMBuffer) async throws -> Void
+        onBuffer: (AVAudioPCMBuffer, Int64) async throws -> Void
     ) async throws {
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard let track = tracks.first else {
@@ -73,7 +73,8 @@ extension VesperNativeFrameAudioOutput {
         while !Task.isCancelled, let sampleBuffer = output.copyNextSampleBuffer() {
             if let pcmBuffer = pcmBuffer(from: sampleBuffer) {
                 producedAudio = true
-                try await onBuffer(pcmBuffer)
+                let pts = CMTimeConvertScale(sampleBuffer.presentationTimeStamp, timescale: 1_000_000, method: .default)
+                try await onBuffer(pcmBuffer, pts.isNumeric ? pts.value : Int64.min)
             }
         }
         if Task.isCancelled {

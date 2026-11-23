@@ -6,6 +6,8 @@ import Foundation
 @MainActor
 final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unchecked Sendable {
     let outputVolume: Float
+    let processorReference: VesperPluginReference?
+    var processorBinding: VesperNativeFrameAudioProcessorBinding?
     var engine: AVAudioEngine?
     var playerNode: AVAudioPlayerNode?
     var timePitch: AVAudioUnitTimePitch?
@@ -20,8 +22,9 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
     var seekPositionMs: Int64 = 0
     var onStateChanged: ((VesperNativeFrameAudioBridgeState) -> Void)?
 
-    init(outputVolume: Float = 1.0) {
+    init(outputVolume: Float = 1.0, processorReference: VesperPluginReference? = nil) {
         self.outputVolume = min(max(outputVolume, 0.0), 1.0)
+        self.processorReference = processorReference
     }
 
     var currentPositionMs: Int64? {
@@ -62,10 +65,29 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
                 unavailableReason: "Swift native audio bridge v1 only supports local file sources."
             )
         }
-        sourceURL = url
         let asset = AVURLAsset(url: url)
+        let preparationGeneration = playbackGate.generation
         do {
-            preparedAudioFormat = try await Self.preflightAudioFormat(asset: asset)
+            if processorReference != nil {
+                guard source.drmConfiguration == nil else {
+                    throw VesperNativeFrameAudioProcessorError.protectedAsset
+                }
+                if try await asset.load(.hasProtectedContent) {
+                    throw VesperNativeFrameAudioProcessorError.protectedAsset
+                }
+            }
+            let format = try await Self.preflightAudioFormat(asset: asset)
+            try Task.checkCancellation()
+            guard preparationGeneration == playbackGate.generation else {
+                throw CancellationError()
+            }
+            if let processorReference {
+                let binding = try VesperNativeFrameAudioProcessorBinding(reference: processorReference)
+                // Verify the plugin's PCM contract during startup, while prefer mode can still fall back.
+                _ = try binding.open(format: format, epoch: 1)
+                processorBinding = binding
+            }
+            preparedAudioFormat = format
         } catch {
             return VesperNativeFrameAudioBridgeState.resolved(
                 hasAudioTrack: true,
@@ -73,12 +95,14 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
                 unavailableReason: "Swift native audio bridge preflight failed: \(error.localizedDescription)"
             )
         }
+        sourceURL = url
         self.asset = asset
         isPrepared = true
         seekPositionMs = 0
         return VesperNativeFrameAudioBridgeState.resolved(
             hasAudioTrack: true,
-            bridgePrepared: true
+            bridgePrepared: true,
+            usesAudioProcessor: processorBinding != nil
         )
     }
 
@@ -130,6 +154,7 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
         asset = nil
         sourceURL = nil
         preparedAudioFormat = nil
+        processorBinding = nil
         isPrepared = false
     }
 }

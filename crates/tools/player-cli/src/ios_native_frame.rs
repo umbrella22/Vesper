@@ -49,7 +49,7 @@ mod implementation {
     use crate::external_process::{
         self, BoundedProcessOutput, ExternalProcessErrorKind, InterruptDeferral,
     };
-    use crate::ios_plugin::{self, IosPluginSlice};
+    use crate::ios_plugin::{self, IosPluginId, IosPluginSlice};
 
     const MAX_PROCESS_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
     const MAX_STAGED_DYLIB_BYTES: u64 = 512 * 1024 * 1024;
@@ -57,6 +57,18 @@ mod implementation {
     const MAX_XCTESTRUN_DIRECTORY_ENTRIES: usize = 256;
     const SIMULATOR_SLICE: IosPluginSlice = IosPluginSlice::SimulatorArm64;
     const SMOKE_TEST: &str = "VesperPlayerKitTests/VesperPlayerControllerStateTests/testNativeFramePipelineRealPluginPlaybackPresentsSeeksAndReleasesLocalMp4";
+    const RESOURCE_SMOKE_TEST: &str = "VesperPlayerKitTests/VesperPlayerControllerStateTests/testRequiredNormalizerResourcePlaysThroughAVPlayerAndCleansUp";
+    const RESOURCE_MARKER: &[u8] = b"real iOS normalized resource smoke advanced=true removed=true";
+    const SMOKE_PLUGINS: [IosPluginId; 2] = [
+        IosPluginId::SourceNormalizerFfmpeg,
+        IosPluginId::DecoderVideoToolbox,
+    ];
+    const FFMPEG_COMPONENTS: [(&str, &str); 4] = [
+        ("libavcodec", "VesperFFmpegAVCodec"),
+        ("libavformat", "VesperFFmpegAVFormat"),
+        ("libavutil", "VesperFFmpegAVUtil"),
+        ("libswresample", "VesperFFmpegSwResample"),
+    ];
     const SUMMARY_MARKER: &[u8] = b"real iOS native-frame smoke presentedFrames=";
     const FAILURE_MARKERS: [(&[u8], &str); 2] = [
         (
@@ -89,6 +101,7 @@ mod implementation {
 
     struct Tools {
         install_name_tool: PathBuf,
+        codesign: PathBuf,
         otool: PathBuf,
         xcodebuild: PathBuf,
         xcodegen: PathBuf,
@@ -201,8 +214,11 @@ mod implementation {
             cancellation,
             &mut report,
         )?;
-        copy_runtime_dylibs(&runtime, &staging, tools, cancellation)?;
-        stage_plugin_dylibs(root, &staging, tools, cancellation)?;
+        copy_runtime_dylibs(&runtime, &staging)?;
+        let frameworks = staging.join("Frameworks");
+        prepare_directory(&frameworks, "iOS native-frame smoke frameworks")?;
+        stage_smoke_frameworks(root, &staging, &frameworks, tools, cancellation)?;
+        let shader = resolve_smoke_filter(root, &staging, cancellation, &mut report)?;
 
         writeln!(
             report.stdout,
@@ -218,11 +234,12 @@ mod implementation {
         .map_err(output_error)?;
 
         let config = temporary.path().join("smoke.plist");
-        write_smoke_config(&config, &source, &staging, tools, cancellation)?;
+        write_smoke_config(&config, &source, &frameworks, &shader, tools, cancellation)?;
         let destination = resolve_simulator_destination(tools, cancellation)?;
         run_xcode_smoke(
             root,
             &config,
+            &frameworks,
             &temporary.path().join("xcode-derived-data"),
             &destination,
             tools,
@@ -235,6 +252,7 @@ mod implementation {
     fn resolve_tools() -> Result<Tools, IosError> {
         Ok(Tools {
             install_name_tool: resolve_path_command("install_name_tool")?,
+            codesign: resolve_path_command("codesign")?,
             otool: resolve_path_command("otool")?,
             xcodebuild: resolve_path_command("xcodebuild")?,
             xcodegen: resolve_path_command("xcodegen")?,
@@ -310,7 +328,7 @@ mod implementation {
 
         let target = root.join("target");
         prepare_directory(&target, "iOS native-frame generated media directory")?;
-        let generated = target.join("ios-native-frame-smoke-h264-aac.mp4");
+        let generated = target.join("ios-native-frame-smoke-h264-bt709-aac.mp4");
         match fs::symlink_metadata(&generated) {
             Ok(metadata)
                 if metadata.file_type().is_file()
@@ -369,6 +387,12 @@ mod implementation {
             "3.1",
             "-pix_fmt",
             "yuv420p",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
             "-c:a",
             "aac",
             "-b:a",
@@ -439,23 +463,14 @@ mod implementation {
         let current_cli = env::current_exe().map_err(|error| {
             IosError::storage(format!("failed to resolve the running Vesper CLI: {error}"))
         })?;
-        for (command_name, output_directory, skip_prebuilds) in [
-            (
-                "source-normalizer-plugin",
-                build_root.join("player-source-normalizer-ffmpeg"),
-                true,
-            ),
-            (
-                "decoder-videotoolbox-plugin",
-                build_root.join("player-decoder-videotoolbox"),
-                false,
-            ),
-            (
-                "frame-processor-plugin",
-                build_root.join("player-frame-processor-diagnostic"),
-                false,
-            ),
-        ] {
+        for plugin in SMOKE_PLUGINS {
+            let spec = plugin.spec();
+            let command_name = if spec.uses_ffmpeg {
+                "source-normalizer-plugin"
+            } else {
+                "decoder-videotoolbox-plugin"
+            };
+            let output_directory = build_root.join(plugin.as_str());
             let mut command = Command::new(wrapper);
             command
                 .current_dir(root)
@@ -466,7 +481,7 @@ mod implementation {
                 .env("VESPER_REPO_ROOT", root)
                 .env("VESPER_CLI", &current_cli)
                 .env("VESPER_APPLE_FFMPEG_OUTPUT_DIR", ffmpeg_output);
-            if skip_prebuilds {
+            if spec.uses_ffmpeg {
                 command.env("VESPER_SKIP_APPLE_FFMPEG_PREBUILDS", "1");
             }
             clear_private_child_environment(&mut command);
@@ -484,12 +499,7 @@ mod implementation {
         Ok(())
     }
 
-    fn copy_runtime_dylibs(
-        source: &Path,
-        staging: &Path,
-        tools: &Tools,
-        cancellation: &InterruptDeferral,
-    ) -> Result<(), IosError> {
+    fn copy_runtime_dylibs(source: &Path, staging: &Path) -> Result<(), IosError> {
         let canonical_source = fs::canonicalize(source).map_err(|error| {
             IosError::storage(format!(
                 "failed to resolve Apple FFmpeg simulator runtime '{}': {error}",
@@ -517,7 +527,10 @@ mod implementation {
             })?;
             let name = entry.file_name();
             let bytes = name.as_encoded_bytes();
-            if bytes.starts_with(b"lib") && bytes.ends_with(b".dylib") {
+            if FFMPEG_COMPONENTS
+                .iter()
+                .any(|(library, _)| bytes.strip_prefix(library.as_bytes()) == Some(b".dylib"))
+            {
                 inputs.push((name, entry.path()));
             }
         }
@@ -529,7 +542,6 @@ mod implementation {
             )));
         }
 
-        let mut staged = Vec::with_capacity(inputs.len());
         for (name, input) in inputs {
             let metadata = fs::symlink_metadata(&input).map_err(|error| {
                 IosError::storage(format!(
@@ -557,44 +569,164 @@ mod implementation {
                 )));
             }
             copy_bounded_file(&source, &staging.join(&name), "FFmpeg runtime dylib")?;
-            staged.push(staging.join(name));
-        }
-        for dylib in staged {
-            prepare_staged_dylib(&dylib, tools, cancellation)?;
         }
         Ok(())
     }
 
-    fn stage_plugin_dylibs(
+    fn stage_smoke_frameworks(
         root: &Path,
         staging: &Path,
+        frameworks: &Path,
         tools: &Tools,
         cancellation: &InterruptDeferral,
     ) -> Result<(), IosError> {
-        let build_root = root.join("target/ios-native-frame-smoke");
-        for (directory, name) in [
-            (
-                "player-source-normalizer-ffmpeg",
-                "libvesper_source_normalizer_ffmpeg.dylib",
-            ),
-            (
-                "player-decoder-videotoolbox",
-                "libvesper_decoder_videotoolbox.dylib",
-            ),
-            (
-                "player-frame-processor-diagnostic",
-                "libvesper_frame_processor_diagnostic.dylib",
-            ),
-        ] {
-            let source = build_root
-                .join(directory)
+        for (library, name) in FFMPEG_COMPONENTS {
+            let source = staging.join(format!("{library}.dylib"));
+            if library == "libswresample" && !source.exists() {
+                continue;
+            }
+            if !source.is_file() {
+                return Err(IosError::compatibility(format!(
+                    "Missing FFmpeg runtime dylibs: {}",
+                    source.display()
+                )));
+            }
+            stage_smoke_framework(
+                &source,
+                frameworks,
+                name,
+                &format!("io.github.umbrella22.vesper.smoke.{library}"),
+                tools,
+                cancellation,
+            )?;
+        }
+        for plugin in SMOKE_PLUGINS {
+            let spec = plugin.spec();
+            let source = root
+                .join("target/ios-native-frame-smoke")
+                .join(plugin.as_str())
                 .join("iphonesimulator")
-                .join(name);
-            let destination = staging.join(name);
-            copy_bounded_file(&source, &destination, "iOS native-frame plugin dylib")?;
-            prepare_staged_dylib(&destination, tools, cancellation)?;
+                .join(spec.dylib_name);
+            let framework = stage_smoke_framework(
+                &source,
+                frameworks,
+                spec.framework_name,
+                spec.bundle_identifier,
+                tools,
+                cancellation,
+            )?;
+            let fragment = crate::ios_plugin_release::canonical_registry_fragment(
+                root,
+                plugin,
+                SIMULATOR_SLICE,
+                "17.0",
+            )?;
+            fs::write(framework.join("vesper-plugin-registry.json"), fragment).map_err(
+                |error| IosError::storage(format!("write smoke registry fragment: {error}")),
+            )?;
         }
         Ok(())
+    }
+
+    fn stage_smoke_framework(
+        source: &Path,
+        frameworks: &Path,
+        name: &str,
+        bundle_id: &str,
+        tools: &Tools,
+        cancellation: &InterruptDeferral,
+    ) -> Result<PathBuf, IosError> {
+        let framework = frameworks.join(format!("{name}.framework"));
+        prepare_directory(&framework, "iOS native-frame smoke framework directory")?;
+        let binary = framework.join(name);
+        copy_bounded_file(source, &binary, "iOS native-frame smoke framework binary")?;
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>{bundle_id}</string>
+<key>CFBundleExecutable</key><string>{name}</string>
+<key>CFBundleName</key><string>{name}</string>
+<key>CFBundlePackageType</key><string>FMWK</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.0.0</string>
+<key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
+<key>MinimumOSVersion</key><string>17.0</string>
+</dict></plist>"#
+        );
+        fs::write(framework.join("Info.plist"), plist).map_err(|error| {
+            IosError::storage(format!("write smoke framework metadata: {error}"))
+        })?;
+        let mut inspect = Command::new(&tools.otool);
+        inspect.arg("-L").arg(&binary);
+        let dependencies = ensure_success(
+            run_process(
+                &mut inspect,
+                "smoke framework dependency inspection",
+                cancellation,
+            )?,
+            "smoke framework dependency inspection",
+        )?;
+        let mut install_name = Command::new(&tools.install_name_tool);
+        install_name.args(["-id", &format!("@rpath/{name}.framework/{name}")]);
+        // The first entry is the binary's own install name.
+        for line in String::from_utf8_lossy(&dependencies.stdout)
+            .lines()
+            .skip(2)
+        {
+            let Some((dependency, _)) = line.trim().split_once(" (") else {
+                continue;
+            };
+            let Some(library) = dependency.strip_prefix("@rpath/") else {
+                continue;
+            };
+            for (prefix, replacement) in FFMPEG_COMPONENTS {
+                if library.strip_prefix(prefix).is_some_and(|suffix| {
+                    suffix.starts_with('.') && suffix.ends_with(".dylib") && !suffix.contains('/')
+                }) {
+                    install_name.args([
+                        "-change",
+                        dependency,
+                        &format!("@loader_path/../{replacement}.framework/{replacement}"),
+                    ]);
+                    break;
+                }
+            }
+        }
+        install_name.arg(&binary);
+        ensure_success(
+            run_process(
+                &mut install_name,
+                "smoke framework install names",
+                cancellation,
+            )?,
+            "smoke framework install names",
+        )?;
+        Ok(framework)
+    }
+
+    fn resolve_smoke_filter(
+        root: &Path,
+        staging: &Path,
+        cancellation: &InterruptDeferral,
+        report: &mut VerificationOutput,
+    ) -> Result<PathBuf, IosError> {
+        let shader = staging.join("vesper-color-filter.metallib");
+        if let Some(input) = env::var_os("VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB") {
+            copy_bounded_file(Path::new(&input), &shader, "iOS smoke Metal library")?;
+        } else {
+            let mut build = Command::new(root.join("scripts/plugin-shader-build.sh"));
+            build.args(["ios-simulator"]).arg(staging);
+            clear_private_child_environment(&mut build);
+            let result = run_process(&mut build, "iOS smoke Metal library build", cancellation)?;
+            require_success(result, "iOS smoke Metal library build", report)?;
+            copy_bounded_file(
+                &staging.join("color-filter.metallib"),
+                &shader,
+                "iOS smoke Metal library",
+            )?;
+        }
+        Ok(shader)
     }
 
     fn copy_bounded_file(source: &Path, destination: &Path, label: &str) -> Result<(), IosError> {
@@ -626,46 +758,11 @@ mod implementation {
         Ok(())
     }
 
-    fn prepare_staged_dylib(
-        dylib: &Path,
-        tools: &Tools,
-        cancellation: &InterruptDeferral,
-    ) -> Result<(), IosError> {
-        let name = dylib.file_name().ok_or_else(|| {
-            IosError::conformance(format!(
-                "staged dylib has no file name: {}",
-                dylib.display()
-            ))
-        })?;
-        let mut install_name = Command::new(&tools.install_name_tool);
-        install_name
-            .arg("-id")
-            .arg(Path::new("@rpath").join(name))
-            .arg(dylib);
-        let result = run_process(
-            &mut install_name,
-            "staged dylib install-name update",
-            cancellation,
-        )?;
-        ensure_success(result, "staged dylib install-name update")?;
-
-        let mut inspect = Command::new(&tools.otool);
-        inspect.args(["-l"]).arg(dylib);
-        let result = run_process(&mut inspect, "staged dylib rpath inspection", cancellation)?;
-        let result = ensure_success(result, "staged dylib rpath inspection")?;
-        if !has_exact_loader_rpath(&result.stdout) {
-            let mut add = Command::new(&tools.install_name_tool);
-            add.args(["-add_rpath", "@loader_path"]).arg(dylib);
-            let result = run_process(&mut add, "staged dylib rpath update", cancellation)?;
-            ensure_success(result, "staged dylib rpath update")?;
-        }
-        Ok(())
-    }
-
     fn write_smoke_config(
         path: &Path,
         source: &Path,
-        staging: &Path,
+        frameworks: &Path,
+        shader: &Path,
         tools: &Tools,
         cancellation: &InterruptDeferral,
     ) -> Result<(), IosError> {
@@ -694,22 +791,12 @@ mod implementation {
                 source.as_os_str().to_os_string(),
             ),
             (
-                "VESPER_IOS_SOURCE_NORMALIZER_PLUGIN_PATH",
-                staging
-                    .join("libvesper_source_normalizer_ffmpeg.dylib")
-                    .into_os_string(),
+                "VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB",
+                shader.as_os_str().to_os_string(),
             ),
             (
-                "VESPER_IOS_DECODER_VIDEOTOOLBOX_PLUGIN_PATH",
-                staging
-                    .join("libvesper_decoder_videotoolbox.dylib")
-                    .into_os_string(),
-            ),
-            (
-                "VESPER_IOS_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-                staging
-                    .join("libvesper_frame_processor_diagnostic.dylib")
-                    .into_os_string(),
+                "VESPER_IOS_NATIVE_FRAME_FRAMEWORKS",
+                frameworks.as_os_str().to_os_string(),
             ),
             (
                 "VESPER_IOS_SOURCE_NORMALIZER_RUNTIME_PROFILE",
@@ -724,6 +811,7 @@ mod implementation {
     fn run_xcode_smoke(
         root: &Path,
         config: &Path,
+        frameworks: &Path,
         derived_data: &Path,
         destination: &str,
         tools: &Tools,
@@ -765,6 +853,8 @@ mod implementation {
             .args([
                 "-scheme",
                 "VesperPlayerKit",
+                "-configuration",
+                "Debug",
                 "-destination",
                 destination,
                 "-derivedDataPath",
@@ -783,19 +873,25 @@ mod implementation {
             tools,
             cancellation,
         )?;
-        set_plist_string(
-            &xctestrun,
-            "VesperPlayerKitTests.EnvironmentVariables.VESPER_FRAME_PROCESSOR_DIAGNOSTIC_MODE",
-            OsStr::new("noop"),
-            true,
-            tools,
-            cancellation,
-        )?;
+        let host = derived_data
+            .join("Build/Products/Debug-iphonesimulator/VesperPlayerKitDeviceTestHost.app");
+        stage_test_host_frameworks(&host, frameworks, tools, cancellation)?;
 
         let mut test = Command::new(&tools.xcodebuild);
         test.args(["test-without-building", "-xctestrun"])
             .arg(&xctestrun)
-            .args(["-destination", destination, "-only-testing", SMOKE_TEST]);
+            .args([
+                "-destination",
+                destination,
+                "-parallel-testing-enabled",
+                "NO",
+            ])
+            .args([
+                "-only-testing",
+                SMOKE_TEST,
+                "-only-testing",
+                RESOURCE_SMOKE_TEST,
+            ]);
         clear_private_child_environment(&mut test);
         let result = run_process(&mut test, "iOS native-frame Xcode smoke", cancellation)?;
         let mut log = Vec::with_capacity(result.stdout.len() + result.stderr.len());
@@ -837,6 +933,12 @@ mod implementation {
                 )));
             }
         }
+        if count_bytes(&log, RESOURCE_MARKER) != 1 {
+            return Err(IosError::conformance(format!(
+                "iOS normalized resource smoke did not report playback and cleanup.\nLog: {}",
+                log_path.display()
+            )));
+        }
         writeln!(
             report.stdout,
             "Running iOS native-frame Swift smoke; log: {}",
@@ -851,6 +953,47 @@ mod implementation {
             log_path.display()
         )
         .map_err(output_error)
+    }
+
+    fn stage_test_host_frameworks(
+        host: &Path,
+        frameworks: &Path,
+        tools: &Tools,
+        cancellation: &InterruptDeferral,
+    ) -> Result<(), IosError> {
+        require_directory(host, "built iOS native-frame test host")?;
+        let destination = host.join("Frameworks");
+        prepare_directory(&destination, "iOS native-frame test host Frameworks")?;
+        let names = SMOKE_PLUGINS
+            .iter()
+            .map(|plugin| plugin.spec().framework_name)
+            .chain(FFMPEG_COMPONENTS.iter().map(|(_, name)| *name));
+        for name in names {
+            let component = format!("{name}.framework");
+            let from = frameworks.join(&component);
+            if !from.exists() {
+                continue;
+            }
+            let into = destination.join(component);
+            prepare_directory(&into, "embedded smoke framework")?;
+            for file in [name, "Info.plist", "vesper-plugin-registry.json"] {
+                let input = from.join(file);
+                if input.exists() {
+                    copy_bounded_file(&input, &into.join(file), "embedded smoke framework file")?;
+                }
+            }
+        }
+        let mut sign = Command::new(&tools.codesign);
+        sign.args(["--force", "--deep", "--sign", "-"]).arg(host);
+        ensure_success(
+            run_process(
+                &mut sign,
+                "iOS native-frame simulator host signing",
+                cancellation,
+            )?,
+            "iOS native-frame simulator host signing",
+        )?;
+        Ok(())
     }
 
     fn resolve_simulator_destination(
@@ -1178,19 +1321,6 @@ mod implementation {
             .count()
     }
 
-    fn has_exact_loader_rpath(output: &[u8]) -> bool {
-        output.split(|byte| *byte == b'\n').any(|line| {
-            let Some(offset) = line
-                .trim_ascii()
-                .strip_prefix(b"path @loader_path (offset ")
-                .and_then(|value| value.strip_suffix(b")"))
-            else {
-                return false;
-            };
-            !offset.is_empty() && offset.iter().all(u8::is_ascii_digit)
-        })
-    }
-
     fn output_error(error: io::Error) -> IosError {
         IosError::storage(format!(
             "failed to write iOS native-frame verification output: {error}"
@@ -1234,20 +1364,6 @@ mod implementation {
                     .as_slice(),
             ] {
                 assert!(select_simulator_destination(document).is_err());
-            }
-        }
-
-        #[test]
-        fn loader_rpath_matching_requires_one_exact_otool_record() {
-            assert!(has_exact_loader_rpath(
-                b"    path @loader_path (offset 12)\n"
-            ));
-            for output in [
-                b"path @loader_path/.. (offset 12)\n".as_slice(),
-                b"path @loader_path (offset 12) trailing\n".as_slice(),
-                b"name contains @loader_path\n".as_slice(),
-            ] {
-                assert!(!has_exact_loader_rpath(output));
             }
         }
     }

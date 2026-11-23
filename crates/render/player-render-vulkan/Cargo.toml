@@ -1,0 +1,18 @@
+[package]
+name = "player-render-vulkan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ash = "0.38"
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../plugin/player-plugin-abi" }
+thiserror.workspace = true
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+player-platform-native-frame = { path = "../../platform/common/player-platform-native-frame" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", path = "../../plugin/player-plugin-loader" }
+serde_json.workspace = true

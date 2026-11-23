@@ -11,8 +11,8 @@ use player_model::MediaSource;
 use crate::probe::media_probe_from_input;
 use crate::time::{duration_to_av_timestamp, timestamp_to_duration};
 use crate::{
-    DecodedVideoFrame, MediaProbe, VideoDecodeInfo, VideoDecoderMode, VideoFrameSource,
-    VideoPixelFormat,
+    DecodedVideoFrame, MediaProbe, VideoDecodeInfo, VideoDecodeSource, VideoDecoderMode,
+    VideoFrameSource, VideoPixelFormat,
 };
 
 pub(crate) enum VideoFrameOutput {
@@ -22,27 +22,94 @@ pub(crate) enum VideoFrameOutput {
 
 impl VideoFrameSource {
     pub fn decode_info(&self) -> &VideoDecodeInfo {
-        &self.decode_info
+        &self.decoded.decode_info
     }
 
     pub fn media_probe(&self, source: &MediaSource) -> Result<MediaProbe> {
-        media_probe_from_input(&self.input, source)
+        self.decoded.media_probe(source)
     }
 
     pub fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
-        loop {
-            if let Some(frame) = self.try_receive_frame()? {
+        self.decoded
+            .next_sample()?
+            .map(|(decoded, presentation_time)| {
+                let (pixel_format, width, height, bytes_per_row, bytes) = match &mut self.output {
+                    VideoFrameOutput::DirectYuv420p => (
+                        VideoPixelFormat::Yuv420p,
+                        decoded.width(),
+                        decoded.height(),
+                        decoded.width(),
+                        copy_yuv420p_bytes(&decoded),
+                    ),
+                    VideoFrameOutput::Rgba(scaler) => {
+                        let mut rgba_frame = Video::empty();
+                        scaler
+                            .run(&decoded, &mut rgba_frame)
+                            .context("failed to convert decoded frame to RGBA")?;
+                        (
+                            VideoPixelFormat::Rgba8888,
+                            rgba_frame.width(),
+                            rgba_frame.height(),
+                            rgba_frame.width().saturating_mul(4),
+                            copy_rgba_bytes(&rgba_frame),
+                        )
+                    }
+                };
+                Ok(DecodedVideoFrame {
+                    presentation_time,
+                    width,
+                    height,
+                    bytes_per_row,
+                    pixel_format,
+                    bytes,
+                })
+            })
+            .transpose()
+    }
+
+    pub fn seek_to(&mut self, position: Duration) -> Result<Option<DecodedVideoFrame>> {
+        self.decoded.reset_to(position)?;
+        while let Some(frame) = self.next_frame()? {
+            if frame
+                .presentation_time
+                .saturating_add(self.decoded.fallback_frame_interval)
+                >= position
+            {
                 return Ok(Some(frame));
             }
+        }
+        Ok(None)
+    }
+}
 
+impl VideoDecodeSource {
+    pub(crate) fn media_probe(&self, source: &MediaSource) -> Result<MediaProbe> {
+        media_probe_from_input(&self.input, source)
+    }
+
+    pub(crate) fn next_sample(&mut self) -> Result<Option<(Video, Duration)>> {
+        loop {
+            let mut decoded = Video::empty();
+            match self.decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    let timestamp = decoded
+                        .timestamp()
+                        .or(decoded.pts())
+                        .and_then(|timestamp| timestamp_to_duration(timestamp, self.time_base))
+                        .unwrap_or_else(|| self.fallback_timestamp());
+                    self.decoded_frame_index += 1;
+                    return Ok(Some((decoded, timestamp)));
+                }
+                Err(ffmpeg::Error::Eof) => return Ok(None),
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {}
+                Err(error) => return Err(error).context("failed to receive decoded video frame"),
+            }
             if self.feed_next_packet()? {
                 continue;
             }
-
             if self.end_of_input_sent {
                 return Ok(None);
             }
-
             self.decoder
                 .send_eof()
                 .context("failed to flush video decoder")?;
@@ -50,7 +117,7 @@ impl VideoFrameSource {
         }
     }
 
-    pub fn seek_to(&mut self, position: Duration) -> Result<Option<DecodedVideoFrame>> {
+    pub(crate) fn reset_to(&mut self, position: Duration) -> Result<()> {
         let timestamp = duration_to_av_timestamp(position);
         self.input.seek(timestamp, ..timestamp).with_context(|| {
             format!(
@@ -62,68 +129,7 @@ impl VideoFrameSource {
         self.decoded_frame_index = 0;
         self.end_of_input_sent = false;
         self.fallback_start_time = position;
-
-        loop {
-            let Some(frame) = self.next_frame()? else {
-                return Ok(None);
-            };
-
-            if frame
-                .presentation_time
-                .saturating_add(self.fallback_frame_interval)
-                < position
-            {
-                continue;
-            }
-
-            return Ok(Some(frame));
-        }
-    }
-
-    fn try_receive_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
-        let mut decoded = Video::empty();
-        if self.decoder.receive_frame(&mut decoded).is_err() {
-            return Ok(None);
-        }
-
-        let presentation_time = decoded
-            .timestamp()
-            .or(decoded.pts())
-            .and_then(|timestamp| timestamp_to_duration(timestamp, self.time_base))
-            .unwrap_or_else(|| self.fallback_timestamp());
-        self.decoded_frame_index += 1;
-
-        let (pixel_format, width, height, bytes_per_row, bytes) = match &mut self.output {
-            VideoFrameOutput::DirectYuv420p => (
-                VideoPixelFormat::Yuv420p,
-                decoded.width(),
-                decoded.height(),
-                decoded.width(),
-                copy_yuv420p_bytes(&decoded),
-            ),
-            VideoFrameOutput::Rgba(scaler) => {
-                let mut rgba_frame = Video::empty();
-                scaler
-                    .run(&decoded, &mut rgba_frame)
-                    .context("failed to convert decoded frame to RGBA")?;
-                (
-                    VideoPixelFormat::Rgba8888,
-                    rgba_frame.width(),
-                    rgba_frame.height(),
-                    rgba_frame.width().saturating_mul(4),
-                    copy_rgba_bytes(&rgba_frame),
-                )
-            }
-        };
-
-        Ok(Some(DecodedVideoFrame {
-            presentation_time,
-            width,
-            height,
-            bytes_per_row,
-            pixel_format,
-            bytes,
-        }))
+        Ok(())
     }
 
     fn feed_next_packet(&mut self) -> Result<bool> {

@@ -82,6 +82,24 @@ fn macos_color_requires_hdr_system_playback(
     color.bit_depth.is_some_and(|bit_depth| bit_depth >= 10) || color.is_hdr_transfer()
 }
 
+#[cfg(target_os = "macos")]
+fn is_hdr10_reference_filter_input(stream: &MacosNativeFrameStreamInfo) -> bool {
+    !macos_codec_is_dolby_vision(&stream.packet.codec)
+        && stream
+            .hdr
+            .as_ref()
+            .is_none_or(|hdr| !hdr.is_dolby_vision() && hdr.kind.eq_ignore_ascii_case("hdr10"))
+        && stream.color.as_ref().is_some_and(|color| {
+            color.bit_depth == Some(10)
+                && color.primaries.as_deref() == Some("bt2020")
+                && color.transfer.as_deref().is_some_and(|transfer| {
+                    ["pq", "smpte2084", "st2084"]
+                        .iter()
+                        .any(|value| transfer.eq_ignore_ascii_case(value))
+                })
+        })
+}
+
 pub(crate) struct MacosSourceNormalizerPacketVideoSourceFactory {
     pub(crate) decoder_plugin_path: PathBuf,
     pub(crate) decoder_plugin_reference: PluginReference,
@@ -707,16 +725,70 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
     fn open_video_source(
         &self,
         source: MediaSource,
-        _buffer_capacity: usize,
-        _interrupt_flag: Option<Arc<AtomicBool>>,
+        buffer_capacity: usize,
+        interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
-        let stream_info = self.packet_session.with_session(|session| {
-            macos_native_frame_stream_info_from_source_normalizer(&session.stream_info())
-        })?;
-        if let Some(reason) = macos_hdr_programmable_processing_not_supported_reason(&stream_info) {
+        #[cfg(not(target_os = "macos"))]
+        let _ = (buffer_capacity, interrupt_flag);
+        let packet_info = self.packet_session.stream_info()?;
+        let stream_info = macos_native_frame_stream_info_from_source_normalizer(&packet_info)?;
+        let requires_system_hdr =
+            macos_hdr_programmable_processing_not_supported_reason(&stream_info);
+        let packet_stream_info = &stream_info.packet;
+        let probe = player_backend_ffmpeg::MediaProbe {
+            source: source.clone(),
+            duration: None,
+            bit_rate: None,
+            audio_streams: 0,
+            video_streams: 1,
+            best_video: Some(player_backend_ffmpeg::VideoStreamProbe {
+                index: packet_stream_info.stream_index,
+                codec: packet_stream_info.codec.clone(),
+                width: packet_stream_info.width.unwrap_or_default(),
+                height: packet_stream_info.height.unwrap_or_default(),
+                frame_rate: packet_stream_info.frame_rate,
+            }),
+            best_audio: None,
+        };
+        #[cfg(target_os = "macos")]
+        if self.frame_processor_paths.is_empty()
+            && (requires_system_hdr.is_none()
+                || (is_hdr10_reference_filter_input(&stream_info)
+                    && std::env::var_os("VESPER_MACOS_COLOR_FILTER_METALLIB")
+                        .is_some_and(|path| std::path::Path::new(&path).is_absolute())))
+            && let Some(decoder) = crate::native_media::open_native_decoder(
+                &self.decoder_plugin_path,
+                packet_stream_info,
+            )?
+            && let Some(stream) = self.packet_session.take_native()
+        {
+            let stream_index = u32::try_from(packet_stream_info.stream_index)?;
+            let presenter = MacosMetalLayerPresenter::new(self.video_surface)
+                .map_err(|error| anyhow::anyhow!(error.message().to_owned()))?;
+            let packets =
+                player_platform_native_frame::NormalizedVideoPackets::new(stream, stream_index);
+            let source = crate::native_media::MacosNativeMediaSource::new(
+                decoder,
+                packets,
+                presenter,
+                buffer_capacity,
+                interrupt_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
+            )?;
+            return Ok(DesktopVideoSourceBootstrap {
+                source: Box::new(source),
+                decode_info: BackendVideoDecodeInfo {
+                    selected_mode: BackendVideoDecoderMode::Hardware,
+                    hardware_available: true,
+                    hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+                    decoder_name: "player-decoder-videotoolbox (native plugin ABI)".to_owned(),
+                    fallback_reason: None,
+                },
+                probe,
+            });
+        }
+        if let Some(reason) = requires_system_hdr {
             anyhow::bail!("{reason}");
         }
-        let packet_stream_info = &stream_info.packet;
         let registry = PluginRegistry::load_native_development([&self.decoder_plugin_path])
             .with_context(|| {
                 format!(
@@ -784,21 +856,6 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             }),
             fallback_reason: None,
         };
-        let probe = player_backend_ffmpeg::MediaProbe {
-            source: source.clone(),
-            duration: None,
-            bit_rate: None,
-            audio_streams: 0,
-            video_streams: 1,
-            best_video: Some(player_backend_ffmpeg::VideoStreamProbe {
-                index: packet_stream_info.stream_index,
-                codec: packet_stream_info.codec.clone(),
-                width: packet_stream_info.width.unwrap_or_default(),
-                height: packet_stream_info.height.unwrap_or_default(),
-                frame_rate: packet_stream_info.frame_rate,
-            }),
-            best_audio: None,
-        };
         let outstanding_frames = Arc::new(AtomicUsize::new(0));
         let session = Arc::new(Mutex::new(session));
         let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
@@ -862,7 +919,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
     fn open_video_source(
         &self,
         source: MediaSource,
-        _buffer_capacity: usize,
+        buffer_capacity: usize,
         interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
         let shutdown_requested = interrupt_flag
@@ -872,10 +929,41 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         let probe = backend
             .probe_with_interrupt(source.clone(), Some(shutdown_requested.clone()))
             .context("failed to probe media source for native-frame decoder")?;
+        #[cfg(target_os = "macos")]
+        let source_kind_is_local = source.kind() == player_model::MediaSourceKind::Local;
+        #[cfg(not(target_os = "macos"))]
+        let _ = buffer_capacity;
         let packet_source = backend
             .open_video_packet_source_with_interrupt(source, Some(shutdown_requested.clone()))
             .context("failed to open FFmpeg packet source for native-frame decoder")?;
         let stream_info = packet_source.stream_info().clone();
+        #[cfg(target_os = "macos")]
+        if source_kind_is_local
+            && self.frame_processor_paths.is_empty()
+            && let Some(decoder) =
+                crate::native_media::open_native_decoder(&self.plugin_path, &stream_info)?
+        {
+            let presenter = MacosMetalLayerPresenter::new(self.video_surface)
+                .map_err(|error| anyhow::anyhow!(error.message().to_owned()))?;
+            let source = crate::native_media::MacosNativeMediaSource::new(
+                decoder,
+                crate::native_media::FfmpegPackets(packet_source),
+                presenter,
+                buffer_capacity,
+                shutdown_requested,
+            )?;
+            return Ok(DesktopVideoSourceBootstrap {
+                source: Box::new(source),
+                decode_info: BackendVideoDecodeInfo {
+                    selected_mode: BackendVideoDecoderMode::Hardware,
+                    hardware_available: true,
+                    hardware_backend: Some(VIDEOTOOLBOX_BACKEND_NAME.to_owned()),
+                    decoder_name: "player-decoder-videotoolbox (native plugin ABI)".to_owned(),
+                    fallback_reason: None,
+                },
+                probe,
+            });
+        }
         if macos_codec_requires_source_aware_hdr_probe(&stream_info.codec) {
             anyhow::bail!(
                 "{HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED}: HEVC-family direct FFmpeg native-frame sources need source-aware HDR/10-bit metadata before SDK-managed processing; use SourceNormalizer packet native-frame for SDR HEVC or system playback for HDR/Dolby Vision"

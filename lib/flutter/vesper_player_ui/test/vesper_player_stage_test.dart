@@ -1129,8 +1129,6 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async =>
       VesperPlatformCreateResult(
         playerId: 'stage-test-player',

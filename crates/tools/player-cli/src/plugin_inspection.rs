@@ -1,32 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::collections::BTreeMap;
 
 use player_cli::{
     PLUGIN_CATALOG_MIGRATION_VERSION, PLUGIN_CATALOG_SCHEMA_VERSION, PluginArtifactDescriptor,
-    PluginArtifactTransport, PluginCapabilityDescriptor, PluginDescriptor, PluginProjectManifest,
-    PluginProvision, PluginRequirement,
+    PluginArtifactTransport, PluginDescriptor, PluginProjectManifest, PluginProvision,
+    PluginRequirement,
 };
-use player_plugin::{
-    AssemblyMode, AudioPitchMode, AudioPlaybackPolicy, AudioProcessorCapabilities,
-    AudioProcessorError, AudioProcessorSessionConfig, BenchmarkEvent, BenchmarkEventBatch,
-    BenchmarkSinkError, CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind,
-    DecoderFrameFormat, DecoderPcmFrame, DecoderPcmFrameMetadata, DecoderPcmSampleLayout,
-    DownloadMetadata, PipelineEvent, PipelineEventHookError, PluginReference, PluginTransport,
-    ProcessorError, ProcessorProgress,
-};
-use player_plugin_abi::{
-    AUDIO_PROCESSOR_INTERFACE_ID, BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID,
-    NATIVE_DECODER_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID,
-    POST_DOWNLOAD_PROCESSOR_INTERFACE_ID, SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
-    SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID, VesperInterfaceId,
-};
-use player_plugin_loader::{
-    LoadedNativePlugin, PluginContractDiagnosticKind, PluginInterfaceState, PluginLoadError,
-};
-use player_plugin_wasm_host::{
-    WASM_PLUGIN_WIT_INTERFACE_MAJOR, WASM_PLUGIN_WIT_INTERFACE_MINOR, WasmBenchmarkSinkSession,
-    WasmPipelineEventHookSession, WasmPluginHostError, WasmPluginRuntime, WasmPluginRuntimeError,
-};
+use player_plugin_abi as abi;
+use player_plugin_loader::native::{DEFAULT_AUDIO_CALL_BUDGET, LoadError, NativePlugin};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -287,7 +267,7 @@ pub fn inspect_manifest(
     }
 
     if transport == Some(PluginArtifactTransport::Wasm) {
-        validate_wasm_capabilities(descriptor, &mut report);
+        report.compatibility_failure("plugin.transport", "WASM plugins have been retired");
     }
     report
 }
@@ -301,700 +281,164 @@ pub fn inspect_native_plugin(
     if report.outcome() != PluginInspectionOutcome::Passed {
         return report;
     }
+    inspect_loaded_native_plugin(descriptor, artifact, &mut report);
+    report
+}
 
-    let loaded = match LoadedNativePlugin::load_development(artifact) {
-        Ok(loaded) => loaded,
+#[allow(
+    unsafe_code,
+    reason = "the dedicated plugin worker is the native module boundary"
+)]
+fn inspect_loaded_native_plugin(
+    descriptor: &PluginDescriptor,
+    artifact: &std::path::Path,
+    report: &mut PluginInspectionReport,
+) {
+    // SAFETY: the operator explicitly selected the native library. This runs
+    // inside the bounded inspection worker, with no media or player session.
+    let plugin = match unsafe { NativePlugin::load(artifact) } {
+        Ok(plugin) => plugin,
+        Err(error @ (LoadError::Entry(_) | LoadError::UnsupportedHost)) => {
+            report.compatibility_failure("runtime.load", error.to_string());
+            return;
+        }
         Err(error) => {
-            classify_native_load_error(&mut report, &error);
-            return report;
+            report.conformance_failure("runtime.load", error.to_string());
+            return;
         }
     };
     report.conformant = Some(true);
-    report.runtime_plugin_id = Some(loaded.plugin_id().to_owned());
-    report.runtime_plugin_name = Some(loaded.plugin_name().to_owned());
-    report.passed("runtime.load", "the native plugin root loaded successfully");
-
-    if loaded.plugin_id() == descriptor.plugin.id {
-        report.passed(
-            "runtime.identity",
-            "the runtime plugin identity matches the manifest",
-        );
-    } else {
+    report.runtime_plugin_id = Some(plugin.id().to_owned());
+    report.runtime_plugin_name = Some(plugin.name().to_owned());
+    report.passed(
+        "runtime.load",
+        "the native plugin ABI native root loaded successfully",
+    );
+    if plugin.id() != descriptor.plugin.id {
         report.conformance_failure(
             "runtime.identity",
             format!(
                 "manifest plugin '{}' does not match runtime plugin '{}'",
                 descriptor.plugin.id,
-                loaded.plugin_id()
+                plugin.id()
             ),
         );
+        return;
     }
+    report.passed(
+        "runtime.identity",
+        "the runtime plugin identity matches the manifest",
+    );
 
-    for diagnostic in loaded.diagnostics() {
-        let id = diagnostic.index.map_or_else(
-            || "runtime.interface".to_owned(),
-            |index| format!("runtime.interface.{index}"),
-        );
-        match diagnostic.kind {
-            PluginContractDiagnosticKind::Compatibility => {
-                report.compatibility_failure(id, diagnostic.message.clone())
-            }
-            PluginContractDiagnosticKind::ContractViolation => {
-                report.conformance_failure(id, diagnostic.message.clone())
-            }
-        }
-    }
-
-    report.interfaces = loaded
-        .interfaces()
-        .iter()
-        .map(|interface| PluginRuntimeInterfaceReport {
-            interface_id: Uuid::from_bytes(interface.metadata.interface_id).to_string(),
-            instance_id: interface.metadata.instance_id.clone(),
-            major: interface.metadata.major,
-            minor: interface.metadata.minor,
-            state: match interface.state {
-                PluginInterfaceState::Available => PluginRuntimeInterfaceState::Available,
-                PluginInterfaceState::Unavailable => PluginRuntimeInterfaceState::Unavailable,
-                PluginInterfaceState::Unknown => PluginRuntimeInterfaceState::Unknown,
-            },
-        })
-        .collect();
-    compare_declared_interfaces(descriptor, &mut report);
-
-    if operation == PluginInspectionOperation::Check {
-        for capability in &descriptor.capabilities {
-            check_native_capability(&loaded, descriptor, capability, &mut report);
-        }
-    }
-    drop(loaded);
-    report
-}
-
-pub fn inspect_wasm_plugin(
-    descriptor: &PluginDescriptor,
-    component_bytes: &[u8],
-    operation: PluginInspectionOperation,
-) -> Result<PluginInspectionReport, WasmPluginRuntimeError> {
-    let mut report = inspect_manifest(descriptor, operation, Some(PluginArtifactTransport::Wasm));
-    if report.outcome() != PluginInspectionOutcome::Passed {
-        return Ok(report);
-    }
-
-    let runtime = WasmPluginRuntime::new()?;
-    report.conformant = Some(true);
-    let mut seen = BTreeSet::new();
-    for capability in &descriptor.capabilities {
-        let interface_id = match Uuid::parse_str(&capability.interface_id) {
-            Ok(interface_id) => interface_id,
-            Err(error) => {
-                report.conformance_failure(
-                    capability_check_id("wasm.export", capability),
-                    format!("invalid capability UUID reached the WASM host: {error}"),
-                );
-                continue;
-            }
-        };
-        let key = (interface_id, capability.instance_id.clone());
-        if !seen.insert(key) {
-            continue;
-        }
-
-        if interface_id == interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID) {
-            match WasmPipelineEventHookSession::from_component_bytes(&runtime, component_bytes) {
-                Ok(mut session) => {
-                    report
-                        .interfaces
-                        .push(runtime_interface_from_capability(capability));
-                    report.passed(
-                        capability_check_id("wasm.export", capability),
-                        "the event-hook component export instantiated successfully",
-                    );
-                    if operation == PluginInspectionOperation::Check {
-                        match session.on_event(&synthetic_pipeline_event()) {
-                            Ok(_) => report.passed(
-                                capability_check_id("wasm.call", capability),
-                                "the event-hook export accepted a bounded synthetic call",
-                            ),
-                            Err(error) => classify_wasm_call_error(
-                                &mut report,
-                                capability_check_id("wasm.call", capability),
-                                error,
-                            ),
-                        }
-                    }
-                }
-                Err(error) => report.conformance_failure(
-                    capability_check_id("wasm.export", capability),
-                    error.to_string(),
-                ),
-            }
-        } else if interface_id == interface_uuid(BENCHMARK_SINK_INTERFACE_ID) {
-            match WasmBenchmarkSinkSession::from_component_bytes(&runtime, component_bytes) {
-                Ok(mut session) => {
-                    report
-                        .interfaces
-                        .push(runtime_interface_from_capability(capability));
-                    report.passed(
-                        capability_check_id("wasm.export", capability),
-                        "the benchmark-sink component export instantiated successfully",
-                    );
-                    if operation == PluginInspectionOperation::Check {
-                        let batch = synthetic_benchmark_batch();
-                        match session.on_event_batch(&batch) {
-                            Ok(_) => match session.flush() {
-                                Ok(_) => report.passed(
-                                    capability_check_id("wasm.call", capability),
-                                    "the benchmark export accepted a batch and flushed",
-                                ),
-                                Err(error) => classify_wasm_call_error(
-                                    &mut report,
-                                    capability_check_id("wasm.flush", capability),
-                                    error,
-                                ),
-                            },
-                            Err(error) => classify_wasm_call_error(
-                                &mut report,
-                                capability_check_id("wasm.call", capability),
-                                error,
-                            ),
-                        }
-                    }
-                }
-                Err(error) => report.conformance_failure(
-                    capability_check_id("wasm.export", capability),
-                    error.to_string(),
-                ),
-            }
-        }
-    }
-    Ok(report)
-}
-
-fn classify_native_load_error(report: &mut PluginInspectionReport, error: &PluginLoadError) {
-    match error {
-        PluginLoadError::NativeContract(source)
-            if source.diagnostic_kind() == PluginContractDiagnosticKind::Compatibility =>
-        {
-            report.compatibility_failure("runtime.load", error.to_string());
-        }
-        PluginLoadError::OpenLibrary { .. }
-        | PluginLoadError::ResolveEntrySymbol { .. }
-        | PluginLoadError::NativeContract(_) => {
-            report.conformance_failure("runtime.load", error.to_string());
-        }
-    }
-}
-
-fn compare_declared_interfaces(descriptor: &PluginDescriptor, report: &mut PluginInspectionReport) {
     let mut declared = BTreeMap::new();
     for capability in &descriptor.capabilities {
-        match Uuid::parse_str(&capability.interface_id) {
-            Ok(interface_id) => {
-                declared.insert(
-                    (interface_id, capability.instance_id.as_str()),
-                    (capability.interface_major, capability.interface_minor),
-                );
-            }
-            Err(error) => report.conformance_failure(
+        let Ok(uuid) = Uuid::parse_str(&capability.interface_id) else {
+            report.conformance_failure("runtime.interface-set", "invalid manifest interface UUID");
+            continue;
+        };
+        if declared.insert(uuid, capability).is_some() {
+            report.conformance_failure(
                 "runtime.interface-set",
-                format!("invalid manifest capability UUID reached inspection: {error}"),
-            ),
+                format!("native plugin ABI exposes one table per interface UUID, but {uuid} is declared more than once"),
+            );
         }
     }
-
-    let runtime_interfaces = report.interfaces.clone();
-    let mut runtime = BTreeMap::new();
-    for interface in &runtime_interfaces {
-        let interface_id = match Uuid::parse_str(&interface.interface_id) {
-            Ok(interface_id) => interface_id,
+    for &id in plugin.interface_ids() {
+        let uuid = Uuid::from_bytes(id.bytes);
+        let declared_interface = declared.remove(&uuid);
+        if declared_interface.is_none() {
+            report.conformance_failure(
+                "runtime.interface-set",
+                format!("native interface {uuid} is missing from the manifest"),
+            );
+        }
+        let state = match plugin.inspect_interface(id) {
+            Ok(true) => PluginRuntimeInterfaceState::Available,
+            Ok(false) => PluginRuntimeInterfaceState::Unknown,
             Err(error) => {
-                report.conformance_failure(
-                    "runtime.interface-set",
-                    format!("runtime interface UUID cannot be parsed: {error}"),
-                );
-                continue;
+                report.conformance_failure(format!("runtime.interface.{uuid}"), error.to_string());
+                PluginRuntimeInterfaceState::Unavailable
             }
         };
-        runtime.insert(
-            (interface_id, interface.instance_id.as_str()),
-            (interface.major, interface.minor, &interface.state),
-        );
-    }
-
-    for ((interface_id, instance_id), (major, minor)) in &declared {
-        match runtime.get(&(*interface_id, *instance_id)) {
-            None => report.conformance_failure(
-                "runtime.interface-set",
-                format!(
-                    "declared capability {interface_id}:{instance_id} is missing from the native root"
-                ),
-            ),
-            Some((runtime_major, runtime_minor, _))
-                if (*runtime_major, *runtime_minor) != (*major, *minor) =>
-            {
-                report.conformance_failure(
-                    "runtime.interface-version",
-                    format!(
-                        "declared capability {interface_id}:{instance_id} uses {major}.{minor}, but the native root reports {runtime_major}.{runtime_minor}"
-                    ),
-                );
-            }
-            Some(_) => {}
-        }
-    }
-    for (interface_id, instance_id) in runtime.keys() {
-        if !declared.contains_key(&(*interface_id, *instance_id)) {
-            report.conformance_failure(
-                "runtime.interface-set",
-                format!(
-                    "native root capability {interface_id}:{instance_id} is not declared by the manifest"
-                ),
-            );
-        }
-    }
-    if report.checks.iter().all(|check| {
-        check.id != "runtime.interface-set" || check.status != PluginInspectionCheckStatus::Failed
-    }) {
-        report.passed(
-            "runtime.interface-set",
-            "the native root interface set matches the manifest",
-        );
-    }
-}
-
-fn check_native_capability(
-    loaded: &LoadedNativePlugin,
-    descriptor: &PluginDescriptor,
-    capability: &PluginCapabilityDescriptor,
-    report: &mut PluginInspectionReport,
-) {
-    let interface_id = match Uuid::parse_str(&capability.interface_id) {
-        Ok(interface_id) => interface_id,
-        Err(error) => {
-            report.conformance_failure(
-                capability_check_id("native.call", capability),
-                format!("invalid capability UUID reached conformance: {error}"),
-            );
-            return;
-        }
-    };
-    let reference = match PluginReference::new(
-        descriptor.plugin.id.clone(),
-        Some(capability.instance_id.clone()),
-        PluginTransport::Native,
-    ) {
-        Ok(reference) => reference,
-        Err(error) => {
-            report.conformance_failure(
-                capability_check_id("native.call", capability),
-                error.to_string(),
-            );
-            return;
-        }
-    };
-    let check_id = capability_check_id("native.call", capability);
-
-    if interface_id == interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID) {
-        match loaded.resolve_pipeline_event_hook(&reference) {
-            Ok(hook) => match hook.on_event(&synthetic_pipeline_event()) {
-                Ok(_) => report.passed(check_id, "event hook completed a bounded synthetic call"),
-                Err(
-                    PipelineEventHookError::InvalidInput(message)
-                    | PipelineEventHookError::Rejected(message)
-                    | PipelineEventHookError::Failed(message),
-                ) => report.warning(
+        if report.operation == PluginInspectionOperation::Check
+            && state == PluginRuntimeInterfaceState::Available
+            && id == abi::VESPER_AUDIO_PROCESSOR_ID
+        {
+            let check_id = format!("native.call.{uuid}");
+            match exercise_native_fixed_block(&plugin) {
+                Ok(true) => report.passed(
                     check_id,
-                    format!("event hook returned a valid author failure: {message}"),
+                    "audio processor completed a split-buffer PCM block and flushed",
+                ),
+                Ok(false) => report.warning(
+                    check_id,
+                    "buffered-only audio processor requires a playback fixture",
                 ),
                 Err(error) => report.conformance_failure(check_id, error.to_string()),
-            },
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
-        }
-    } else if interface_id == interface_uuid(BENCHMARK_SINK_INTERFACE_ID) {
-        match loaded.resolve_benchmark_sink(&reference) {
-            Ok(sink) => {
-                let batch = synthetic_benchmark_batch();
-                match sink.on_event_batch(&batch) {
-                    Ok(_) => match sink.flush() {
-                        Ok(_) => {
-                            report.passed(check_id, "benchmark sink accepted a batch and flushed")
-                        }
-                        Err(BenchmarkSinkError::SinkFailed(message)) => report.warning(
-                            check_id,
-                            format!("benchmark sink returned a valid author failure: {message}"),
-                        ),
-                        Err(error) => report.conformance_failure(check_id, error.to_string()),
-                    },
-                    Err(BenchmarkSinkError::SinkFailed(message)) => report.warning(
-                        check_id,
-                        format!("benchmark sink returned a valid author failure: {message}"),
-                    ),
-                    Err(error) => report.conformance_failure(check_id, error.to_string()),
-                }
             }
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
         }
-    } else if interface_id == interface_uuid(POST_DOWNLOAD_PROCESSOR_INTERFACE_ID) {
-        check_native_post_download(loaded, &reference, check_id, report);
-    } else if interface_id == interface_uuid(NATIVE_DECODER_INTERFACE_ID) {
-        match loaded.resolve_native_decoder(&reference) {
-            Ok(factory) => {
-                let _ = factory.name();
-                let _ = factory.capabilities();
-                let _ = factory.native_requirements();
-                report.passed(check_id, "decoder factory metadata is readable");
-            }
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
-        }
-    } else if interface_id == interface_uuid(FRAME_PROCESSOR_INTERFACE_ID) {
-        match loaded.resolve_frame_processor(&reference) {
-            Ok(factory) => {
-                let _ = factory.name();
-                let _ = factory.capabilities();
-                report.passed(check_id, "frame-processor factory metadata is readable");
-            }
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
-        }
-    } else if interface_id == interface_uuid(AUDIO_PROCESSOR_INTERFACE_ID) {
-        check_native_audio_processor(loaded, &reference, check_id, report);
-    } else if interface_id == interface_uuid(SOURCE_NORMALIZER_PACKET_INTERFACE_ID) {
-        match loaded.resolve_source_packet(&reference) {
-            Ok(factory) => {
-                let _ = factory.name();
-                let _ = factory.packet_capabilities();
-                report.passed(check_id, "packet normalizer factory metadata is readable");
-            }
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
-        }
-    } else if interface_id == interface_uuid(SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID) {
-        match loaded.resolve_source_resource(&reference) {
-            Ok(factory) => {
-                let _ = factory.name();
-                let _ = factory.resource_capabilities();
-                report.passed(check_id, "resource normalizer factory metadata is readable");
-            }
-            Err(error) => report.conformance_failure(check_id, error.to_string()),
-        }
-    } else {
-        report.compatibility_failure(
-            check_id,
-            format!("host does not implement conformance checks for interface {interface_id}"),
-        );
+        report.interfaces.push(PluginRuntimeInterfaceReport {
+            interface_id: uuid.to_string(),
+            instance_id: declared_interface.map_or_else(String::new, |cap| cap.instance_id.clone()),
+            major: abi::VESPER_PLUGIN_ABI_MAJOR,
+            minor: plugin.abi_minor(),
+            state,
+        });
     }
-}
-
-fn check_native_audio_processor(
-    loaded: &LoadedNativePlugin,
-    reference: &PluginReference,
-    check_id: String,
-    report: &mut PluginInspectionReport,
-) {
-    let factory = match loaded.resolve_audio_processor(reference) {
-        Ok(factory) => factory,
-        Err(error) => {
-            report.conformance_failure(check_id, error.to_string());
-            return;
-        }
-    };
-    let capabilities = factory.capabilities();
-    let Some(format) = audio_check_format(&capabilities) else {
-        report.conformance_failure(check_id, "audio processor does not accept F32 or S16 PCM");
-        return;
-    };
-    let policy = audio_check_policy(&capabilities);
-    if !capabilities.supports_playback_policy(policy) {
+    for uuid in declared.keys() {
         report.conformance_failure(
-            check_id,
-            "audio processor does not expose a usable playback policy",
-        );
-        return;
-    }
-
-    let mut metadata = DecoderPcmFrameMetadata::audio(
-        "vesper-check-pcm",
-        format.clone(),
-        48_000,
-        1,
-        DecoderPcmSampleLayout::Interleaved,
-        64,
-    );
-    metadata.pts_us = Some(1_000);
-    metadata.duration_us = Some(1_333);
-    metadata.discontinuity = true;
-    let bytes_per_sample = if format == DecoderFrameFormat::F32 {
-        size_of::<f32>()
-    } else {
-        size_of::<i16>()
-    };
-    let frame = DecoderPcmFrame {
-        metadata: metadata.clone(),
-        data: vec![0; 64 * bytes_per_sample],
-    };
-    let config = AudioProcessorSessionConfig {
-        processor_index: 0,
-        input_metadata: metadata,
-        playback_policy: policy,
-        max_in_flight_frames: Some(1),
-    };
-
-    match exercise_native_audio_processor(factory.as_ref(), &config, policy, frame) {
-        Ok(()) => report.passed(
-            check_id,
-            "audio processor completed bounded PCM configure/process/flush/close",
-        ),
-        Err(AudioProcessorError::AbiViolation(message))
-        | Err(AudioProcessorError::PayloadCodec(message)) => {
-            report.conformance_failure(check_id, message)
-        }
-        Err(error) => report.warning(
-            check_id,
-            format!("audio processor returned a valid author failure: {error}"),
-        ),
-    }
-}
-
-fn audio_check_format(capabilities: &AudioProcessorCapabilities) -> Option<DecoderFrameFormat> {
-    [DecoderFrameFormat::F32, DecoderFrameFormat::S16]
-        .into_iter()
-        .find(|format| capabilities.supports_input_format(format))
-}
-
-fn audio_check_policy(capabilities: &AudioProcessorCapabilities) -> AudioPlaybackPolicy {
-    let pitch_mode = capabilities
-        .pitch_modes
-        .first()
-        .copied()
-        .unwrap_or(AudioPitchMode::FollowRate);
-    let normal = AudioPlaybackPolicy {
-        playback_rate: 1.0,
-        pitch_mode,
-    };
-    if capabilities.supports_playback_policy(normal) {
-        return normal;
-    }
-    AudioPlaybackPolicy {
-        playback_rate: capabilities
-            .playback_rate_min
-            .or(capabilities.playback_rate_max)
-            .unwrap_or(1.0),
-        pitch_mode,
-    }
-}
-
-fn exercise_native_audio_processor(
-    factory: &dyn player_plugin::AudioProcessorPluginFactory,
-    config: &AudioProcessorSessionConfig,
-    policy: AudioPlaybackPolicy,
-    frame: DecoderPcmFrame,
-) -> Result<(), AudioProcessorError> {
-    let mut session = factory.open_session(config)?;
-    let operation_result = (|| {
-        session.configure(policy)?;
-        session.process(frame)?;
-        session.flush()
-    })();
-    let close_result = session.close();
-    operation_result.and(close_result)
-}
-
-fn check_native_post_download(
-    loaded: &LoadedNativePlugin,
-    reference: &PluginReference,
-    check_id: String,
-    report: &mut PluginInspectionReport,
-) {
-    let processor = match loaded.resolve_post_download(reference) {
-        Ok(processor) => processor,
-        Err(error) => {
-            report.conformance_failure(check_id, error.to_string());
-            return;
-        }
-    };
-    let capabilities = processor.capabilities();
-    if !capabilities
-        .supported_input_formats
-        .contains(&ContentFormatKind::SingleFile)
-    {
-        report.passed(check_id, "post-download capability metadata is readable");
-        return;
-    }
-    let directory = match tempfile::tempdir() {
-        Ok(directory) => directory,
-        Err(error) => {
-            report
-                .conformance_failure(check_id, format!("failed to create check fixture: {error}"));
-            return;
-        }
-    };
-    let input_path = directory.path().join("input.bin");
-    if let Err(error) = fs::write(&input_path, []) {
-        report.conformance_failure(check_id, format!("failed to write check fixture: {error}"));
-        return;
-    }
-    let input = CompletedDownloadInfo {
-        asset_id: "vesper-check-asset".to_owned(),
-        task_id: Some("vesper-check-task".to_owned()),
-        content_format: CompletedContentFormat::SingleFile { path: input_path },
-        metadata: DownloadMetadata::default(),
-        streams: Vec::new(),
-        assembly_mode: AssemblyMode::Single,
-    };
-    let output_path = directory.path().join("output.bin");
-    match processor.process(&input, &output_path, &NoopProgress) {
-        Ok(_) => report.passed(
-            check_id,
-            "post-download processor completed a bounded fixture",
-        ),
-        Err(
-            ProcessorError::UnsupportedFormat(_)
-            | ProcessorError::UnsupportedDynamicStream { .. }
-            | ProcessorError::MuxFailed(_)
-            | ProcessorError::OutputPath(_)
-            | ProcessorError::Cancelled,
-        ) => report.warning(
-            check_id,
-            "post-download processor returned a valid domain failure for the fixture",
-        ),
-        Err(error) => report.conformance_failure(check_id, error.to_string()),
-    }
-}
-
-fn validate_wasm_capabilities(descriptor: &PluginDescriptor, report: &mut PluginInspectionReport) {
-    let event_hook = interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID);
-    let benchmark_sink = interface_uuid(BENCHMARK_SINK_INTERFACE_ID);
-    let mut per_interface = BTreeMap::<Uuid, usize>::new();
-    for capability in &descriptor.capabilities {
-        let interface_id = match Uuid::parse_str(&capability.interface_id) {
-            Ok(interface_id) => interface_id,
-            Err(error) => {
-                report.conformance_failure(
-                    "transport.capability",
-                    format!("invalid capability UUID reached transport validation: {error}"),
-                );
-                continue;
-            }
-        };
-        let supported = interface_id == event_hook || interface_id == benchmark_sink;
-        if !supported {
-            report.compatibility_failure(
-                "transport.capability",
-                format!("WASM transport does not support interface {interface_id}"),
-            );
-        } else if capability.interface_major != WASM_PLUGIN_WIT_INTERFACE_MAJOR
-            || capability.interface_minor != WASM_PLUGIN_WIT_INTERFACE_MINOR
-        {
-            report.compatibility_failure(
-                "transport.capability",
-                format!(
-                    "WASM transport uses fixed WIT interface version {WASM_PLUGIN_WIT_INTERFACE_MAJOR}.{WASM_PLUGIN_WIT_INTERFACE_MINOR}, but interface {interface_id} declares {}.{}",
-                    capability.interface_major, capability.interface_minor
-                ),
-            );
-        }
-        let count = per_interface.entry(interface_id).or_default();
-        *count += 1;
-        if *count > 1 {
-            report.compatibility_failure(
-                "transport.capability",
-                format!(
-                    "WASM transport supports one component export for interface {interface_id}, but the manifest declares multiple instances"
-                ),
-            );
-        }
-    }
-    if report.compatible {
-        report.passed(
-            "transport.capability",
-            "all declared capabilities are supported by the WASM transport",
+            "runtime.interface-set",
+            format!("declared interface {uuid} is missing from the native root"),
         );
     }
 }
 
-fn classify_wasm_call_error(
-    report: &mut PluginInspectionReport,
-    check_id: String,
-    error: WasmPluginHostError,
-) {
-    match error {
-        WasmPluginHostError::GuestInvalidInput(message)
-        | WasmPluginHostError::Rejected(message)
-        | WasmPluginHostError::PluginFailed(message) => report.warning(
-            check_id,
-            format!("WASM plugin returned a valid author failure: {message}"),
-        ),
-        other => report.conformance_failure(check_id, other.to_string()),
+fn exercise_native_fixed_block(plugin: &NativePlugin) -> player_plugin::author::PluginResult<bool> {
+    use player_plugin::author::{AudioBlock, AudioBufferMut, AudioBufferView, AudioTime};
+    use std::num::NonZeroU16;
+
+    let factory = plugin.audio_processor(DEFAULT_AUDIO_CALL_BUDGET)?;
+    if !factory.capabilities().fixed_block {
+        return Ok(false);
     }
-}
-
-fn runtime_interface_from_capability(
-    capability: &PluginCapabilityDescriptor,
-) -> PluginRuntimeInterfaceReport {
-    PluginRuntimeInterfaceReport {
-        interface_id: capability.interface_id.clone(),
-        instance_id: capability.instance_id.clone(),
-        major: capability.interface_major,
-        minor: capability.interface_minor,
-        state: PluginRuntimeInterfaceState::Available,
-    }
-}
-
-fn capability_check_id(prefix: &str, capability: &PluginCapabilityDescriptor) -> String {
-    format!(
-        "{prefix}.{}.{}",
-        capability.interface_id, capability.instance_id
-    )
-}
-
-fn interface_uuid(interface_id: VesperInterfaceId) -> Uuid {
-    Uuid::from_bytes(interface_id.0)
-}
-
-fn synthetic_pipeline_event() -> PipelineEvent {
-    PipelineEvent {
-        run_id: "vesper-check-run".to_owned(),
-        session_id: "vesper-check-session".to_owned(),
-        platform: std::env::consts::OS.to_owned(),
-        protocol: None,
-        event_name: "plugin.conformance".to_owned(),
-        timestamp_ns: 0,
-        thread: None,
-        resource_identity: Some("vesper-check:opaque-resource".to_owned()),
-        attributes: BTreeMap::new(),
-        diagnostic: None,
-    }
-}
-
-fn synthetic_benchmark_batch() -> BenchmarkEventBatch {
-    BenchmarkEventBatch {
-        events: vec![BenchmarkEvent {
-            run_id: "vesper-check-run".to_owned(),
-            session_id: "vesper-check-session".to_owned(),
-            platform: std::env::consts::OS.to_owned(),
-            source_protocol: None,
-            event_name: "plugin.conformance".to_owned(),
-            timestamp_ns: 0,
-            elapsed_ns: 0,
-            thread: None,
-            attributes: BTreeMap::new(),
-        }],
-    }
-}
-
-struct NoopProgress;
-
-impl ProcessorProgress for NoopProgress {
-    fn on_progress(&self, _ratio: f32) {}
+    let channels = NonZeroU16::new(2).ok_or(player_plugin::author::PluginError::Contract(
+        "invalid probe channel count",
+    ))?;
+    let format = abi::VesperAudioFormat {
+        struct_size: std::mem::size_of::<abi::VesperAudioFormat>() as u32,
+        sample_format: abi::VESPER_SAMPLE_F32_INTERLEAVED,
+        format_id: 1,
+        sample_rate: 48_000,
+        channels: channels.get(),
+        max_block_frames: 480,
+        ..Default::default()
+    };
+    const PROBE_EPOCH: u64 = 1;
+    let mut session = factory.open(format, b"{}")?.processor;
+    session.set_playback_policy(1.0, abi::VESPER_PITCH_PRESERVE, PROBE_EPOCH)?;
+    let input = [0.25; 960];
+    let mut output = [0.0; 960];
+    session.process_block(AudioBlock::Split {
+        input: AudioBufferView::interleaved(
+            channels,
+            &input,
+            AudioTime {
+                pts_us: 0,
+                rate_epoch: PROBE_EPOCH,
+            },
+        )?,
+        output: AudioBufferMut::interleaved(channels, &mut output)?,
+    })?;
+    session.flush()?;
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use player_cli::{
+        PluginCapabilityDescriptor, PluginCompatibilityDescriptor, PluginIdentityDescriptor,
+        PluginStability,
     };
-
-    use player_cli::{PluginCompatibilityDescriptor, PluginIdentityDescriptor, PluginStability};
 
     use super::*;
 
@@ -1011,7 +455,7 @@ mod tests {
             },
             compatibility: PluginCompatibilityDescriptor {
                 host_sdk: format!("={}", env!("CARGO_PKG_VERSION")),
-                abi_major: 1,
+                abi_major: abi::VESPER_PLUGIN_ABI_MAJOR,
                 abi_minor_min: 0,
                 abi_minor_max: 0,
             },
@@ -1029,196 +473,10 @@ mod tests {
     }
 
     #[test]
-    fn wasm_call_classification_does_not_label_local_validation_as_author_failure() {
-        let descriptor = descriptor(interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID).to_string());
-        for (error, expected_status, expected_outcome) in [
-            (
-                WasmPluginHostError::GuestInvalidInput("guest input".to_owned()),
-                PluginInspectionCheckStatus::Warning,
-                PluginInspectionOutcome::Passed,
-            ),
-            (
-                WasmPluginHostError::LocalValidation("local input".to_owned()),
-                PluginInspectionCheckStatus::Failed,
-                PluginInspectionOutcome::ConformanceFailure,
-            ),
-        ] {
-            let mut report = PluginInspectionReport::new(
-                &descriptor,
-                PluginInspectionOperation::Check,
-                Some(PluginArtifactTransport::Wasm),
-            );
-            classify_wasm_call_error(&mut report, "fixture.call".to_owned(), error);
-            assert_eq!(report.outcome, expected_outcome);
-            assert_eq!(report.checks.len(), 1);
-            assert_eq!(report.checks[0].status, expected_status);
-        }
-    }
-
-    #[test]
     fn manifest_inspection_keeps_unknown_capability_schema_valid() {
         let descriptor = descriptor("11111111-2222-4333-8444-555555555555".to_owned());
         let report = inspect_manifest(&descriptor, PluginInspectionOperation::Inspect, None);
         assert_eq!(report.outcome, PluginInspectionOutcome::Passed);
         assert!(report.compatible);
-    }
-
-    #[test]
-    fn wasm_transport_rejects_native_only_capability_as_compatibility() {
-        let descriptor = descriptor(interface_uuid(NATIVE_DECODER_INTERFACE_ID).to_string());
-        let report = inspect_manifest(
-            &descriptor,
-            PluginInspectionOperation::Inspect,
-            Some(PluginArtifactTransport::Wasm),
-        );
-        assert_eq!(
-            report.outcome,
-            PluginInspectionOutcome::CompatibilityFailure
-        );
-        assert!(!report.compatible);
-    }
-
-    #[test]
-    fn wasm_transport_rejects_manifest_interface_version_outside_fixed_wit_world() {
-        for (major, minor) in [(2, 0), (1, 1)] {
-            let mut descriptor =
-                descriptor(interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID).to_string());
-            descriptor.capabilities[0].interface_major = major;
-            descriptor.capabilities[0].interface_minor = minor;
-
-            let report = inspect_manifest(
-                &descriptor,
-                PluginInspectionOperation::Inspect,
-                Some(PluginArtifactTransport::Wasm),
-            );
-
-            assert_eq!(
-                report.outcome,
-                PluginInspectionOutcome::CompatibilityFailure
-            );
-            assert!(!report.compatible);
-            assert!(report.checks.iter().any(|check| {
-                check.id == "transport.capability"
-                    && check.message.contains("WIT interface version 1.0")
-            }));
-        }
-    }
-
-    struct TestAudioFactory {
-        close_calls: Arc<AtomicUsize>,
-        fail_process: bool,
-    }
-
-    impl player_plugin::AudioProcessorPluginFactory for TestAudioFactory {
-        fn name(&self) -> &str {
-            "test-audio-processor"
-        }
-
-        fn capabilities(&self) -> AudioProcessorCapabilities {
-            AudioProcessorCapabilities {
-                accepted_formats: vec![DecoderFrameFormat::F32],
-                output_format: Some(DecoderFrameFormat::F32),
-                supports_flush: true,
-                max_in_flight_frames: Some(1),
-                playback_rate_min: Some(1.0),
-                playback_rate_max: Some(1.0),
-                pitch_modes: vec![AudioPitchMode::FollowRate],
-            }
-        }
-
-        fn open_session(
-            &self,
-            _config: &AudioProcessorSessionConfig,
-        ) -> Result<Box<dyn player_plugin::AudioProcessorSession>, AudioProcessorError> {
-            Ok(Box::new(TestAudioSession {
-                close_calls: Arc::clone(&self.close_calls),
-                fail_process: self.fail_process,
-            }))
-        }
-    }
-
-    struct TestAudioSession {
-        close_calls: Arc<AtomicUsize>,
-        fail_process: bool,
-    }
-
-    impl player_plugin::AudioProcessorSession for TestAudioSession {
-        fn name(&self) -> &str {
-            "test-audio-session"
-        }
-
-        fn capabilities(&self) -> AudioProcessorCapabilities {
-            AudioProcessorCapabilities::default()
-        }
-
-        fn process(
-            &mut self,
-            frame: DecoderPcmFrame,
-        ) -> Result<DecoderPcmFrame, AudioProcessorError> {
-            if self.fail_process {
-                return Err(AudioProcessorError::Processor(
-                    "expected process failure".to_owned(),
-                ));
-            }
-            Ok(frame)
-        }
-
-        fn flush(&mut self) -> Result<(), AudioProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), AudioProcessorError> {
-            self.close_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    fn test_audio_invocation() -> (
-        AudioProcessorSessionConfig,
-        AudioPlaybackPolicy,
-        DecoderPcmFrame,
-    ) {
-        let metadata = DecoderPcmFrameMetadata::audio(
-            "test-audio-pcm",
-            DecoderFrameFormat::F32,
-            48_000,
-            1,
-            DecoderPcmSampleLayout::Interleaved,
-            64,
-        );
-        let policy = AudioPlaybackPolicy {
-            playback_rate: 1.0,
-            pitch_mode: AudioPitchMode::FollowRate,
-        };
-        (
-            AudioProcessorSessionConfig {
-                processor_index: 0,
-                input_metadata: metadata.clone(),
-                playback_policy: policy,
-                max_in_flight_frames: Some(1),
-            },
-            policy,
-            DecoderPcmFrame {
-                metadata,
-                data: vec![0; 64 * size_of::<f32>()],
-            },
-        )
-    }
-
-    #[test]
-    fn audio_conformance_closes_successful_and_failed_sessions() {
-        for fail_process in [false, true] {
-            let close_calls = Arc::new(AtomicUsize::new(0));
-            let factory = TestAudioFactory {
-                close_calls: Arc::clone(&close_calls),
-                fail_process,
-            };
-            let (config, policy, frame) = test_audio_invocation();
-
-            let result = exercise_native_audio_processor(&factory, &config, policy, frame);
-
-            assert_eq!(result.is_err(), fail_process);
-            assert_eq!(close_calls.load(Ordering::Relaxed), 1);
-        }
     }
 }

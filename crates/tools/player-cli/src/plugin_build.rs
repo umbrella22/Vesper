@@ -140,12 +140,9 @@ pub fn select_plugin_artifact(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [artifact] => match (artifact.transport, artifact.format) {
-            (PluginArtifactTransport::Native, PluginArtifactFormat::Dylib)
-            | (PluginArtifactTransport::Wasm, PluginArtifactFormat::WasmComponent) => {
-                Ok(artifact.clone())
-            }
+            (PluginArtifactTransport::Native, PluginArtifactFormat::Dylib) => Ok(artifact.clone()),
             _ => Err(PluginBuildError::Compatibility(format!(
-                "vesper plugin build supports Cargo dylib and wasm-component artifacts; selected '{}:{}' uses format '{}'",
+                "vesper plugin build supports Cargo shared libraries; selected '{}:{}' uses format '{}'",
                 artifact.transport.as_str(),
                 artifact.target,
                 artifact.format.as_str()
@@ -214,7 +211,6 @@ fn expected_artifact_extension(
     artifact: &PluginArtifactSource,
 ) -> Result<&'static str, PluginBuildError> {
     match (artifact.transport, artifact.format) {
-        (PluginArtifactTransport::Wasm, PluginArtifactFormat::WasmComponent) => Ok("wasm"),
         (PluginArtifactTransport::Native, PluginArtifactFormat::Dylib) => {
             if artifact.target.contains("windows") {
                 Ok("dll")
@@ -682,11 +678,11 @@ mod tests {
 
     #[test]
     fn cargo_parser_keeps_only_unique_cdylib_filenames() {
-        let source = br#"{"reason":"compiler-artifact","package_id":"fixture 0.1.0","target":{"name":"fixture","kind":["cdylib"],"crate_types":["cdylib"]},"filenames":["/tmp/fixture.wasm","/tmp/fixture.wasm"]}
+        let source = br#"{"reason":"compiler-artifact","package_id":"fixture 0.1.0","target":{"name":"fixture","kind":["cdylib"],"crate_types":["cdylib"]},"filenames":["/tmp/fixture.dylib","/tmp/fixture.dylib"]}
 {"reason":"build-finished","success":true}
 "#;
         let candidates = parse_cargo_output(BufReader::new(&source[..])).expect("Cargo JSON");
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].path, Path::new("/tmp/fixture.wasm"));
+        assert_eq!(candidates[0].path, Path::new("/tmp/fixture.dylib"));
     }
 }

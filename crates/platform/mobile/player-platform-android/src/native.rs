@@ -53,6 +53,10 @@ use player_runtime::{
 };
 use serde::Serialize;
 
+#[cfg(target_os = "android")]
+#[path = "native_vulkan.rs"]
+mod native_vulkan;
+
 pub const ANDROID_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "android_native";
 const ANDROID_NATIVE_FRAME_ADVANCE_PACKET_BUDGET: usize = 8;
 
@@ -452,10 +456,6 @@ pub struct AndroidHostBridgeSession {
     extra_events: VecDeque<PlayerRuntimeEvent>,
     dropped_events: u64,
     pipeline_event_context: Option<PipelineEventContext>,
-    // Keep the registry owner alive for as long as the playback session. The
-    // hook adapters also retain their capability Arcs, but retaining the
-    // registry here makes the native owner lifetime explicit at this boundary.
-    _plugin_registry: Option<Arc<PluginRegistry>>,
 }
 
 #[derive(Clone)]
@@ -486,8 +486,6 @@ pub struct AndroidNativeFramePipelineOpenConfig {
     pub source_uri: String,
     pub source_normalizer: MobileSourceNormalizerConfiguration,
     pub native_frame_pipeline: MobileNativeFramePipelineConfiguration,
-    pub avc_decoder_implementation_name: Option<String>,
-    pub hevc_decoder_implementation_name: Option<String>,
     pub presenter_profile: AndroidNativeFramePresenterProfile,
 }
 
@@ -623,6 +621,8 @@ pub struct AndroidNativeFramePipelineSession {
     decoder_open_plan_template: Option<AndroidNativeFrameDecoderOpenPlan>,
     decoder_open_plan: Option<AndroidNativeFrameDecoderOpenPlan>,
     core: NativeFramePipelineCore,
+    #[cfg(target_os = "android")]
+    vulkan: Option<native_vulkan::AndroidVulkanVideo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -911,38 +911,7 @@ impl AndroidHostBridgeSession {
             extra_events: VecDeque::new(),
             dropped_events: 0,
             pipeline_event_context: None,
-            _plugin_registry: None,
         }
-    }
-
-    /// Creates an Android host session from explicitly selected native hook
-    /// references held by a host-owned plugin registry.
-    pub fn new_with_plugin_registry(
-        source_uri: impl Into<String>,
-        registry: Arc<PluginRegistry>,
-        references: impl IntoIterator<Item = player_plugin::PluginReference>,
-    ) -> PlayerResult<Self> {
-        let registrations = references
-            .into_iter()
-            .map(|reference| {
-                let resolved =
-                    registry
-                        .resolve_pipeline_event_hook(&reference)
-                        .map_err(|error| {
-                            PlayerError::new(
-                                player_runtime::PlayerErrorCode::Unsupported,
-                                format!(
-                                    "failed to resolve Android PipelineEventHook {}: {error}",
-                                    reference.plugin_id()
-                                ),
-                            )
-                        })?;
-                PipelineEventHookRegistration::new(reference, resolved.capability())
-            })
-            .collect::<PlayerResult<Vec<_>>>()?;
-        let mut session = Self::new_with_pipeline_event_hooks(source_uri, registrations)?;
-        session._plugin_registry = Some(registry);
-        Ok(session)
     }
 
     /// Creates an Android host session with structured playback event hooks.
@@ -1148,6 +1117,7 @@ fn validate_native_frame_pipeline_open_config(
 fn prepare_android_native_frame_decoder(
     config: &AndroidNativeFramePipelineOpenConfig,
     stream_info: &SourceNormalizerPacketStreamInfo,
+    select_decoder: impl FnOnce(&str, u32, u32) -> PlayerResult<Option<String>>,
 ) -> PlayerResult<AndroidNativeFrameDecoderOpenPlan> {
     let video_track = selected_video_track(stream_info).ok_or_else(|| {
         PlayerError::new(
@@ -1165,7 +1135,7 @@ fn prepare_android_native_frame_decoder(
         return Err(PlayerError::new(PlayerErrorCode::Unsupported, reason));
     }
     let required_decoder_implementation_name =
-        required_android_decoder_implementation_name(config, &video_track.codec)?;
+        required_android_decoder_implementation_name(video_track, select_decoder)?;
     let request = DecoderPluginMatchRequest::video(video_track.codec.clone());
     if !config
         .native_frame_pipeline
@@ -1348,24 +1318,34 @@ fn android_native_frame_decoder_plan(
 }
 
 fn required_android_decoder_implementation_name(
-    config: &AndroidNativeFramePipelineOpenConfig,
-    codec: &str,
+    track: &SourceNormalizerPacketTrackInfo,
+    select_decoder: impl FnOnce(&str, u32, u32) -> PlayerResult<Option<String>>,
 ) -> PlayerResult<String> {
-    let normalized = normalize_decoder_codec_identifier(codec);
-    let selected = match normalized.as_str() {
-        "h264" | "avc" | "avc1" | "avc3" => config.avc_decoder_implementation_name.as_deref(),
-        "hevc" | "h265" | "hvc1" | "hev1" => config.hevc_decoder_implementation_name.as_deref(),
-        _ => None,
+    let mime = match normalize_decoder_codec_identifier(&track.codec).as_str() {
+        "h264" | "avc" | "avc1" | "avc3" => "video/avc",
+        "hevc" | "h265" | "hvc1" | "hev1" => "video/hevc",
+        _ => {
+            return Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
+                format!(
+                    "Android native-frame decoder does not support codec {}",
+                    track.codec
+                ),
+            ));
+        }
     };
-    selected
+    let (Some(width @ 1..), Some(height @ 1..)) = (track.width, track.height) else {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "Android native-frame video track did not report valid dimensions",
+        ));
+    };
+    select_decoder(mime, width, height)?
         .filter(|name| !name.trim().is_empty())
-        .map(str::to_owned)
         .ok_or_else(|| {
             PlayerError::new(
                 PlayerErrorCode::Unsupported,
-                format!(
-                    "Android native-frame pipeline found no host-selected hardware decoder implementation for codec {codec}"
-                ),
+                format!("No Android hardware decoder supports {mime} at {width}x{height}"),
             )
         })
 }
@@ -2285,7 +2265,10 @@ impl std::fmt::Debug for AndroidNativeFramePipelineSession {
 }
 
 impl AndroidNativeFramePipelineSession {
-    pub fn open(config: AndroidNativeFramePipelineOpenConfig) -> PlayerResult<Self> {
+    pub fn open(
+        config: AndroidNativeFramePipelineOpenConfig,
+        select_decoder: impl FnMut(&str, u32, u32) -> PlayerResult<Option<String>>,
+    ) -> PlayerResult<Self> {
         validate_native_frame_pipeline_open_config(&config)?;
         let source = MediaSource::new(config.source_uri.clone());
         let packet_open =
@@ -2296,13 +2279,35 @@ impl AndroidNativeFramePipelineSession {
                         format!("Android native-frame packet source open failed: {message}"),
                     )
                 })?;
+        #[cfg(target_os = "android")]
+        let mut select_decoder = select_decoder;
+        #[cfg(target_os = "android")]
+        let packet_open = match native_vulkan::AndroidVulkanVideo::select(
+            &config,
+            packet_open,
+            &mut select_decoder,
+        )? {
+            Ok(vulkan) => {
+                let mut session =
+                    Self::open_with_components(config, source, None, None, None, None)?;
+                session.max_in_flight_frames = 1;
+                session.selected_pipeline_profile =
+                    AndroidNativeFramePipelineProfile::SdkOwnedHardwareBuffer;
+                session.vulkan = Some(vulkan);
+                return Ok(session);
+            }
+            Err(packet_open) => packet_open,
+        };
         let packet_source = AndroidNativeFramePipelinePacketSource::new(
             packet_open.plugin_name,
             packet_open.plugin_path,
-            packet_open.session,
+            packet_open.session.into_rust_session(),
         );
-        let decoder_open_plan =
-            prepare_android_native_frame_decoder(&config, packet_source.stream_info())?;
+        let decoder_open_plan = prepare_android_native_frame_decoder(
+            &config,
+            packet_source.stream_info(),
+            select_decoder,
+        )?;
         let processor_chain = open_android_native_frame_processor_chain(
             &config.native_frame_pipeline,
             packet_source.stream_info(),
@@ -2327,11 +2332,15 @@ impl AndroidNativeFramePipelineSession {
         config: AndroidNativeFramePipelineOpenConfig,
         source: MediaSource,
         packet_source: Option<AndroidNativeFramePipelinePacketSource>,
+        select_decoder: impl FnOnce(&str, u32, u32) -> PlayerResult<Option<String>>,
     ) -> PlayerResult<Self> {
         let (decoder_open_plan, processor_chain) = match packet_source.as_ref() {
             Some(packet_source) => {
-                let decoder_open_plan =
-                    prepare_android_native_frame_decoder(&config, packet_source.stream_info())?;
+                let decoder_open_plan = prepare_android_native_frame_decoder(
+                    &config,
+                    packet_source.stream_info(),
+                    select_decoder,
+                )?;
                 let processor_chain = open_android_native_frame_processor_chain(
                     &config.native_frame_pipeline,
                     packet_source.stream_info(),
@@ -2448,11 +2457,13 @@ impl AndroidNativeFramePipelineSession {
             decoder_open_plan_template: decoder_open_plan.clone(),
             decoder_open_plan,
             core,
+            #[cfg(target_os = "android")]
+            vulkan: None,
         })
     }
 
     pub fn open_wire(&self, handle: u64) -> AndroidNativeFramePipelineOpenWire {
-        let snapshot = self.core.status_snapshot();
+        let snapshot = self.session_snapshot();
         AndroidNativeFramePipelineOpenWire {
             handle,
             route: PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
@@ -2486,7 +2497,7 @@ impl AndroidNativeFramePipelineSession {
         handle: u64,
         message: Option<String>,
     ) -> AndroidNativeFramePipelineStatusWire {
-        let snapshot = self.core.status_snapshot();
+        let snapshot = self.session_snapshot();
         AndroidNativeFramePipelineStatusWire {
             handle,
             route: PlayerPlaybackRoute::SdkManagedNativeFrame.wire_name(),
@@ -2511,21 +2522,37 @@ impl AndroidNativeFramePipelineSession {
     }
 
     pub fn advance(&mut self) -> PlayerResult<AndroidNativeFramePipelineFrameResult> {
+        #[cfg(target_os = "android")]
+        if let Some(video) = self.vulkan.as_mut() {
+            return video.advance();
+        }
         self.ensure_decoder_open()?;
         self.core.advance().map_err(pipeline_error_to_player_error)
     }
 
     pub fn flush(&mut self) -> PlayerResult<()> {
+        #[cfg(target_os = "android")]
+        if let Some(video) = self.vulkan.as_mut() {
+            return video.flush();
+        }
         self.core.flush().map_err(pipeline_error_to_player_error)
     }
 
     pub fn seek(&mut self, position: Duration) -> PlayerResult<()> {
+        #[cfg(target_os = "android")]
+        if let Some(video) = self.vulkan.as_mut() {
+            return video.seek(position);
+        }
         self.core
             .seek(position)
             .map_err(pipeline_error_to_player_error)
     }
 
     pub fn release_frame(&mut self, frame_handle: u64, presented: bool) -> PlayerResult<()> {
+        #[cfg(target_os = "android")]
+        if let Some(video) = self.vulkan.as_mut() {
+            return video.release(frame_handle, presented);
+        }
         self.core
             .release_frame(frame_handle, presented)
             .map_err(pipeline_error_to_player_error)
@@ -2565,6 +2592,12 @@ impl AndroidNativeFramePipelineSession {
     }
 
     pub fn detach_presenter_surface(&mut self) {
+        #[cfg(target_os = "android")]
+        if let Some(video) = self.vulkan.as_mut() {
+            video.detach();
+            self.presenter_surface_profile = None;
+            return;
+        }
         if let Err(error) = self.core.clear_presenter_for_detach() {
             tracing::warn!(error = %error, "Android native-frame presenter detach failed");
         }
@@ -2584,7 +2617,7 @@ impl AndroidNativeFramePipelineSession {
     }
 
     pub fn presenter_ready(&self) -> bool {
-        let snapshot = self.core.status_snapshot();
+        let snapshot = self.session_snapshot();
         snapshot.output_target_attached
             && snapshot.presenter_configured
             && snapshot.decoder_configured
@@ -2639,19 +2672,47 @@ impl AndroidNativeFramePipelineSession {
     }
 
     fn presenter_state_wire_name(&self) -> &'static str {
-        if !self.core.output_target_attached() {
+        let snapshot = self.session_snapshot();
+        if !snapshot.output_target_attached {
             "waitingForSurface"
-        } else if !self.core.has_presenter() {
+        } else if !snapshot.presenter_configured {
             "waitingForPresenter"
-        } else if !self.core.has_decoder() && self.decoder_open_plan.is_some() {
+        } else if !snapshot.decoder_configured && self.decoder_open_plan.is_some() {
             "waitingForDecoder"
-        } else if self.core.status_snapshot().lifecycle_state
-            == NativeFramePipelineLifecycleState::Presenting
-        {
+        } else if snapshot.lifecycle_state == NativeFramePipelineLifecycleState::Presenting {
             "presenting"
         } else {
             "ready"
         }
+    }
+
+    fn session_snapshot(&self) -> player_platform_native_frame::NativeFramePipelineStatusSnapshot {
+        #[cfg(target_os = "android")]
+        if let Some(video) = &self.vulkan {
+            return video.snapshot();
+        }
+        self.core.status_snapshot()
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn uses_vulkan_presenter(&self) -> bool {
+        self.vulkan.is_some()
+    }
+
+    /// Attaches the clear-content Vulkan presenter to the Android host Surface.
+    ///
+    /// # Safety
+    /// `window` is a live Android native window with no competing producer.
+    #[cfg(target_os = "android")]
+    pub unsafe fn configure_vulkan_window(&mut self, window: usize) -> PlayerResult<()> {
+        let video = self.vulkan.as_mut().ok_or_else(|| {
+            PlayerError::new(
+                PlayerErrorCode::InvalidState,
+                "Vulkan route is not selected",
+            )
+        })?;
+        // SAFETY: the host retains the native window through the attach call.
+        unsafe { video.attach(window) }
     }
 }
 

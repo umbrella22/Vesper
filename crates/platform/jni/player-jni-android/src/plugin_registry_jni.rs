@@ -11,7 +11,6 @@ use player_plugin_loader::{
     MAX_EMBEDDED_PLUGIN_ARTIFACTS, PluginRegistry, resolve_android_native_library,
 };
 
-use crate::sessions::new_benchmark_sink_session_from_registry;
 use crate::{
     HandleRegistry, jni_name, lock_or_recover, parsers::string_array_to_vec, run_jni_entry,
 };
@@ -246,52 +245,6 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
     run_jni_entry(&mut unowned_env, |_| {
         dispose_android_plugin_registry(registry_handle);
     });
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createBenchmarkSinkSessionFromRegistry(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    registry_handle: jlong,
-    references_json: JString<'_>,
-) -> jlong {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jlong> {
-                let references_json = references_json.try_to_string(env)?;
-                let references = match parse_plugin_references(&references_json) {
-                    Ok(references) => references,
-                    Err(message) => {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalArgumentException"),
-                            jni_name(message),
-                        )?;
-                        return Ok(0);
-                    }
-                };
-                let registry = match clone_android_plugin_registry(registry_handle) {
-                    Ok(registry) => registry,
-                    Err(message) => {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalArgumentException"),
-                            jni_name(message),
-                        )?;
-                        return Ok(0);
-                    }
-                };
-                match new_benchmark_sink_session_from_registry(registry, references) {
-                    Ok(handle) => Ok(handle),
-                    Err(message) => {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalStateException"),
-                            jni_name(message),
-                        )?;
-                        Ok(0)
-                    }
-                }
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
 }
 
 #[cfg(test)]

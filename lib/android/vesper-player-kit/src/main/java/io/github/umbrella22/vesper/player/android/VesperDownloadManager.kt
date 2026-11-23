@@ -628,7 +628,7 @@ class VesperDownloadManager internal constructor(
 
     private fun createPluginRegistry(): VesperPluginRegistryHandleOwner? {
         val references =
-            (configuration.postDownloadPluginReferences + configuration.eventHookPluginReferences)
+            configuration.postDownloadPluginReferences
                 .distinct()
         if (references.isEmpty()) {
             return null

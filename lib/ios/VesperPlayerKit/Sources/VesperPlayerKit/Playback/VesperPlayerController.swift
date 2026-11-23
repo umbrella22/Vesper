@@ -240,7 +240,6 @@ public final class VesperPlayerController: ObservableObject {
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
     private let setAudioSessionInterruptedImpl: (Bool) -> Void
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
-    private let drainPipelineEventHookReportsImpl: () -> VesperPipelineEventHookReportBatch
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
     private let awaitBenchmarkSinkShutdownImpl: (TimeInterval) async -> Bool
     private let startPerformanceDiagnosticsImpl: (
@@ -394,7 +393,6 @@ public final class VesperPlayerController: ObservableObject {
         setResiliencePolicyImpl = bridge.setResiliencePolicy
         setAudioSessionInterruptedImpl = bridge.setAudioSessionInterrupted
         drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
-        drainPipelineEventHookReportsImpl = bridge.drainPipelineEventHookReports
         benchmarkSummaryImpl = bridge.benchmarkSummary
         awaitBenchmarkSinkShutdownImpl = bridge.awaitBenchmarkSinkShutdown
         startPerformanceDiagnosticsImpl = bridge.startPerformanceDiagnostics
@@ -799,11 +797,6 @@ public final class VesperPlayerController: ObservableObject {
 
     public func drainBenchmarkEvents() -> [VesperBenchmarkEvent] {
         drainBenchmarkEventsImpl()
-    }
-
-    /// Drains structured reports produced by the configured playback EventHook plugins.
-    public func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
-        drainPipelineEventHookReportsImpl()
     }
 
     public func benchmarkSummary() -> VesperBenchmarkSummary {

@@ -269,7 +269,6 @@ internal fun VesperDownloadConfiguration.toNativePayload(
         pluginRegistryHandle = pluginRegistryHandle,
         postDownloadPluginReferencesJson =
             encodeVesperPluginReferences(postDownloadPluginReferences),
-        eventHookPluginReferencesJson = encodeVesperPluginReferences(eventHookPluginReferences),
     )
 
 internal fun VesperDownloadSource.toNativePayload(): NativeDownloadSource =

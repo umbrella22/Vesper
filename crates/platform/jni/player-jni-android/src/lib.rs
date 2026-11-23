@@ -4,6 +4,7 @@
     reason = "JNI entrypoints translate the shared player-runtime error contract at one boundary; boxing individual closure results would fragment that mapping"
 )]
 
+mod audio_dsp;
 mod download_jni;
 mod handles;
 mod native_frame_presenter;
@@ -20,7 +21,7 @@ use std::time::Duration;
 
 use jni::EnvUnowned;
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
-use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::objects::{JClass, JObject, JObjectArray, JString, JValue};
 use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
@@ -39,9 +40,8 @@ use player_platform_mobile::{
 };
 use player_runtime::NativeFramePipelineMode;
 use player_runtime::{
-    FrameProcessorMode, MediaTrackSelection, PipelineEventHookReportBatch, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerRuntimeCommand, SourceNormalizerMode,
-    SubtitleErrorDetails,
+    FrameProcessorMode, MediaTrackSelection, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerRuntimeCommand, SourceNormalizerMode, SubtitleErrorDetails,
 };
 
 fn parse_mobile_native_plugin_artifacts_json(
@@ -66,22 +66,21 @@ use object_builders::{
     resolved_resilience_policy_object, timeline_object, track_preferences_object,
 };
 use parsers::{
-    boxed_long_value, exo_state_from_ordinal, long_field, parse_native_abr_policy,
+    boxed_long_value, exo_state_from_ordinal, parse_native_abr_policy,
     parse_native_buffering_policy, parse_native_cache_policy, parse_native_retry_policy,
     parse_native_track_catalog, parse_native_track_preferences, parse_native_track_selection,
     parse_native_track_selection_snapshot, source_kind_from_ordinal, source_protocol_from_ordinal,
-    string_field, string_from_java_object,
+    string_from_java_object,
 };
 pub(crate) use parsers::{error_category_from_jni_ordinal, error_code_from_jni_ordinal};
-use plugin_registry_jni::{clone_android_plugin_registry, parse_plugin_references};
+use plugin_registry_jni::clone_android_plugin_registry;
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
-    dispose_benchmark_sink_session, dispose_native_frame_pipeline_session,
-    dispose_source_normalizer_resource_session, new_native_frame_pipeline_session,
-    new_session_with_plugin_registry, new_source_normalizer_resource_session,
+    dispose_native_frame_pipeline_session, dispose_source_normalizer_resource_session,
+    new_native_frame_pipeline_session, new_session, new_source_normalizer_resource_session,
     resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime, sessions,
-    with_benchmark_sink_session, with_native_frame_pipeline_session_mut, with_session_mut,
-    with_session_mut_checked, with_source_normalizer_resource_session_mut,
+    with_native_frame_pipeline_session_mut, with_session_mut, with_session_mut_checked,
+    with_source_normalizer_resource_session_mut,
 };
 
 // A registered session belongs to Rust until Java receives its open response.
@@ -133,66 +132,12 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     source_uri: JString<'_>,
-    pipeline_event_hook_configuration: JObject<'_>,
 ) -> jlong {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jlong> {
                 let source_uri = source_uri.try_to_string(env)?;
-                let registry_handle = long_field(
-                    env,
-                    &pipeline_event_hook_configuration,
-                    "pluginRegistryHandle",
-                )?;
-                let references_json = string_field(
-                    env,
-                    &pipeline_event_hook_configuration,
-                    "pluginReferencesJson",
-                )?
-                .unwrap_or_else(|| "[]".to_owned());
-                let references = match parse_plugin_references(&references_json) {
-                    Ok(references) => references,
-                    Err(message) => {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalArgumentException"),
-                            jni_name(message),
-                        )?;
-                        return Ok(0);
-                    }
-                };
-                let registry = if references.is_empty() {
-                    if registry_handle != 0 {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalArgumentException"),
-                            jni_name(
-                                "Android plugin registry handle must be zero when playback event-hook references are empty",
-                            ),
-                        )?;
-                        return Ok(0);
-                    }
-                    None
-                } else {
-                    if registry_handle == 0 {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalArgumentException"),
-                            jni_name(
-                                "Android plugin registry handle is required for playback event-hook references",
-                            ),
-                        )?;
-                        return Ok(0);
-                    }
-                    match clone_android_plugin_registry(registry_handle) {
-                        Ok(registry) => Some(registry),
-                        Err(message) => {
-                            env.throw_new(
-                                jni_name("java/lang/IllegalArgumentException"),
-                                jni_name(message),
-                            )?;
-                            return Ok(0);
-                        }
-                    }
-                };
-                match new_session_with_plugin_registry(source_uri, registry, references) {
+                match new_session(source_uri) {
                     Ok(handle) => Ok(handle),
                     Err(message) => {
                         env.throw_new(
@@ -423,8 +368,7 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
     runtime_profile: JObject<'_>,
     native_frame_mode: JString<'_>,
     decoder_plugin_artifacts_json: JString<'_>,
-    avc_decoder_implementation_name: JObject<'_>,
-    hevc_decoder_implementation_name: JObject<'_>,
+    decoder_selector: JObject<'_>,
     frame_processor_plugin_artifacts_json: JString<'_>,
     max_in_flight_frames: jint,
     presenter_profile: JString<'_>,
@@ -486,10 +430,6 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                             return Ok(std::ptr::null_mut());
                         }
                     };
-                let avc_decoder_implementation_name =
-                    string_from_java_object(env, avc_decoder_implementation_name)?;
-                let hevc_decoder_implementation_name =
-                    string_from_java_object(env, hevc_decoder_implementation_name)?;
                 let frame_processor_plugin_artifacts_json =
                     frame_processor_plugin_artifacts_json.try_to_string(env)?;
                 let frame_processor_plugin_artifacts =
@@ -527,17 +467,51 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                             max_in_flight_frames: (max_in_flight_frames > 0)
                                 .then_some(max_in_flight_frames as u32),
                         },
-                        avc_decoder_implementation_name,
-                        hevc_decoder_implementation_name,
                         presenter_profile,
+                    },
+                    |mime, width, height| {
+                        let mut select = || -> JniResult<Option<String>> {
+                            let (Ok(width), Ok(height)) =
+                                (jint::try_from(width), jint::try_from(height))
+                            else {
+                                return Ok(None);
+                            };
+                            let mime = env.new_string(mime)?;
+                            let name = env
+                                .call_method(
+                                    &decoder_selector,
+                                    jni_name("preferredHardwareDecoderName"),
+                                    method_sig("(Ljava/lang/String;II)Ljava/lang/String;")
+                                        .method_signature(),
+                                    &[
+                                        JValue::Object(mime.as_ref()),
+                                        JValue::Int(width),
+                                        JValue::Int(height),
+                                    ],
+                                )?
+                                .l()?;
+                            string_from_java_object(env, name)
+                        };
+                        select().map_err(|error| {
+                            PlayerError::new(
+                                PlayerErrorCode::BackendFailure,
+                                format!("Android hardware decoder selection failed: {error}"),
+                            )
+                        })
                     },
                 ) {
                     Ok(session) => session,
                     Err(error) => {
-                        env.throw_new(
-                            jni_name("java/lang/IllegalStateException"),
-                            jni_name(error.message()),
-                        )?;
+                        if env.exception_check() {
+                            return Ok(std::ptr::null_mut());
+                        }
+                        let exception_class = match error.code() {
+                            PlayerErrorCode::Unsupported => {
+                                "java/lang/UnsupportedOperationException"
+                            }
+                            _ => "java/lang/IllegalStateException",
+                        };
+                        env.throw_new(jni_name(exception_class), jni_name(error.message()))?;
                         return Ok(std::ptr::null_mut());
                     }
                 };
@@ -658,9 +632,24 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
                     session
                         .attach_presenter_surface(surface_profile)
                         .map_err(|error| error.message().to_owned())?;
-                    session
-                        .configure_presenter_sink(Box::new(presenter_sink))
+                    #[cfg(target_os = "android")]
+                    let presenter_sink = if session.uses_vulkan_presenter() {
+                        // SAFETY: the NDK returned a retained ANativeWindow from the clear playback Surface.
+                        unsafe {
+                            session.configure_vulkan_window(presenter_sink.native_window_addr())
+                        }
                         .map_err(|error| error.message().to_owned())?;
+                        None
+                    } else {
+                        Some(presenter_sink)
+                    };
+                    #[cfg(not(target_os = "android"))]
+                    let presenter_sink = Some(presenter_sink);
+                    if let Some(presenter_sink) = presenter_sink {
+                        session
+                            .configure_presenter_sink(Box::new(presenter_sink))
+                            .map_err(|error| error.message().to_owned())?;
+                    }
                     android_native_frame_pipeline_status_json(
                         handle as u64,
                         session,
@@ -773,17 +762,6 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
     })
 }
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_disposeBenchmarkSinkSession(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    run_jni_entry(&mut unowned_env, |_unowned_env| {
-        dispose_benchmark_sink_session(handle);
-    })
-}
-
 fn source_normalizer_mode_from_ordinal(ordinal: jint) -> SourceNormalizerMode {
     match ordinal {
         1 => SourceNormalizerMode::DiagnosticsOnly,
@@ -826,50 +804,6 @@ fn native_frame_presenter_profile_from_wire_name(
             "unknown Android native-frame presenter profile wire name `{other}`"
         )),
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_submitBenchmarkSinkEvents(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    batch_json: JString<'_>,
-) -> jstring {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jstring> {
-                let batch_json = batch_json.try_to_string(env)?;
-                let Some(report_json) = with_benchmark_sink_session(env, handle, |session| {
-                    session
-                        .on_event_batch_report_json(&batch_json)
-                        .map_err(|error| error.to_string())
-                }) else {
-                    return Ok(std::ptr::null_mut());
-                };
-                Ok(env.new_string(report_json)?.into_raw())
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_flushBenchmarkSinkSession(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) -> jstring {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jstring> {
-                let Some(report_json) = with_benchmark_sink_session(env, handle, |session| {
-                    session.flush_json().map_err(|error| error.to_string())
-                }) else {
-                    return Ok(std::ptr::null_mut());
-                };
-                Ok(env.new_string(report_json)?.into_raw())
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
 }
 
 #[unsafe(no_mangle)]
@@ -1249,105 +1183,6 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_flushPipelineEventHooks(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    session_handle: jlong,
-    timeout_ms: jlong,
-) -> jboolean {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jboolean> {
-                let Some(flushed) = with_session_mut(env, session_handle, |session| {
-                    session
-                        .flush_pipeline_event_hooks(Duration::from_millis(timeout_ms.max(0) as u64))
-                }) else {
-                    return Ok(false as jboolean);
-                };
-                Ok(flushed as jboolean)
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_closePipelineEventHooks(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    session_handle: jlong,
-) -> jboolean {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jboolean> {
-                let Some(closed) = with_session_mut(env, session_handle, |session| {
-                    session.close_pipeline_event_hooks()
-                }) else {
-                    return Ok(false as jboolean);
-                };
-                Ok(closed as jboolean)
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
-}
-
-fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> String {
-    let reports = batch
-        .reports
-        .into_iter()
-        .map(|report| {
-            let result = match report.result {
-                Ok(outcome) => serde_json::json!({
-                    "status": if outcome.accepted { "accepted" } else { "rejected" },
-                    "outcome": outcome,
-                }),
-                Err(error) => serde_json::json!({
-                    "status": "error",
-                    "error": error.report_projection(),
-                }),
-            };
-            serde_json::json!({
-                "pluginId": report.reference.plugin_id(),
-                "capabilityInstanceId": report.reference.capability_instance_id(),
-                "transport": report.reference.transport(),
-                "runId": report.run_id,
-                "sessionId": report.session_id,
-                "eventName": report.event_name,
-                "result": result,
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "reports": reports,
-        "droppedEvents": batch.dropped_events,
-        "droppedReports": batch.dropped_reports,
-        "dispatcherError": batch.dispatcher_error,
-    })
-    .to_string()
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_drainPipelineEventHookReports(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    session_handle: jlong,
-) -> jstring {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jstring> {
-                let Some(batch) = with_session_mut(env, session_handle, |session| {
-                    session.drain_pipeline_event_hook_reports()
-                }) else {
-                    return Ok(std::ptr::null_mut());
-                };
-                Ok(env
-                    .new_string(pipeline_event_hook_reports_json(batch))?
-                    .into_raw())
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
-}
-
-#[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_reportError(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -1434,19 +1269,20 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNat
     _class: JClass<'_>,
     session_handle: jlong,
     position_ms: jlong,
-) {
+) -> jboolean {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
-            .with_env(|env| -> JniResult<()> {
-                let _ = with_session_mut(env, session_handle, |session| {
-                    let _ = session.dispatch_command(PlayerRuntimeCommand::SeekTo {
+            .with_env(|_env| -> JniResult<jboolean> {
+                let dispatched = with_session_mut_checked(session_handle, |session| {
+                    session.dispatch_command(PlayerRuntimeCommand::SeekTo {
                         position: Duration::from_millis(position_ms.max(0) as u64),
-                    });
-                });
-                Ok(())
+                    })
+                })
+                .is_ok_and(|result| result.is_ok());
+                Ok(jboolean::from(dispatched))
             })
             .resolve::<ThrowRuntimeExAndDefault>()
-    });
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1799,47 +1635,6 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_event_report_json_bounds_only_the_outward_utf8_diagnostic() {
-        let full_message = "界".repeat(100);
-        let original = player_plugin::PipelineEventHookError::AbiViolation(full_message.clone());
-        let report = player_runtime::PipelineEventHookReport {
-            reference: player_plugin::PluginReference::new(
-                "dev.vesper.fixture",
-                Some("dev.vesper.fixture.events".to_owned()),
-                player_plugin::PluginTransport::Native,
-            )
-            .expect("plugin reference"),
-            run_id: "run".to_owned(),
-            session_id: "session".to_owned(),
-            event_name: "fixture.event".to_owned(),
-            result: Err(original.clone()),
-        };
-        let batch = player_runtime::PipelineEventHookReportBatch {
-            reports: vec![report.clone()],
-            dropped_events: 2,
-            dropped_reports: 3,
-            dispatcher_error: None,
-        };
-        let json: serde_json::Value =
-            serde_json::from_str(&super::pipeline_event_hook_reports_json(batch))
-                .expect("report JSON");
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "reports": [{
-                    "pluginId": "dev.vesper.fixture", "capabilityInstanceId": "dev.vesper.fixture.events",
-                    "transport": "native", "runId": "run", "sessionId": "session",
-                    "eventName": "fixture.event",
-                    "result": {"status": "error", "error": {"code": "abiViolation", "message": "界".repeat(85)}},
-                }],
-                "droppedEvents": 2, "droppedReports": 3, "dispatcherError": null,
-            })
-        );
-        assert_eq!(report.result, Err(original));
-        assert_eq!(full_message.len(), 300);
-    }
-
-    #[test]
     fn handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
         let mut registry = HandleRegistry::default();
         let first = registry.insert(11_u32);
@@ -2063,12 +1858,7 @@ mod tests {
 
     #[test]
     fn stale_session_lookup_is_checked_without_java_exception() {
-        let handle = super::sessions::new_session_with_plugin_registry(
-            "stale-test".to_owned(),
-            None,
-            Vec::new(),
-        )
-        .expect("session");
+        let handle = super::sessions::new_session("stale-test".to_owned()).expect("session");
         {
             let mut guard = super::lock_or_recover(super::sessions::sessions());
             assert!(guard.remove(handle).is_some());

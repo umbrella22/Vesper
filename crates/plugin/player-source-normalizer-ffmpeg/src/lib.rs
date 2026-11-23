@@ -1,5 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+mod packet_session;
+mod plugin_export;
+pub use plugin_export::vesper_native_plugin_entry;
+
 use std::ffi::{CString, c_char, c_void};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -16,18 +20,18 @@ use ffmpeg_next::{self as ffmpeg, codec, encoder, format, media};
 use player_plugin::{
     DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameContentLightMetadata,
     NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata, NativeFrameMasteringDisplayMetadata,
-    Plugin, PluginBuildError, SourceNormalizerError, SourceNormalizerNormalizeLevel,
-    SourceNormalizerOperationStatus, SourceNormalizerOutputRoute, SourceNormalizerPacket,
-    SourceNormalizerPacketCapabilities, SourceNormalizerPacketLease,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketPluginFactory,
-    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
-    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
-    SourceNormalizerReadPacketMetadata, SourceNormalizerRequiredCapabilities,
-    SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
-    SourceNormalizerResourceInfo, SourceNormalizerResourcePluginFactory,
-    SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
-    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
-    SourceNormalizerResourceSessionStatus, SourceNormalizerResourceSessionWaitStatus,
+    SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
+    SourceNormalizerOutputRoute, SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
+    SourceNormalizerPacketLease, SourceNormalizerPacketMediaKind,
+    SourceNormalizerPacketPluginFactory, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
+    SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
+    SourceNormalizerResourceCapabilities, SourceNormalizerResourceInfo,
+    SourceNormalizerResourcePluginFactory, SourceNormalizerResourceSession,
+    SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
+    SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
+    SourceNormalizerResourceSessionWaitStatus,
 };
 use player_source_normalizer::{
     SourceNormalizerOutputContainer, SourceNormalizerProfile, SourceNormalizerProfileSet,
@@ -37,8 +41,6 @@ use std::os::raw::c_int;
 use url::Url;
 
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg";
-const PACKET_INSTANCE_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet";
-const RESOURCE_INSTANCE_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.resource";
 const PLUGIN_NAME: &str = "player-source-normalizer-ffmpeg";
 const DEFAULT_PROFILE_TOML: &str =
     include_str!("../../../../scripts/source-normalizer-profiles.toml");
@@ -322,7 +324,14 @@ impl TimedFfmpegInput {
         }
     }
 
-    fn seek_packet(&mut self, timestamp: i64) -> Result<(), SourceNormalizerError> {
+    fn seek_packet(&mut self, position_us: i64) -> Result<(), SourceNormalizerError> {
+        // SAFETY: the input owns a live AVFormatContext throughout this call.
+        let start_us = unsafe { (*self.input.as_ptr()).start_time };
+        // Input::seek uses AV_TIME_BASE timestamps. The player supplies a position from media start.
+        let timestamp = match start_us {
+            ffmpeg::ffi::AV_NOPTS_VALUE => position_us,
+            start_us => start_us.saturating_add(position_us),
+        };
         let _operation = self.interrupt.begin_operation(self.read_idle_timeout_ms);
         self.input.seek(timestamp, ..timestamp).map_err(|error| {
             self.interrupt
@@ -465,6 +474,12 @@ impl SourceNormalizerPacketPluginFactory for FfmpegPacketFactory {
         &self,
         config: &SourceNormalizerPacketSessionConfig,
     ) -> Result<Box<dyn SourceNormalizerPacketSession>, SourceNormalizerError> {
+        Ok(Box::new(PacketNormalizerSession::open(config)?))
+    }
+}
+
+impl PacketNormalizerSession {
+    fn open(config: &SourceNormalizerPacketSessionConfig) -> Result<Self, SourceNormalizerError> {
         if config.input.is_empty() {
             return Err(SourceNormalizerError::invalid_input(
                 "input must not be empty",
@@ -515,7 +530,7 @@ impl SourceNormalizerPacketPluginFactory for FfmpegPacketFactory {
             duration_millis,
             seekable,
         };
-        Ok(Box::new(PacketNormalizerSession {
+        Ok(Self {
             stream_info,
             input,
             selected_video_stream_index: video_stream_index,
@@ -524,7 +539,7 @@ impl SourceNormalizerPacketPluginFactory for FfmpegPacketFactory {
             next_packet_handle: 1,
             leased_packet: None,
             closed: false,
-        }))
+        })
     }
 }
 
@@ -952,14 +967,6 @@ impl Drop for ResourceNormalizerSession {
             let _ = self.close_inner();
         }
     }
-}
-
-#[player_plugin::export]
-fn ffmpeg_source_normalizer_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
-        .with_source_normalizer_packet(PACKET_INSTANCE_ID, FfmpegPacketFactory)?
-        .with_source_normalizer_resource(RESOURCE_INSTANCE_ID, FfmpegResourceFactory)?
-        .build()
 }
 
 fn load_profile_set() -> Result<SourceNormalizerProfileSet, SourceNormalizerError> {
@@ -2935,8 +2942,7 @@ mod tests {
 
     #[test]
     fn exports_plugin_root_with_both_source_interfaces() {
-        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
-            super::vesper_plugin_entry;
+        let entry = super::vesper_native_plugin_entry;
         let root_ptr = entry();
         assert!(!root_ptr.is_null());
         // SAFETY: the generated entry returned one live root owner.

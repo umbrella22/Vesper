@@ -47,7 +47,6 @@ impl AndroidDownloadBridgeSession {
         run_post_processors_on_completion: bool,
         registry: &PluginRegistry,
         post_download_references: impl IntoIterator<Item = PluginReference>,
-        event_hook_references: impl IntoIterator<Item = PluginReference>,
     ) -> PlayerResult<Self> {
         let config = mobile_download_manager_config_from_registry(
             "android",
@@ -55,7 +54,6 @@ impl AndroidDownloadBridgeSession {
             run_post_processors_on_completion,
             registry,
             post_download_references,
-            event_hook_references,
         )?;
 
         Ok(Self {
@@ -420,7 +418,6 @@ mod tests {
             true,
             &registry,
             vec![reference],
-            Vec::new(),
         )
         .expect_err("missing selected plugin should fail");
 

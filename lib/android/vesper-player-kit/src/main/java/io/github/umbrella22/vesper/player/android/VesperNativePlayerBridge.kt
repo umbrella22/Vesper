@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
-import android.view.Window
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -14,7 +13,10 @@ import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,7 +34,7 @@ internal class VesperNativePlayerBridge(
     internal var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     internal val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     internal val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkCoordinator(),
+    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkRecorder(),
     internal var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
     internal val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
@@ -42,7 +44,6 @@ internal class VesperNativePlayerBridge(
         VesperFrameProcessorConfiguration(),
     internal val nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
         VesperNativeFramePipelineConfiguration(),
-    internal val pipelineEventHookRegistryOwner: VesperPluginRegistryHandleOwner? = null,
     internal val nativeFramePipelinePumpScheduler: NativeFramePipelinePumpScheduler =
         HandlerNativeFramePipelinePumpScheduler(),
     internal val sourceCommandTimeoutMs: Long = DEFAULT_SOURCE_COMMAND_TIMEOUT_MS,
@@ -127,6 +128,11 @@ internal class VesperNativePlayerBridge(
     internal val _subtitleState = MutableStateFlow(VesperSubtitleState.EMPTY)
     internal val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     internal val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
+    internal val _playbackEvents = MutableSharedFlow<VesperPlaybackEvent>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    override val playbackEvents = _playbackEvents.asSharedFlow()
     internal val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
     override val playbackDiagnosticsTracker get() = bindings.playbackDiagnosticsTracker
     override val hdrOutputTracker = VesperHdrOutputTracker(initialSource != null)
@@ -137,6 +143,8 @@ internal class VesperNativePlayerBridge(
     internal var nativeFramePipelineFallbackReason: String? = null
     internal var nativeFramePipelineRequiredFailure = false
     @Volatile
+    internal var nativeFramePipelineOpeningEpoch: Long? = null
+    internal var pendingNativeFrameStartupSeekMs: Long? = null
     internal var nativeFramePipelineOpenStatus: Map<String, Any?>? = null
     internal var nativeFramePipelineLastStatus: Map<String, Any?>? = null
     internal var nativeFramePipelineParticipated = false
@@ -312,6 +320,10 @@ internal class VesperNativePlayerBridge(
 
     override suspend fun seekByAsync(deltaMs: Long) = seekNativeBridgeByAsync(deltaMs)
 
+    override fun seekTo(positionMs: Long) = seekNativeBridgeTo(positionMs)
+
+    override suspend fun seekToAsync(positionMs: Long) = seekNativeBridgeToAsync(positionMs)
+
     override fun seekToRatio(ratio: Float) = seekNativeBridgeToRatio(ratio)
 
     override suspend fun seekToRatioAsync(ratio: Float) = seekNativeBridgeToRatioAsync(ratio)
@@ -361,9 +373,6 @@ internal class VesperNativePlayerBridge(
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 
-    override fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
-        bindings.drainPipelineEventHookReports()
-
     override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> {
         synchronized(runtimeWarnings) {
             if (runtimeWarnings.isEmpty()) {
@@ -377,58 +386,6 @@ internal class VesperNativePlayerBridge(
 
     override fun benchmarkSummary(): VesperBenchmarkSummary =
         benchmarkRecorder.summary()
-
-    override fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
-        benchmarkRecorder.awaitSinkShutdown(timeoutMs)
-
-    override fun startPerformanceDiagnostics(
-        configuration: VesperPerformanceDiagnosticsConfiguration,
-        probe: VesperPerformanceProbe,
-        window: Window?,
-    ): String = performanceCoordinator().startPerformance(
-        configuration,
-        probe,
-        window,
-        initialPlaybackActive = _uiState.value.playbackState == PlaybackStateUi.Playing &&
-            !_uiState.value.isBuffering,
-    )
-
-    override fun updatePerformanceOverlayState(
-        runId: String,
-        state: VesperPerformanceOverlayState,
-    ) = performanceCoordinator().updateOverlayState(runId, state)
-
-    override fun recordPerformanceMarker(
-        runId: String,
-        name: String,
-        value: Double?,
-        sequenceIndex: Int?,
-        expectedOverlayActive: Boolean?,
-    ) = performanceCoordinator().recordMarker(
-        runId,
-        name,
-        value,
-        sequenceIndex,
-        expectedOverlayActive,
-    )
-
-    override fun submitPerformanceFrameSamples(
-        runId: String,
-        samples: List<VesperPerformanceFrameSample>,
-    ) = performanceCoordinator().recordPerformanceFrames(runId, samples)
-
-    override fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport =
-        performanceCoordinator().snapshot(runId)
-
-    override fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport =
-        performanceCoordinator().stop(runId)
-
-    private fun performanceCoordinator(): VesperBenchmarkCoordinator =
-        benchmarkRecorder as? VesperBenchmarkCoordinator
-            ?: throw VesperPerformanceDiagnosticsException(
-                VesperPerformanceDiagnosticsErrorCode.ArtifactUnavailable,
-                "The injected benchmark recorder does not support performance diagnostics.",
-            )
 
 }
 

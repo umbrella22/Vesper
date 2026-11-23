@@ -100,12 +100,6 @@ internal class NativeDownloadConfig(
     @JvmField val runPostProcessorsOnCompletion: Boolean,
     @JvmField val pluginRegistryHandle: Long,
     @JvmField val postDownloadPluginReferencesJson: String,
-    @JvmField val eventHookPluginReferencesJson: String,
-)
-
-internal class NativePipelineEventHookConfig(
-    @JvmField val pluginRegistryHandle: Long,
-    @JvmField val pluginReferencesJson: String,
 )
 
 internal class NativePlaylistConfig(
@@ -427,6 +421,7 @@ internal sealed interface NativeBridgeEvent {
     data class BufferingChanged(val isBuffering: Boolean) : NativeBridgeEvent
     data class InterruptionChanged(val isInterrupted: Boolean) : NativeBridgeEvent
     data class VideoSurfaceChanged(val attached: Boolean) : NativeBridgeEvent
+    data class PlaybackObservation(val event: VesperPlaybackEvent) : NativeBridgeEvent
     data class SeekCompleted(val positionMs: Long) : NativeBridgeEvent
     data class RetryScheduled(val attempt: Int, val delayMs: Long) : NativeBridgeEvent
     data class Ended(val ended: Boolean = true) : NativeBridgeEvent

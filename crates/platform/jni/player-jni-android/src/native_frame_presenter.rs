@@ -72,7 +72,7 @@ impl AndroidNativeWindowPresenterSink {
     }
 
     #[cfg(target_os = "android")]
-    fn native_window_addr(&self) -> usize {
+    pub(crate) fn native_window_addr(&self) -> usize {
         self.native_window.as_ptr().cast::<c_void>() as usize
     }
 

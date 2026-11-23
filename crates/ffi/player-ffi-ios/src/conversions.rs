@@ -330,17 +330,12 @@ pub(crate) fn read_download_config(
         config.post_download_plugin_references_json,
         "config.post_download_plugin_references_json",
     )?;
-    let event_hook_plugin_references = read_plugin_references_json(
-        config.event_hook_plugin_references_json,
-        "config.event_hook_plugin_references_json",
-    )?;
 
     Ok(ResolvedDownloadConfig {
         auto_start: config.auto_start,
         run_post_processors_on_completion: config.run_post_processors_on_completion,
         plugin_registry_handle: config.plugin_registry_handle,
         post_download_plugin_references,
-        event_hook_plugin_references,
     })
 }
 

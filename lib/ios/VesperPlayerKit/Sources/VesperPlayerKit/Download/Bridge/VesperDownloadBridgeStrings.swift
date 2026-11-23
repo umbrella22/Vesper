@@ -126,13 +126,11 @@ func freeRuntimeDownloadSource(_ source: inout VesperRuntimeDownloadSource) {
 
 func freeRuntimeDownloadConfig(_ config: inout VesperRuntimeDownloadConfig) {
     freeDownloadCString(config.post_download_plugin_references_json)
-    freeDownloadCString(config.event_hook_plugin_references_json)
     config = VesperRuntimeDownloadConfig(
         auto_start: false,
         run_post_processors_on_completion: false,
         plugin_registry_handle: 0,
-        post_download_plugin_references_json: nil,
-        event_hook_plugin_references_json: nil
+        post_download_plugin_references_json: nil
     )
 }
 

@@ -106,6 +106,30 @@ final class VesperSourceNormalizerResourceLoaderTests: XCTestCase {
         XCTAssertEqual(session.readPolicy.bufferBytes, 4 * 1024 * 1024)
     }
 
+    func testLateCompletionsAreDiscardedAfterCancellationOrResourceClose() {
+        var requests = VesperSourceNormalizerPendingRequests()
+        let firstRequest = NSObject()
+        let secondRequest = NSObject()
+        let firstID = ObjectIdentifier(firstRequest)
+        let secondID = ObjectIdentifier(secondRequest)
+        let firstTask = Task<Void, Never> {}
+        let secondTask = Task<Void, Never> {}
+
+        XCTAssertTrue(requests.start(firstID) { firstTask })
+        XCTAssertTrue(requests.start(secondID) { secondTask })
+        requests.cancel(firstID)
+        XCTAssertTrue(firstTask.isCancelled)
+        XCTAssertFalse(requests.claimCompletion(firstID))
+
+        requests.invalidate()
+        XCTAssertTrue(secondTask.isCancelled)
+        XCTAssertFalse(requests.claimCompletion(secondID))
+        XCTAssertFalse(requests.start(secondID) {
+            XCTFail("A closed resource loader must not start another task")
+            return Task {}
+        })
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

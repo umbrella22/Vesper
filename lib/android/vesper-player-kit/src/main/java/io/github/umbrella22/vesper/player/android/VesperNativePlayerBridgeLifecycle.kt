@@ -6,6 +6,7 @@ import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
@@ -88,6 +89,7 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
 
 internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
     preservedConfirmedSubtitleSelection: VesperTrackSelection? = null,
+    awaitRequiredNativeFrame: Boolean = false,
 ) {
     if (isDisposed.get()) {
         return
@@ -111,11 +113,21 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
                 epoch,
                 source,
                 preservedConfirmedSubtitleSelection,
-            )
+            ).also { decision ->
+                if (awaitRequiredNativeFrame && decision is NativeFramePipelineRoute.Fail) {
+                    throw VesperPlayerCommandException(checkNotNull(_uiState.value.lastError))
+                }
+            }
         } ?: return
     if (nativeFrameDecision is NativeFramePipelineRoute.Fail) {
         return
     }
+    val requiredNativeFrameStartup =
+        if (awaitRequiredNativeFrame && nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
+            CompletableDeferred<Unit>()
+        } else {
+            null
+        }
     var ownedPreparation: NativeSourceLoadPreparation? = null
     var ownedRtspBridge: NativeRtspBridge? = null
     try {
@@ -161,13 +173,16 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
             }
         if (!isCurrentSourceLoad(epoch)) return
         runOnMainForSourceLoad {
-            applyPreparedSourceLoadOnMain(epoch, source, nativeFrameDecision, preparation, ownedRtspBridge) {
+            applyPreparedSourceLoadOnMain(
+                epoch, source, nativeFrameDecision, preparation, ownedRtspBridge, requiredNativeFrameStartup,
+            ) {
                 // The bindings own success and failure cleanup once initialize starts,
                 // even if cancellation prevents delivery of this main-thread result.
                 ownedPreparation = null
                 ownedRtspBridge = null
             }
         }
+        requiredNativeFrameStartup?.await()
     } finally {
         ownedRtspBridge?.close()
         ownedPreparation?.let {
@@ -265,6 +280,7 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
     stopNativeFramePipelinePump()
     releasePendingTimedNativeFrameOnRuntime(presented = false)
     closeNativeFramePipelineOnRuntime()
+    clearNativeFrameStartupSeek()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
     nativeFramePipelinePlaybackRequested = false
@@ -346,9 +362,11 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
     nativeFrameDecision: NativeFramePipelineRoute,
     preparation: NativeSourceLoadPreparation,
     rtspBridge: NativeRtspBridge?,
+    requiredNativeFrameStartup: CompletableDeferred<Unit>?,
     onPreparationConsumed: () -> Unit,
 ) {
     if (!isCurrentSourceLoad(epoch) || currentSource != source) {
+        requiredNativeFrameStartup?.cancel()
         return
     }
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(preparation.pluginDiagnostics)
@@ -373,7 +391,7 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
                     it.pluginDiagnostics,
                 )
             if (nativeFrameDecision == NativeFramePipelineRoute.SdkManaged &&
-                !openNativeFramePipelineAfterSystemStartup(epoch, source, pluginDiagnostics)
+                !openNativeFramePipelineAfterSystemStartup(epoch, source, pluginDiagnostics, requiredNativeFrameStartup)
             ) {
                 return@onSuccess
             }
@@ -513,6 +531,7 @@ private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     nativeFramePipelinePumpScheduler.close()
     nativeFramePipelinePumpScheduler.quitLooperSafely()
     clearTrackState()
+    clearNativeFrameStartupSeek()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
     nativeFramePipelinePlaybackRequested = false
@@ -522,7 +541,6 @@ private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     surfaceHost.close()
     surfaceHost.detach()
     bindings.dispose()
-    pipelineEventHookRegistryOwner?.close()
     sourceLoadJob?.cancel()
     sourceLoadScope.cancel()
     sourceLoadDispatcher.close()
@@ -666,7 +684,7 @@ private suspend fun VesperNativePlayerBridge.executePendingSourceCommand(
     pending: PendingSourceCommand,
 ) {
     try {
-        initializeNativeBridgeAsync()
+        initializeNativeBridgeAsync(awaitRequiredNativeFrame = true)
         val commandBindings =
             runOnMainForSourceLoad {
                 ensureCurrentSourceCommand(pending.commandId, pending.source)
@@ -810,6 +828,7 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     stopNativeFramePipelinePump()
     releasePendingTimedNativeFrameOnRuntime(presented = false)
     closeNativeFramePipelineOnRuntime()
+    clearNativeFrameStartupSeek()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
     resetNativeFramePipelineRuntimeMarkers()

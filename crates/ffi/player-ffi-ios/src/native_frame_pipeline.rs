@@ -1,37 +1,32 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use player_model::MediaSource;
 use player_platform_mobile::{
     HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED, MobileNativePluginArtifact,
-    MobileSourceNormalizerConfiguration, hdr_programmable_processing_not_supported_reason,
-    open_mobile_source_normalizer_packet_session,
+    MobileSourceNormalizerConfiguration, MobileSourceNormalizerPacketOpen,
+    hdr_programmable_processing_not_supported_reason, open_mobile_source_normalizer_packet_session,
+};
+use player_platform_native_frame::{
+    NativeMediaPipeline, NativeMediaVideoPoll, NormalizedVideoPackets,
 };
 use player_plugin::{
-    DecoderBitstreamFormat, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame,
-    DecoderNativeHandleKind, DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
-    FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorInputFrame,
-    FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionConfig,
-    FrameProcessorSessionRequirements, FrameProcessorSubmitFrame, FrameProcessorSubmitStatus,
-    NativeDecoderPluginFactory, NativeDecoderSession, NativeFrame, NativeFrameHdrMetadata,
-    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
+    NativeDecoderPluginFactory, NativeFrameHdrMetadata, SourceNormalizerPacketMediaKind,
+    SourceNormalizerPacketTrackInfo,
 };
-use player_plugin_loader::{DecoderPluginMatchRequest, PluginDiagnosticRecord, PluginRegistry};
+use player_plugin_abi::VESPER_HANDLE_CV_PIXEL_BUFFER;
+use player_plugin_loader::native::{NativePlugin, NativeVideoDecoder, NativeVideoFrame};
+use player_plugin_loader::{
+    DecoderPluginMatchRequest, NativePluginArtifact, PluginDiagnosticRecord, PluginRegistry,
+};
 use player_runtime::{
-    FrameProcessorMode, FrameProcessorPolicy, NativeFramePipelineMode, PlayerPlaybackRoute,
-    PlayerPluginDiagnostic, PlayerPluginParticipation, SourceNormalizerMode,
+    NativeFramePipelineMode, PlayerPlaybackRoute, PlayerPluginDiagnostic,
+    PlayerPluginParticipation, SourceNormalizerMode,
 };
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
-
-const DECODER_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(2);
-const MAX_PACKET_READ_ATTEMPTS_PER_ADVANCE: usize = 8;
-const MAX_DECODE_RECEIVE_ATTEMPTS_PER_ADVANCE: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IosNativeFramePipelineOpenError {
@@ -65,7 +60,6 @@ pub struct IosNativeFramePipelineOpenConfig {
     pub frame_processor_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub frame_processor_plugin_library_paths: Vec<PathBuf>,
     pub native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy,
-    pub max_in_flight_frames: Option<u32>,
 }
 
 /// Maximum number of pending frames the iOS native frame pipeline session tracks
@@ -73,8 +67,6 @@ pub struct IosNativeFramePipelineOpenConfig {
 /// `player_ffi_ios_native_frame_pipeline_release_frame` FFI entry point to stay
 /// within this bound.
 const MAX_PENDING_FRAMES: usize = 64;
-const MAX_REJECTED_FRAMES_PENDING_CLEANUP: usize = 8;
-const MAX_PROCESSOR_OUTPUTS_PENDING_CLEANUP: usize = 16;
 
 pub struct IosNativeFramePipelineSession {
     source_uri: String,
@@ -93,16 +85,11 @@ pub struct IosNativeFramePipelineSession {
     dolby_vision_mode: Option<String>,
     source_normalizer_plugin_name: Option<String>,
     decoder_plugin_name: String,
-    processor_plugin_names: Vec<String>,
-    packet_session: Box<dyn SourceNormalizerPacketSession>,
-    decoder_session: Box<dyn NativeDecoderSession>,
-    frame_processor_chain: Option<IosFrameProcessorChain>,
-    end_of_input_sent: bool,
+    video: Option<NativeMediaPipeline<NormalizedVideoPackets>>,
     end_of_stream_received: bool,
     exact_seek_target_us: Option<i64>,
     next_frame_handle: u64,
     pending_frames: HashMap<u64, IosNativeFramePipelineFrame>,
-    rejected_frames_pending_cleanup: Vec<IosNativeFramePipelineFrame>,
     counters: IosNativeFramePipelineCounters,
 }
 
@@ -113,8 +100,7 @@ pub struct IosNativeFramePipelineFrame {
     pub width: u32,
     pub height: u32,
     pub frame_id: Option<u64>,
-    decoder_frame_released: bool,
-    frame: IosPipelineFrame,
+    lease: Option<NativeVideoFrame>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -292,32 +278,6 @@ impl Serialize for IosNativeFramePipelineDiagnosticDetailsWire {
     }
 }
 
-struct IosFrameProcessorChain {
-    processors: Vec<IosFrameProcessorNode>,
-    mode: FrameProcessorMode,
-    policy: FrameProcessorPolicy,
-    processor_outputs_pending_cleanup: Vec<ProcessorOwnedNativeFrame>,
-}
-
-struct IosFrameProcessorNode {
-    plugin_name: String,
-    processor_index: usize,
-    session: Box<dyn FrameProcessorSession>,
-}
-
-#[derive(Debug)]
-struct IosPipelineFrame {
-    decoder_frame: DecoderNativeFrame,
-    presentation_frame: DecoderNativeFrame,
-    processor_outputs: Vec<ProcessorOwnedNativeFrame>,
-}
-
-#[derive(Debug)]
-struct ProcessorOwnedNativeFrame {
-    processor_index: usize,
-    frame: NativeFrame,
-}
-
 fn validate_ios_native_plugin_bindings(
     config: &IosNativeFramePipelineOpenConfig,
 ) -> Result<(), IosNativeFramePipelineOpenError> {
@@ -331,11 +291,6 @@ fn validate_ios_native_plugin_bindings(
             config.decoder_plugin_artifacts.as_slice(),
             config.decoder_plugin_library_paths.as_slice(),
             "iOS NativeDecoder",
-        ),
-        (
-            config.frame_processor_plugin_artifacts.as_slice(),
-            config.frame_processor_plugin_library_paths.as_slice(),
-            "iOS FrameProcessor",
         ),
     ] {
         if !artifacts.is_empty() && !paths.is_empty() {
@@ -372,6 +327,14 @@ impl IosNativeFramePipelineSession {
                 "iOS native-frame pipeline must be explicitly preferred or required",
             ));
         }
+        if !config.frame_processor_plugin_artifacts.is_empty()
+            || !config.frame_processor_plugin_library_paths.is_empty()
+        {
+            return Err(IosNativeFramePipelineOpenError::new(
+                "startupFailure",
+                "FrameProcessor has been retired from the iOS native-frame pipeline",
+            ));
+        }
         validate_ios_native_plugin_bindings(&config)?;
         if config.source_normalizer_plugin_artifacts.is_empty()
             && config.source_normalizer_plugin_library_paths.is_empty()
@@ -398,18 +361,16 @@ impl IosNativeFramePipelineSession {
             native_plugin_loading_policy: config.native_plugin_loading_policy,
             runtime_profile: config.runtime_profile.clone(),
         };
-        let (source_normalizer_plugin_name, mut packet_session) = open_packet_source_normalizer(
-            &source,
-            &source_normalizer_configuration,
-        )
-        .map_err(|error| {
-            IosNativeFramePipelineOpenError::new("missingSourceNormalizerPacketPlugin", error)
-        })?;
-        let stream_info = packet_session.stream_info();
+        let packet_open = open_packet_source_normalizer(&source, &source_normalizer_configuration)
+            .map_err(|error| {
+                IosNativeFramePipelineOpenError::new("missingSourceNormalizerPacketPlugin", error)
+            })?;
+        let stream_info = packet_open.info;
+        let source_normalizer_plugin_name = packet_open.plugin_name;
+        let packets = packet_open.session;
         let track = selected_video_track(&stream_info)
             .map_err(|error| IosNativeFramePipelineOpenError::new("unsupportedCodec", error))?;
         if let Some(reason) = hdr_programmable_processing_not_supported_reason(&track) {
-            let _ = packet_session.close();
             return Err(IosNativeFramePipelineOpenError::new(
                 HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED,
                 reason,
@@ -420,7 +381,7 @@ impl IosNativeFramePipelineSession {
         let has_audio_track = audio_track.is_some();
         let audio_track_codec = audio_track.as_ref().map(|track| track.codec.clone());
         let audio_stream_index = audio_track.as_ref().map(|track| track.stream_index);
-        let video_output_format = decoder_frame_format_label(&DecoderFrameFormat::Nv12);
+        let video_output_format = "nv12".to_owned();
         let video_transfer = track
             .color
             .as_ref()
@@ -429,7 +390,6 @@ impl IosNativeFramePipelineSession {
         let hdr_kind = track.hdr.as_ref().map(|hdr| hdr.kind.clone());
         let dolby_vision_mode = track.hdr.as_ref().and_then(dolby_vision_mode);
         if !apple_native_frame_video_codec_supported(&track.codec) {
-            let _ = packet_session.close();
             return Err(IosNativeFramePipelineOpenError::new(
                 "unsupportedCodec",
                 format!(
@@ -440,7 +400,7 @@ impl IosNativeFramePipelineSession {
         }
 
         let video_request = DecoderPluginMatchRequest::video(track.codec.clone());
-        let (decoder_factory, audio_decoder_plugin_name) =
+        let (decoder_factory, decoder_artifact, audio_decoder_plugin_name) =
             if config.decoder_plugin_artifacts.is_empty() {
                 let decoder_registry = PluginRegistry::inspect_decoder_support_development(
                     &config.decoder_plugin_library_paths,
@@ -482,9 +442,17 @@ impl IosNativeFramePipelineSession {
                         )
                     })?
                     .capability();
-                (decoder_factory, audio_decoder_plugin_name)
+                let artifact = decoder_registry
+                    .native_artifact(decoder_reference)
+                    .map_err(|error| {
+                        IosNativeFramePipelineOpenError::new(
+                            "missingVideoToolboxDecoderPlugin",
+                            error.to_string(),
+                        )
+                    })?;
+                (decoder_factory, artifact, audio_decoder_plugin_name)
             } else {
-                let decoder_factory = resolve_selected_ios_decoder(
+                let (decoder_factory, artifact) = resolve_selected_ios_decoder(
                     &config.decoder_plugin_artifacts,
                     &video_request,
                     false,
@@ -504,50 +472,24 @@ impl IosNativeFramePipelineSession {
                         &DecoderPluginMatchRequest::audio(track.codec.clone()),
                         true,
                     )?
-                    .map(|factory| factory.name().to_owned()),
+                    .map(|(factory, _)| factory.name().to_owned()),
                     None => None,
                 };
-                (decoder_factory, audio_decoder_plugin_name)
+                (decoder_factory, artifact, audio_decoder_plugin_name)
             };
         let audio_decoder_plugin_ready = audio_decoder_plugin_name.is_some();
         let decoder_plugin_name = decoder_factory.name().to_owned();
-        let decoder_session = decoder_factory
-            .open_native_session(&video_decoder_session_config(&track))
-            .map_err(|error| {
-                IosNativeFramePipelineOpenError::new(
-                    "unsupportedCodec",
-                    format!("failed to open VideoToolbox decoder session: {error}"),
-                )
-            })?;
-
-        let frame_processor_mode = if config.frame_processor_plugin_artifacts.is_empty()
-            && config.frame_processor_plugin_library_paths.is_empty()
-        {
-            FrameProcessorMode::Disabled
-        } else {
-            FrameProcessorMode::PreferProcessed
-        };
-        let frame_processor_chain = open_frame_processor_chain(
-            &track,
-            &config.frame_processor_plugin_artifacts,
-            &config.frame_processor_plugin_library_paths,
-            frame_processor_mode,
-            FrameProcessorPolicy {
-                max_in_flight_frames_per_processor: config.max_in_flight_frames.unwrap_or(1).max(1),
-                ..FrameProcessorPolicy::default()
-            },
-        )
-        .map_err(|error| IosNativeFramePipelineOpenError::new("startupFailure", error))?;
-        let processor_plugin_names = frame_processor_chain
-            .as_ref()
-            .map(|chain| {
-                chain
-                    .processors
-                    .iter()
-                    .map(|node| node.plugin_name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let plugin = decoder_artifact.native_plugin().ok_or_else(|| {
+            IosNativeFramePipelineOpenError::new(
+                "missingVideoToolboxDecoderPlugin",
+                "iOS native-frame playback requires a native VideoToolbox decoder plugin",
+            )
+        })?;
+        let decoder = open_native_video_decoder(&plugin, &track)?;
+        let video = NativeMediaPipeline::new(
+            NormalizedVideoPackets::new(packets, video_stream_index),
+            decoder,
+        );
 
         Ok(Self {
             source_uri: config.source_uri,
@@ -567,16 +509,11 @@ impl IosNativeFramePipelineSession {
             source_normalizer_plugin_name: source_normalizer_plugin_name
                 .or_else(|| stream_info.normalizer_name.clone()),
             decoder_plugin_name,
-            processor_plugin_names,
-            packet_session,
-            decoder_session,
-            frame_processor_chain,
-            end_of_input_sent: false,
+            video: Some(video),
             end_of_stream_received: false,
             exact_seek_target_us: None,
             next_frame_handle: 1,
             pending_frames: HashMap::new(),
-            rejected_frames_pending_cleanup: Vec::new(),
             counters: IosNativeFramePipelineCounters::default(),
         })
     }
@@ -613,7 +550,7 @@ impl IosNativeFramePipelineSession {
             audio_decoder_plugin_ready: self.audio_decoder_plugin_ready,
             clock_source: self.clock_source(),
             source_normalizer_plugin: self.source_normalizer_plugin_name.clone(),
-            processor_chain: self.processor_plugin_names.clone(),
+            processor_chain: Vec::new(),
             counters: self.counters.clone(),
             diagnostics: self.diagnostics(PlayerPluginParticipation::Selected),
         }
@@ -658,34 +595,61 @@ impl IosNativeFramePipelineSession {
     }
 
     pub fn advance(&mut self) -> Result<Option<IosNativeFramePipelineFrame>, String> {
-        self.release_all_rejected_frames_pending_cleanup()?;
         if self.end_of_stream_received {
             return Ok(None);
         }
-        for _ in 0..MAX_DECODE_RECEIVE_ATTEMPTS_PER_ADVANCE {
-            match self.receive_frame()? {
-                Some(frame) => return Ok(Some(frame)),
-                None if self.end_of_stream_received => return Ok(None),
-                None => {}
-            }
-            if !self.end_of_input_sent {
-                self.send_packet_or_eos()?;
-            } else {
-                thread::sleep(DECODER_DRAIN_RETRY_INTERVAL);
+        let pipeline = self
+            .video
+            .as_mut()
+            .ok_or_else(|| "iOS video route is closed".to_owned())?;
+        match pipeline.advance().map_err(|error| error.to_string())? {
+            NativeMediaVideoPoll::Frame { lease, format } => self.accept_frame(lease, format),
+            NativeMediaVideoPoll::Pending => Ok(None),
+            NativeMediaVideoPoll::EndOfStream => {
+                self.end_of_stream_received = true;
+                Ok(None)
             }
         }
-        Ok(None)
+    }
+
+    fn accept_frame(
+        &mut self,
+        lease: NativeVideoFrame,
+        format: player_plugin_abi::VesperVideoFormat,
+    ) -> Result<Option<IosNativeFramePipelineFrame>, String> {
+        let frame = lease.descriptor();
+        self.counters.decoded_frames = self.counters.decoded_frames.saturating_add(1);
+        if let Some(target) = self.exact_seek_target_us {
+            if frame.pts_us < target {
+                self.counters.released_frames = self.counters.released_frames.saturating_add(1);
+                return Ok(None);
+            }
+            self.exact_seek_target_us = None;
+        }
+        if frame.handle_kind != VESPER_HANDLE_CV_PIXEL_BUFFER || frame.plane_count != 1 {
+            return Err(format!(
+                "iOS presenter requires a CVPixelBuffer, got {}",
+                frame.handle_kind
+            ));
+        }
+        Ok(Some(IosNativeFramePipelineFrame {
+            handle: frame.handles[0] as usize,
+            presentation_time_us: if frame.pts_us == i64::MIN {
+                0
+            } else {
+                frame.pts_us
+            },
+            duration_us: (frame.duration_us != i64::MIN).then_some(frame.duration_us),
+            width: format.width,
+            height: format.height,
+            frame_id: Some(frame.lease_id),
+            lease: Some(lease),
+        }))
     }
 
     pub fn store_frame(&mut self, frame: IosNativeFramePipelineFrame) -> Result<u64, String> {
         if self.pending_frames.len() >= MAX_PENDING_FRAMES {
-            let cleanup_error = self.release_all_rejected_frames_pending_cleanup().err();
-            self.release_rejected_frame(frame)?;
-            if let Some(error) = cleanup_error {
-                return Err(format!(
-                    "native-frame pending frame limit reached; previous rejected-frame cleanup is still pending, and the current rejected frame was released: {error}",
-                ));
-            }
+            Self::complete_frame(&mut self.counters, frame, false);
             return Err(
                 "native-frame pending frame limit reached; rejected frame was released".to_owned(),
             );
@@ -705,37 +669,33 @@ impl IosNativeFramePipelineSession {
         self.pending_frames.get(&handle)
     }
 
+    /// Transfers the plugin lease to the GPU presenter. The pending handle
+    /// remains until the host reports the result or invalidates its epoch.
+    pub fn take_presentation_lease(&mut self, handle: u64) -> Option<NativeVideoFrame> {
+        self.pending_frames.get_mut(&handle)?.lease.take()
+    }
+
     pub fn is_end_of_stream(&self) -> bool {
         self.end_of_stream_received
     }
 
     pub fn release_pending_frame(&mut self, handle: u64, presented: bool) -> Result<(), String> {
-        let mut frame = self
+        let frame = self
             .pending_frames
             .remove(&handle)
             .ok_or_else(|| "invalid iOS native-frame pending frame handle".to_owned())?;
-
-        if let Err(error) = self.release_stored_frame(&mut frame, presented) {
-            self.pending_frames.insert(handle, frame);
-            return Err(error);
-        }
-
+        Self::complete_frame(&mut self.counters, frame, presented);
         Ok(())
     }
 
     pub fn flush(&mut self) -> Result<(), String> {
-        self.release_all_pending_frames()?;
+        self.release_all_pending_frames();
         self.exact_seek_target_us = None;
-        if let Some(chain) = self.frame_processor_chain.as_mut() {
-            chain.flush();
-        }
-        self.decoder_session
-            .flush()
-            .map_err(|error| format!("decoder flush failed: {error}"))?;
-        self.packet_session
-            .flush()
-            .map_err(|error| format!("source normalizer packet flush failed: {error}"))?;
-        self.end_of_input_sent = false;
+        let pipeline = self
+            .video
+            .as_mut()
+            .ok_or_else(|| "iOS video route is closed".to_owned())?;
+        pipeline.flush().map_err(|error| error.to_string())?;
         self.end_of_stream_received = false;
         Ok(())
     }
@@ -744,178 +704,45 @@ impl IosNativeFramePipelineSession {
         if !self.seekable {
             return Err("iOS native-frame pipeline source is not seekable".to_owned());
         }
-        self.release_all_pending_frames()?;
+        self.release_all_pending_frames();
         self.exact_seek_target_us = None;
-        if let Some(chain) = self.frame_processor_chain.as_mut() {
-            chain.flush();
-        }
-        self.decoder_session
-            .flush()
-            .map_err(|error| format!("decoder flush before seek failed: {error}"))?;
-        self.packet_session.flush().map_err(|error| {
-            format!("source normalizer packet flush before seek failed: {error}")
-        })?;
-        self.packet_session
-            .seek(&SourceNormalizerPacketSeek {
-                position_millis,
-                exact: true,
-            })
-            .map_err(|error| format!("source normalizer packet seek failed: {error}"))?;
+        let pipeline = self
+            .video
+            .as_mut()
+            .ok_or_else(|| "iOS video route is closed".to_owned())?;
+        pipeline
+            .seek(Duration::from_millis(position_millis))
+            .map_err(|error| error.to_string())?;
         self.exact_seek_target_us =
             Some(position_millis.saturating_mul(1_000).min(i64::MAX as u64) as i64);
-        self.end_of_input_sent = false;
         self.end_of_stream_received = false;
         self.counters.seek_count = self.counters.seek_count.saturating_add(1);
         Ok(())
     }
 
     pub fn close(&mut self) {
-        let _ = self.release_all_pending_frames();
-        if let Some(chain) = self.frame_processor_chain.as_mut() {
-            chain.close();
-        }
-        let _ = self.decoder_session.close();
-        let _ = self.packet_session.close();
+        self.release_all_pending_frames();
+        self.video = None;
     }
 
-    fn receive_frame(&mut self) -> Result<Option<IosNativeFramePipelineFrame>, String> {
-        let output = self
-            .decoder_session
-            .receive_native_frame()
-            .map_err(|error| format!("VideoToolbox receive frame failed: {error}"))?;
-        let DecoderReceiveNativeFrameOutput::Frame(frame) = output else {
-            if matches!(output, DecoderReceiveNativeFrameOutput::Eof) {
-                self.end_of_stream_received = true;
-            }
-            return Ok(None);
-        };
-        self.counters.decoded_frames = self.counters.decoded_frames.saturating_add(1);
-        if let Some(target_us) = self.exact_seek_target_us {
-            if frame
-                .metadata
-                .pts_us
-                .is_none_or(|pts_us| pts_us < target_us)
-            {
-                self.decoder_session
-                    .release_native_frame(frame)
-                    .map_err(|error| {
-                        format!("VideoToolbox exact-seek preroll frame release failed: {error}")
-                    })?;
-                self.counters.released_frames = self.counters.released_frames.saturating_add(1);
-                return Ok(None);
-            }
-            self.exact_seek_target_us = None;
+    fn release_all_pending_frames(&mut self) {
+        for (_, frame) in self.pending_frames.drain() {
+            Self::complete_frame(&mut self.counters, frame, false);
         }
-        let pipeline_frame = match process_frame(
-            self.frame_processor_chain.as_mut(),
-            &mut self.counters,
-            frame,
-        ) {
-            Ok(frame) => frame,
-            Err((error, frame_for_release)) => {
-                let _ = self
-                    .decoder_session
-                    .release_native_frame(*frame_for_release);
-                return Err(error);
-            }
-        };
-        if pipeline_frame.presentation_frame.metadata.handle_kind
-            != DecoderNativeHandleKind::CvPixelBuffer
-        {
-            let handle_kind = format!(
-                "{:?}",
-                pipeline_frame.presentation_frame.metadata.handle_kind
-            );
-            let _ = self.release_pipeline_frame(pipeline_frame);
-            return Err(format!(
-                "iOS native-frame presenter only accepts CVPixelBuffer handles, got {handle_kind}"
-            ));
-        }
-        let presentation = &pipeline_frame.presentation_frame;
-        Ok(Some(IosNativeFramePipelineFrame {
-            handle: presentation.handle,
-            presentation_time_us: presentation.metadata.pts_us.unwrap_or(0),
-            duration_us: presentation.metadata.duration_us,
-            width: presentation.metadata.width,
-            height: presentation.metadata.height,
-            frame_id: presentation.metadata.frame_id,
-            decoder_frame_released: false,
-            frame: pipeline_frame,
-        }))
     }
 
-    fn send_packet_or_eos(&mut self) -> Result<(), String> {
-        for _ in 0..MAX_PACKET_READ_ATTEMPTS_PER_ADVANCE {
-            let lease = self
-                .packet_session
-                .read_packet()
-                .map_err(|error| format!("source normalizer packet read failed: {error}"))?;
-            match lease.metadata.status {
-                SourceNormalizerReadPacketStatus::Packet => {
-                    let data = lease.data.to_vec();
-                    let packet_handle = lease.handle;
-                    let packet = lease.metadata.packet.clone();
-                    self.packet_session
-                        .release_packet(packet_handle)
-                        .map_err(|error| {
-                            format!("source normalizer packet release failed: {error}")
-                        })?;
-                    let Some(packet) = packet else {
-                        return Err("source normalizer packet metadata was missing".to_owned());
-                    };
-                    if packet.media_kind != SourceNormalizerPacketMediaKind::Video {
-                        match packet.media_kind {
-                            SourceNormalizerPacketMediaKind::Audio => {
-                                self.counters.skipped_audio_packets =
-                                    self.counters.skipped_audio_packets.saturating_add(1);
-                            }
-                            SourceNormalizerPacketMediaKind::Video => {}
-                            SourceNormalizerPacketMediaKind::Subtitle => {
-                                self.counters.skipped_other_packets =
-                                    self.counters.skipped_other_packets.saturating_add(1);
-                            }
-                        }
-                        continue;
-                    }
-                    if packet.stream_index != self.video_stream_index {
-                        self.counters.skipped_video_packets =
-                            self.counters.skipped_video_packets.saturating_add(1);
-                        continue;
-                    }
-                    let decoder_packet = decoder_packet_from_source_normalizer_packet(packet)?;
-                    self.decoder_session
-                        .send_packet(&decoder_packet, &data)
-                        .map_err(|error| format!("VideoToolbox send packet failed: {error}"))?;
-                    return Ok(());
-                }
-                SourceNormalizerReadPacketStatus::NeedMoreData => {
-                    thread::sleep(DECODER_DRAIN_RETRY_INTERVAL);
-                }
-                SourceNormalizerReadPacketStatus::EndOfStream => {
-                    self.decoder_session
-                        .send_packet(
-                            &DecoderPacket {
-                                end_of_stream: true,
-                                ..DecoderPacket::default()
-                            },
-                            &[],
-                        )
-                        .map_err(|error| format!("VideoToolbox send EOS failed: {error}"))?;
-                    self.end_of_input_sent = true;
-                    return Ok(());
-                }
-            }
+    fn complete_frame(
+        counters: &mut IosNativeFramePipelineCounters,
+        frame: IosNativeFramePipelineFrame,
+        presented: bool,
+    ) {
+        if let Some(lease) = frame.lease {
+            lease.complete(presented);
         }
-        Ok(())
-    }
-
-    fn release_all_pending_frames(&mut self) -> Result<(), String> {
-        self.release_all_rejected_frames_pending_cleanup()?;
-        let handles = self.pending_frames.keys().copied().collect::<Vec<_>>();
-        for handle in handles {
-            self.release_pending_frame(handle, false)?;
+        counters.released_frames = counters.released_frames.saturating_add(1);
+        if presented {
+            counters.presented_frames = counters.presented_frames.saturating_add(1);
         }
-        Ok(())
     }
 
     fn clock_source(&self) -> &'static str {
@@ -964,71 +791,6 @@ impl IosNativeFramePipelineSession {
         } else {
             "none"
         }
-    }
-
-    fn release_rejected_frame(&mut self, frame: IosNativeFramePipelineFrame) -> Result<(), String> {
-        let mut frame = frame;
-        match self.release_stored_frame(&mut frame, false) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if self.rejected_frames_pending_cleanup.len() < MAX_REJECTED_FRAMES_PENDING_CLEANUP
-                {
-                    self.rejected_frames_pending_cleanup.push(frame);
-                    return Err(format!(
-                        "native-frame pending frame limit reached; rejected frame was retained for cleanup after release failed: {error}",
-                    ));
-                }
-                self.close();
-                Err(format!(
-                    "native-frame pending frame limit reached; rejected-frame cleanup capacity ({MAX_REJECTED_FRAMES_PENDING_CLEANUP}) is saturated; session was closed after release failed: {error}",
-                ))
-            }
-        }
-    }
-
-    fn release_all_rejected_frames_pending_cleanup(&mut self) -> Result<(), String> {
-        while let Some(mut frame) = self.rejected_frames_pending_cleanup.pop() {
-            if let Err(error) = self.release_stored_frame(&mut frame, false) {
-                self.rejected_frames_pending_cleanup.push(frame);
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
-
-    fn release_stored_frame(
-        &mut self,
-        frame: &mut IosNativeFramePipelineFrame,
-        presented: bool,
-    ) -> Result<(), String> {
-        if !frame.decoder_frame_released {
-            self.decoder_session
-                .release_native_frame(frame.frame.decoder_frame.clone())
-                .map_err(|error| format!("VideoToolbox frame release failed: {error}"))?;
-            frame.decoder_frame_released = true;
-        }
-        if let Some(chain) = self.frame_processor_chain.as_mut() {
-            chain.release_processor_outputs(&mut frame.frame.processor_outputs)?;
-        }
-        self.counters.released_frames = self.counters.released_frames.saturating_add(1);
-        if presented {
-            self.counters.presented_frames = self.counters.presented_frames.saturating_add(1);
-        }
-        Ok(())
-    }
-
-    fn release_pipeline_frame(&mut self, frame: IosPipelineFrame) -> Result<(), String> {
-        let mut frame = IosNativeFramePipelineFrame {
-            handle: frame.presentation_frame.handle,
-            presentation_time_us: frame.presentation_frame.metadata.pts_us.unwrap_or(0),
-            duration_us: frame.presentation_frame.metadata.duration_us,
-            width: frame.presentation_frame.metadata.width,
-            height: frame.presentation_frame.metadata.height,
-            frame_id: frame.presentation_frame.metadata.frame_id,
-            decoder_frame_released: false,
-            frame,
-        };
-        self.release_stored_frame(&mut frame, false)
     }
 
     fn diagnostics(
@@ -1293,7 +1055,7 @@ pub fn native_frame_pipeline_frame_json(
 fn open_packet_source_normalizer(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
-) -> Result<(Option<String>, Box<dyn SourceNormalizerPacketSession>), String> {
+) -> Result<MobileSourceNormalizerPacketOpen, String> {
     if !matches!(
         configuration.mode,
         SourceNormalizerMode::PreflightOnly
@@ -1305,406 +1067,7 @@ fn open_packet_source_normalizer(
                 .to_owned(),
         );
     }
-    let opened = open_mobile_source_normalizer_packet_session(source, configuration)?;
-    Ok((opened.plugin_name, opened.session))
-}
-
-fn open_frame_processor_chain(
-    track: &player_plugin::SourceNormalizerPacketTrackInfo,
-    artifacts: &[MobileNativePluginArtifact],
-    paths: &[PathBuf],
-    mode: FrameProcessorMode,
-    policy: FrameProcessorPolicy,
-) -> Result<Option<IosFrameProcessorChain>, String> {
-    if mode == FrameProcessorMode::Disabled || (artifacts.is_empty() && paths.is_empty()) {
-        return Ok(None);
-    }
-    let input_metadata = NativeFrameMetadata {
-        media_kind: DecoderMediaKind::Video,
-        format: DecoderFrameFormat::Nv12,
-        codec: track.codec.clone(),
-        pts_us: None,
-        duration_us: None,
-        width: track.width.unwrap_or(0),
-        height: track.height.unwrap_or(0),
-        coded_width: track.coded_width.or(track.width),
-        coded_height: track.coded_height.or(track.height),
-        visible_rect: None,
-        handle_kind: NativeHandleKind::CvPixelBuffer,
-        pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
-        color_space: track
-            .color
-            .as_ref()
-            .and_then(|color| color.primaries.clone()),
-        hdr_metadata: track.hdr.as_ref().map(|hdr| hdr.kind.clone()),
-        color: track.color.clone(),
-        hdr: track.hdr.clone(),
-        sync_info: None,
-        transform: None,
-        frame_id: None,
-        release_tracking: None,
-    };
-    let mut processors = Vec::new();
-    if !artifacts.is_empty() && !paths.is_empty() {
-        return Err(
-            "iOS FrameProcessor configuration cannot mix referenced artifacts with unbound paths"
-                .to_owned(),
-        );
-    }
-    let bindings = if artifacts.is_empty() {
-        paths.iter().map(|path| (path, None)).collect::<Vec<_>>()
-    } else {
-        artifacts
-            .iter()
-            .map(|artifact| (&artifact.library_path, Some(artifact)))
-            .collect::<Vec<_>>()
-    };
-    for (processor_index, (path, requested_artifact)) in bindings
-        .into_iter()
-        .enumerate()
-        .take(policy.max_chain_depth)
-    {
-        let registry = match requested_artifact {
-            Some(artifact) => {
-                let artifact = artifact
-                    .loader_artifact()
-                    .map_err(|error| error.to_string())?;
-                PluginRegistry::load_native_artifacts([artifact])
-            }
-            None => PluginRegistry::load_native_development([path]),
-        }
-        .map_err(|error| {
-            format!(
-                "failed to load frame processor plugin {}: {error}",
-                path.display()
-            )
-        })?;
-        let implicit_references;
-        let reference = match requested_artifact.map(|artifact| &artifact.reference) {
-            Some(reference) => reference,
-            None => {
-                implicit_references = registry
-                    .frame_processor_references()
-                    .map_err(|error| format!("failed to enumerate frame processors: {error}"))?;
-                match implicit_references.as_slice() {
-                    [reference] => reference,
-                    [] => {
-                        return Err(format!(
-                            "plugin {} does not export a FrameProcessor interface",
-                            path.display()
-                        ));
-                    }
-                    _ => {
-                        return Err(format!(
-                            "plugin {} exposes {} FrameProcessor instances; an explicit PluginReference is required",
-                            path.display(),
-                            implicit_references.len()
-                        ));
-                    }
-                }
-            }
-        };
-        let factory = registry
-            .resolve_frame_processor(reference)
-            .map_err(|error| format!("failed to resolve frame processor: {error}"))?
-            .capability();
-        let capabilities = factory.capabilities();
-        let requirements = FrameProcessorSessionRequirements::native_video(input_metadata.clone());
-        let missing_capabilities = requirements.missing_capabilities(&capabilities);
-        if !missing_capabilities.is_empty() {
-            return Err(format!(
-                "frame processor `{}` does not satisfy session requirements for CVPixelBuffer VideoToolbox input: missing {}",
-                factory.name(),
-                missing_capabilities.join(", ")
-            ));
-        }
-        let session = factory
-            .open_session(&FrameProcessorSessionConfig {
-                processor_index,
-                input_metadata: input_metadata.clone(),
-                max_in_flight_frames: Some(policy.max_in_flight_frames_per_processor),
-            })
-            .map_err(|error| {
-                format!(
-                    "failed to open frame processor `{}`: {error}",
-                    factory.name()
-                )
-            })?;
-        processors.push(IosFrameProcessorNode {
-            plugin_name: factory.name().to_owned(),
-            processor_index,
-            session,
-        });
-    }
-    if processors.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(IosFrameProcessorChain {
-            processors,
-            mode,
-            policy,
-            processor_outputs_pending_cleanup: Vec::new(),
-        }))
-    }
-}
-
-type IosPipelineFrameError = (String, Box<DecoderNativeFrame>);
-
-fn process_frame(
-    chain: Option<&mut IosFrameProcessorChain>,
-    counters: &mut IosNativeFramePipelineCounters,
-    decoder_frame: DecoderNativeFrame,
-) -> Result<IosPipelineFrame, IosPipelineFrameError> {
-    let Some(chain) = chain else {
-        return Ok(IosPipelineFrame {
-            decoder_frame: decoder_frame.clone(),
-            presentation_frame: decoder_frame,
-            processor_outputs: Vec::new(),
-        });
-    };
-    chain.process(counters, decoder_frame)
-}
-
-impl IosFrameProcessorChain {
-    fn process(
-        &mut self,
-        counters: &mut IosNativeFramePipelineCounters,
-        decoder_frame: DecoderNativeFrame,
-    ) -> Result<IosPipelineFrame, IosPipelineFrameError> {
-        self.release_processor_outputs_pending_cleanup()
-            .map_err(|error| (error, Box::new(decoder_frame.clone())))?;
-        let mut current_frame = NativeFrame::from(decoder_frame.clone());
-        let mut processor_outputs = Vec::new();
-        let mut using_processor_output = false;
-        for node_index in 0..self.processors.len() {
-            let submit = FrameProcessorSubmitFrame {
-                metadata: current_frame.metadata.clone(),
-                present_deadline_us: current_frame
-                    .metadata
-                    .pts_us
-                    .map(|pts| pts.saturating_add(self.policy.frame_deadline.as_micros() as i64)),
-            };
-            let submit_result = {
-                let node = &mut self.processors[node_index];
-                node.session
-                    .submit_frame(FrameProcessorInputFrame::new(&current_frame), &submit)
-                    .map_err(|error| frame_processor_error(self.mode, node, error))
-            };
-            let submit_result = match submit_result {
-                Ok(submit_result) => submit_result,
-                Err(error) => {
-                    self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                    return Err((error, Box::new(decoder_frame)));
-                }
-            };
-            match submit_result.status {
-                FrameProcessorSubmitStatus::Accepted => {}
-                FrameProcessorSubmitStatus::Bypassed | FrameProcessorSubmitStatus::Backpressure => {
-                    counters.bypassed_frames = counters.bypassed_frames.saturating_add(1);
-                    if submit_result.status == FrameProcessorSubmitStatus::Backpressure {
-                        counters.backpressure_count = counters.backpressure_count.saturating_add(1);
-                    }
-                    if self.mode == FrameProcessorMode::RequireProcessed {
-                        let plugin_name = self.processors[node_index].plugin_name.clone();
-                        self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                        return Err((
-                            format!("frame processor `{plugin_name}` bypassed in strict mode"),
-                            Box::new(decoder_frame),
-                        ));
-                    }
-                    current_frame = NativeFrame::from(decoder_frame.clone());
-                    using_processor_output = false;
-                    continue;
-                }
-                FrameProcessorSubmitStatus::Rejected => {
-                    counters.bypassed_frames = counters.bypassed_frames.saturating_add(1);
-                    if self.mode == FrameProcessorMode::RequireProcessed {
-                        let plugin_name = self.processors[node_index].plugin_name.clone();
-                        self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                        return Err((
-                            format!(
-                                "frame processor `{plugin_name}` rejected a frame in strict mode"
-                            ),
-                            Box::new(decoder_frame),
-                        ));
-                    }
-                    current_frame = NativeFrame::from(decoder_frame.clone());
-                    using_processor_output = false;
-                    continue;
-                }
-            }
-
-            let output = {
-                let node = &mut self.processors[node_index];
-                node.session
-                    .receive_frame()
-                    .map_err(|error| frame_processor_error(self.mode, node, error))
-            };
-            let output = match output {
-                Ok(output) => output,
-                Err(error) => {
-                    self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                    return Err((error, Box::new(decoder_frame)));
-                }
-            };
-            let FrameProcessorReceiveOutput::Frame(output) = output else {
-                counters.bypassed_frames = counters.bypassed_frames.saturating_add(1);
-                if self.mode == FrameProcessorMode::RequireProcessed {
-                    let plugin_name = self.processors[node_index].plugin_name.clone();
-                    self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                    return Err((
-                        format!(
-                            "frame processor `{plugin_name}` did not return a ready frame in strict mode"
-                        ),
-                        Box::new(decoder_frame),
-                    ));
-                }
-                current_frame = NativeFrame::from(decoder_frame.clone());
-                using_processor_output = false;
-                continue;
-            };
-
-            if is_late_output(&output.timings, &self.policy) {
-                counters.deadline_misses = counters.deadline_misses.saturating_add(1);
-            }
-            if should_drop_output(&output.timings, &self.policy) {
-                counters.late_dropped = counters.late_dropped.saturating_add(1);
-                release_output_if_needed(&mut self.processors[node_index], output.frame);
-                current_frame = NativeFrame::from(decoder_frame.clone());
-                using_processor_output = false;
-                continue;
-            }
-            counters.processed_frames = counters.processed_frames.saturating_add(1);
-            if output_frame_requires_processor_release(&output.frame) {
-                let processor_index = self.processors[node_index].processor_index;
-                processor_outputs.push(ProcessorOwnedNativeFrame {
-                    processor_index,
-                    frame: output.frame.clone(),
-                });
-            }
-            current_frame = output.frame;
-            using_processor_output = self.mode != FrameProcessorMode::DiagnosticsOnly;
-            if !using_processor_output {
-                current_frame = NativeFrame::from(decoder_frame.clone());
-            }
-        }
-
-        let presentation_frame = if using_processor_output
-            && matches!(
-                self.mode,
-                FrameProcessorMode::PreferProcessed | FrameProcessorMode::RequireProcessed
-            ) {
-            DecoderNativeFrame::from(current_frame)
-        } else {
-            decoder_frame.clone()
-        };
-        Ok(IosPipelineFrame {
-            decoder_frame,
-            presentation_frame,
-            processor_outputs,
-        })
-    }
-
-    fn release_outputs_before_error(
-        &mut self,
-        mut outputs: Vec<ProcessorOwnedNativeFrame>,
-        decoder_frame: &DecoderNativeFrame,
-    ) -> Result<(), IosPipelineFrameError> {
-        match self.release_processor_outputs(&mut outputs) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if let Err(retain_error) = self.retain_processor_outputs_for_cleanup(&mut outputs) {
-                    return Err((
-                        format!(
-                            "{error}; additionally failed to retain processor outputs for cleanup: {retain_error}"
-                        ),
-                        Box::new(decoder_frame.clone()),
-                    ));
-                }
-                Err((error, Box::new(decoder_frame.clone())))
-            }
-        }
-    }
-
-    fn release_processor_outputs(
-        &mut self,
-        outputs: &mut Vec<ProcessorOwnedNativeFrame>,
-    ) -> Result<(), String> {
-        while let Some(output) = outputs.pop() {
-            let processor_index = output.processor_index;
-            let Some(node) = self
-                .processors
-                .iter_mut()
-                .find(|node| node.processor_index == processor_index)
-            else {
-                outputs.push(output);
-                return Err(format!(
-                    "frame processor output release failed: processor index {} is no longer available",
-                    processor_index
-                ));
-            };
-            if let Err(error) = node.session.release_frame(output.frame.clone()) {
-                let plugin_name = node.plugin_name.clone();
-                outputs.push(output);
-                return Err(format!(
-                    "frame processor `{plugin_name}` output release failed: {error}",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn retain_processor_outputs_for_cleanup(
-        &mut self,
-        outputs: &mut Vec<ProcessorOwnedNativeFrame>,
-    ) -> Result<(), String> {
-        if outputs.is_empty() {
-            return Ok(());
-        }
-        let retained = self.processor_outputs_pending_cleanup.len();
-        let incoming = outputs.len();
-        if retained.saturating_add(incoming) > MAX_PROCESSOR_OUTPUTS_PENDING_CLEANUP {
-            return Err(format!(
-                "frame processor output cleanup capacity ({MAX_PROCESSOR_OUTPUTS_PENDING_CLEANUP}) would be exceeded; retained={retained} incoming={incoming}",
-            ));
-        }
-        self.processor_outputs_pending_cleanup.append(outputs);
-        Ok(())
-    }
-
-    fn release_processor_outputs_pending_cleanup(&mut self) -> Result<(), String> {
-        if self.processor_outputs_pending_cleanup.is_empty() {
-            return Ok(());
-        }
-        let mut outputs = std::mem::take(&mut self.processor_outputs_pending_cleanup);
-        match self.release_processor_outputs(&mut outputs) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.processor_outputs_pending_cleanup = outputs;
-                Err(error)
-            }
-        }
-    }
-
-    fn flush(&mut self) {
-        let _ = self.release_processor_outputs_pending_cleanup();
-        for node in &mut self.processors {
-            let _ = node.session.flush();
-        }
-    }
-
-    fn close(&mut self) {
-        let _ = self.release_processor_outputs_pending_cleanup();
-        for node in &mut self.processors {
-            let _ = node.session.close();
-        }
-    }
-}
-
-fn release_output_if_needed(node: &mut IosFrameProcessorNode, frame: NativeFrame) {
-    if output_frame_requires_processor_release(&frame) {
-        let _ = node.session.release_frame(frame);
-    }
+    open_mobile_source_normalizer_packet_session(source, configuration)
 }
 
 fn selected_video_track(
@@ -1738,19 +1101,6 @@ fn selected_audio_track(
         .cloned()
 }
 
-fn decoder_frame_format_label(format: &DecoderFrameFormat) -> String {
-    match format {
-        DecoderFrameFormat::Rgba8888 => "rgba8888".to_owned(),
-        DecoderFrameFormat::Bgra8888 => "bgra8888".to_owned(),
-        DecoderFrameFormat::Yuv420p => "yuv420p".to_owned(),
-        DecoderFrameFormat::Nv12 => "nv12".to_owned(),
-        DecoderFrameFormat::P010 => "p010".to_owned(),
-        DecoderFrameFormat::F32 => "f32".to_owned(),
-        DecoderFrameFormat::S16 => "s16".to_owned(),
-        DecoderFrameFormat::Unknown(label) => label.clone(),
-    }
-}
-
 fn dolby_vision_mode(hdr: &NativeFrameHdrMetadata) -> Option<String> {
     if !hdr.is_dolby_vision() {
         return None;
@@ -1765,11 +1115,43 @@ fn dolby_vision_mode(hdr: &NativeFrameHdrMetadata) -> Option<String> {
     }
 }
 
+fn open_native_video_decoder(
+    plugin: &NativePlugin,
+    track: &SourceNormalizerPacketTrackInfo,
+) -> Result<NativeVideoDecoder, IosNativeFramePipelineOpenError> {
+    let unsupported = |message| IosNativeFramePipelineOpenError::new("unsupportedCodec", message);
+    let fourcc = match player_plugin::normalize_decoder_codec_identifier(&track.codec).as_str() {
+        "h264" | "avc" | "avc1" => *b"avc1",
+        "avc3" => *b"avc3",
+        "hevc" | "h265" | "hvc1" => *b"hvc1",
+        "hev1" => *b"hev1",
+        _ => {
+            return Err(unsupported(format!(
+                "unsupported VideoToolbox codec {}",
+                track.codec
+            )));
+        }
+    };
+    let params = serde_json::to_vec(&serde_json::json!({ "reorderDepth": track.reorder_depth }))
+        .map_err(|error| unsupported(error.to_string()))?;
+    plugin
+        .open_video_decoder(
+            u32::from_be_bytes(fourcc),
+            &track.extradata,
+            &params,
+            Duration::from_millis(300),
+        )
+        .map_err(|error| unsupported(error.to_string()))
+}
+
 fn resolve_selected_ios_decoder(
     artifacts: &[MobileNativePluginArtifact],
     request: &DecoderPluginMatchRequest,
     require_pcm_frames: bool,
-) -> Result<Option<Arc<dyn NativeDecoderPluginFactory>>, IosNativeFramePipelineOpenError> {
+) -> Result<
+    Option<(Arc<dyn NativeDecoderPluginFactory>, NativePluginArtifact)>,
+    IosNativeFramePipelineOpenError,
+> {
     for artifact in artifacts {
         let native_artifact = artifact.loader_artifact().map_err(|error| {
             IosNativeFramePipelineOpenError::new(
@@ -1778,7 +1160,7 @@ fn resolve_selected_ios_decoder(
             )
         })?;
         let registry =
-            PluginRegistry::load_native_artifacts([native_artifact]).map_err(|error| {
+            PluginRegistry::load_native_artifacts([native_artifact.clone()]).map_err(|error| {
                 IosNativeFramePipelineOpenError::new(
                     "missingVideoToolboxDecoderPlugin",
                     format!(
@@ -1807,7 +1189,15 @@ fn resolve_selected_ios_decoder(
         if require_pcm_frames && !capabilities.supports_pcm_frames {
             continue;
         }
-        return Ok(Some(factory));
+        let admitted = registry
+            .native_artifact(resolved.reference())
+            .map_err(|error| {
+                IosNativeFramePipelineOpenError::new(
+                    "missingVideoToolboxDecoderPlugin",
+                    error.to_string(),
+                )
+            })?;
+        return Ok(Some((factory, admitted)));
     }
     Ok(None)
 }
@@ -1816,52 +1206,6 @@ fn audio_pcm_decoder_plugin_name(registry: &PluginRegistry, codec: &str) -> Opti
     registry
         .best_pcm_audio_decoder_for(&DecoderPluginMatchRequest::audio(codec))
         .and_then(|record| record.plugin_name.clone())
-}
-
-fn decoder_packet_from_source_normalizer_packet(
-    packet: player_plugin::SourceNormalizerPacket,
-) -> Result<DecoderPacket, String> {
-    DecoderPacket::try_from(packet).map_err(|error| error.to_string())
-}
-
-fn decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
-    let codec = codec.trim().to_ascii_lowercase();
-    let codec = codec.strip_prefix("video/").unwrap_or(&codec);
-    if codec == "hevc"
-        || codec == "h265"
-        || codec.starts_with("hvc1")
-        || codec.starts_with("hev1")
-        || codec.starts_with("dvh1")
-        || codec.starts_with("dvhe")
-    {
-        DecoderBitstreamFormat::Hvcc
-    } else {
-        DecoderBitstreamFormat::Avcc
-    }
-}
-
-fn video_decoder_session_config(track: &SourceNormalizerPacketTrackInfo) -> DecoderSessionConfig {
-    DecoderSessionConfig {
-        codec: track.codec.clone(),
-        media_kind: DecoderMediaKind::Video,
-        extradata: track.extradata.clone(),
-        bitstream_format: Some(
-            track
-                .bitstream_format
-                .clone()
-                .unwrap_or_else(|| decoder_bitstream_format(&track.codec)),
-        ),
-        width: track.width,
-        height: track.height,
-        coded_width: track.coded_width.or(track.width),
-        coded_height: track.coded_height.or(track.height),
-        reorder_depth: track.reorder_depth,
-        prefer_hardware: true,
-        require_cpu_output: false,
-        color: track.color.clone(),
-        hdr: track.hdr.clone(),
-        ..DecoderSessionConfig::default()
-    }
 }
 
 fn apple_native_frame_video_codec_supported(codec: &str) -> bool {
@@ -1891,44 +1235,6 @@ fn registry_notes(registry: &PluginRegistry) -> String {
     }
 }
 
-fn frame_processor_error(
-    mode: FrameProcessorMode,
-    node: &IosFrameProcessorNode,
-    error: FrameProcessorError,
-) -> String {
-    if mode == FrameProcessorMode::RequireProcessed {
-        format!(
-            "frame processor `{}` at index {} failed in strict mode: {error}",
-            node.plugin_name, node.processor_index
-        )
-    } else {
-        format!(
-            "frame processor `{}` at index {} failed: {error}",
-            node.plugin_name, node.processor_index
-        )
-    }
-}
-
-fn output_frame_requires_processor_release(frame: &NativeFrame) -> bool {
-    frame
-        .metadata
-        .release_tracking
-        .as_ref()
-        .is_none_or(|tracking| tracking.requires_release)
-}
-
-fn is_late_output(timings: &FrameProcessorFrameTimings, policy: &FrameProcessorPolicy) -> bool {
-    timings
-        .submit_to_ready_us
-        .is_some_and(|elapsed| elapsed > policy.frame_deadline.as_micros() as u64)
-}
-
-fn should_drop_output(timings: &FrameProcessorFrameTimings, policy: &FrameProcessorPolicy) -> bool {
-    timings.submit_to_ready_us.is_some_and(|elapsed| {
-        elapsed > (policy.frame_deadline + policy.late_output_tolerance).as_micros() as u64
-    })
-}
-
 fn participation_wire_name(participation: PlayerPluginParticipation) -> &'static str {
     participation.wire_name()
 }
@@ -1953,18 +1259,11 @@ fn diagnostic_from_runtime(value: &PlayerPluginDiagnostic) -> IosNativeFramePipe
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::thread;
 
     use player_plugin::{
-        DecoderCapabilities, DecoderCodecCapability, DecoderError, DecoderPacketResult,
-        FrameProcessorError, FrameProcessorOutputFrame, FrameProcessorSubmitResult,
-        SourceNormalizerOperationStatus, SourceNormalizerPacket, SourceNormalizerPacketLease,
-        SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
-        SourceNormalizerReadPacketMetadata,
+        DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderFrameFormat,
+        DecoderMediaKind,
     };
     use player_plugin_loader::{
         DecoderPluginCapabilitySummary, PluginCapabilitySummary, PluginDiagnosticStatus,
@@ -1973,15 +1272,61 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum FlushEvent {
-        ReleaseDecoder(usize),
-        ReleaseProcessor(usize),
-        SubmitProcessor(usize),
-        Processor,
-        Decoder,
-        Packet,
-        Seek(u64),
+    #[test]
+    #[ignore = "requires an Apple host and explicitly built native plugin ABI FFmpeg and VideoToolbox plugins"]
+    fn ios_native_packet_playback_seeks_and_releases_frames() {
+        let env = |name| std::env::var(name).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let config = IosNativeFramePipelineOpenConfig {
+            source_uri: env("VESPER_NATIVE_IOS_MEDIA"),
+            source_normalizer_mode: SourceNormalizerMode::PreflightOnly,
+            source_normalizer_plugin_artifacts: Vec::new(),
+            source_normalizer_plugin_library_paths: vec![PathBuf::from(env(
+                "VESPER_NATIVE_IOS_NORMALIZER",
+            ))],
+            runtime_profile: None,
+            native_frame_pipeline_mode: NativeFramePipelineMode::RequireNativeFrame,
+            decoder_plugin_artifacts: Vec::new(),
+            decoder_plugin_library_paths: vec![PathBuf::from(env("VESPER_NATIVE_IOS_DECODER"))],
+            frame_processor_plugin_artifacts: Vec::new(),
+            frame_processor_plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy:
+                player_runtime::NativePluginLoadingPolicy::DevelopmentRawPaths,
+        };
+        let mut session =
+            IosNativeFramePipelineSession::open(config).expect("open packet playback");
+        let advance = |session: &mut IosNativeFramePipelineSession| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(frame) = session.advance().expect("advance packet playback") {
+                    break frame;
+                }
+                assert!(!session.is_end_of_stream() && std::time::Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(2));
+            }
+        };
+        let first = advance(&mut session);
+        assert!(first.width > 0 && first.height > 0 && first.handle != 0);
+        let retired = session.store_frame(first).expect("hold pre-seek lease");
+        let lease = session
+            .take_presentation_lease(retired)
+            .expect("transfer pre-seek lease to presenter");
+        assert!(session.take_presentation_lease(retired).is_none());
+        session.seek_to(500).expect("seek in the packet stream");
+        assert!(session.release_pending_frame(retired, true).is_err());
+        assert!(session.take_presentation_lease(retired).is_none());
+        let next = advance(&mut session);
+        assert!(next.presentation_time_us >= 500_000);
+        let handle = session.store_frame(next).expect("hold decoded frame");
+        session
+            .release_pending_frame(handle, true)
+            .expect("release presented frame");
+        assert!(session.release_pending_frame(handle, false).is_err());
+        assert_eq!(session.counters.presented_frames, 1);
+        session.close();
+        session.close();
+        drop(session);
+        assert!(lease.descriptor().release_fn.is_some());
+        lease.complete(false);
     }
 
     #[test]
@@ -2000,7 +1345,6 @@ mod tests {
             frame_processor_plugin_artifacts: Vec::new(),
             frame_processor_plugin_library_paths: Vec::new(),
             native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
-            max_in_flight_frames: Some(2),
         };
 
         let error = validate_ios_native_plugin_bindings(&config)
@@ -2013,6 +1357,15 @@ mod tests {
         );
         assert!(!error.message.contains("failed to open plugin library"));
         assert!(!error.message.contains("dlopen"));
+
+        let mut retired_config = config.clone();
+        retired_config.frame_processor_plugin_library_paths =
+            vec![PathBuf::from("/tmp/must-not-open-frame-processor.dylib")];
+        let error = IosNativeFramePipelineSession::open(retired_config)
+            .err()
+            .expect("retired FrameProcessor must be rejected before plugin admission");
+        assert_eq!(error.issue_kind, "startupFailure");
+        assert!(error.message.contains("FrameProcessor has been retired"));
 
         let mut development_config = config;
         development_config.native_plugin_loading_policy =
@@ -2030,575 +1383,46 @@ mod tests {
     }
 
     #[test]
-    fn seek_flushes_processor_before_decoder_and_packet_session() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-
-        session.seek_to(42_000).expect("seek should succeed");
-
+    fn pending_frame_capacity_rejects_and_retires_excess_frames() {
+        let mut session = test_session();
+        let make_frame = || IosNativeFramePipelineFrame {
+            handle: 1,
+            presentation_time_us: 0,
+            duration_us: None,
+            width: 16,
+            height: 16,
+            frame_id: None,
+            lease: None,
+        };
+        let handles: Vec<_> = (0..MAX_PENDING_FRAMES)
+            .map(|_| session.store_frame(make_frame()).expect("store frame"))
+            .collect();
         assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet,
-                FlushEvent::Seek(42_000)
-            ]
-        );
-        assert_eq!(session.counters.seek_count, 1);
-    }
-
-    #[test]
-    fn seek_releases_pending_frames_before_flush_and_packet_seek() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-        let handle = session
-            .store_frame(test_pipeline_frame(91, Some(42_000)))
-            .expect("frame should be stored");
-
-        assert!(session.pending_frame(handle).is_some());
-        session.seek_to(42_000).expect("seek should succeed");
-
-        assert!(session.pending_frame(handle).is_none());
-        assert_eq!(session.counters.released_frames, 1);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::ReleaseDecoder(91),
-                FlushEvent::ReleaseProcessor(1_091),
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet,
-                FlushEvent::Seek(42_000)
-            ]
-        );
-    }
-
-    #[test]
-    fn exact_seek_releases_preroll_before_frame_processor() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-        session.seek_to(1_000).expect("seek should succeed");
-        assert_eq!(session.exact_seek_target_us, Some(1_000_000));
-        session.decoder_session = Box::new(TestDecoderSession {
-            events: events.clone(),
-            release_failures_remaining: Arc::new(AtomicUsize::new(0)),
-            frames: VecDeque::from([
-                test_decoder_frame(501, None),
-                test_decoder_frame(502, Some(0)),
-                test_decoder_frame(503, Some(1_000_000)),
-            ]),
-        });
-
-        assert!(
             session
-                .receive_frame()
-                .expect("missing-PTS preroll should be handled")
-                .is_none()
+                .store_frame(make_frame())
+                .expect_err("reject excess frame"),
+            "native-frame pending frame limit reached; rejected frame was released"
         );
-        assert!(
-            session
-                .receive_frame()
-                .expect("pre-target preroll should be handled")
-                .is_none()
-        );
-        let visible = session
-            .receive_frame()
-            .expect("target frame should be handled")
-            .expect("target frame should be visible");
-
-        assert_eq!(visible.presentation_time_us, 1_000_000);
-        assert_eq!(session.exact_seek_target_us, None);
-        assert!(session.pending_frames.is_empty());
-        assert_eq!(session.counters.decoded_frames, 3);
-        assert_eq!(session.counters.released_frames, 2);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet,
-                FlushEvent::Seek(1_000),
-                FlushEvent::ReleaseDecoder(501),
-                FlushEvent::ReleaseDecoder(502),
-                FlushEvent::SubmitProcessor(503),
-            ]
-        );
-        session
-            .release_pipeline_frame(visible.frame)
-            .expect("visible frame should be released");
-    }
-
-    #[test]
-    fn flush_clears_exact_seek_target() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-        session.seek_to(1_000).expect("seek should succeed");
-        events
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
-
-        session.flush().expect("flush should succeed");
-
-        assert_eq!(session.exact_seek_target_us, None);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet
-            ]
-        );
-    }
-
-    #[test]
-    fn exact_seek_target_saturates_to_decoder_timestamp_range() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events);
-
-        session.seek_to(u64::MAX).expect("seek should succeed");
-
-        assert_eq!(session.exact_seek_target_us, Some(i64::MAX));
-    }
-
-    #[test]
-    fn pending_frame_release_failure_keeps_handle_for_retry() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(1));
-        let mut session =
-            test_session_with_decoder_release_failures(events.clone(), release_failures);
-        let handle = session
-            .store_frame(test_pipeline_frame(92, Some(43_000)))
-            .expect("frame should be stored");
-
-        let error = session
-            .release_pending_frame(handle, true)
-            .expect_err("first release should fail");
-
-        assert!(error.contains("VideoToolbox frame release failed"));
-        assert!(
-            session.pending_frame(handle).is_some(),
-            "failed release must keep the frame available for retry"
-        );
-        assert_eq!(session.counters.released_frames, 0);
-        assert_eq!(session.counters.presented_frames, 0);
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty(),
-            "processor output must not be released before decoder release succeeds"
-        );
-
-        session
-            .release_pending_frame(handle, true)
-            .expect("second release should succeed");
-
-        assert!(session.pending_frame(handle).is_none());
         assert_eq!(session.counters.released_frames, 1);
-        assert_eq!(session.counters.presented_frames, 1);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::ReleaseDecoder(92),
-                FlushEvent::ReleaseProcessor(1_092)
-            ]
-        );
-    }
-
-    #[test]
-    fn flush_release_failure_keeps_pending_frame_for_retry_and_stops_flush() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(1));
-        let mut session =
-            test_session_with_decoder_release_failures(events.clone(), release_failures);
-        let handle = session
-            .store_frame(test_pipeline_frame(93, Some(44_000)))
-            .expect("frame should be stored");
-
-        let error = session.flush().expect_err("first flush should fail");
-
-        assert!(error.contains("VideoToolbox frame release failed"));
         assert!(
-            session.pending_frame(handle).is_some(),
-            "failed bulk release must keep the frame available for retry"
-        );
-        assert_eq!(session.counters.released_frames, 0);
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty(),
-            "flush must stop before processor, decoder, or packet flush after release failure"
-        );
-
-        session.flush().expect("second flush should succeed");
-
-        assert!(session.pending_frame(handle).is_none());
-        assert_eq!(session.counters.released_frames, 1);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::ReleaseDecoder(93),
-                FlushEvent::ReleaseProcessor(1_093),
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet
-            ]
-        );
-    }
-
-    #[test]
-    fn seek_release_failure_keeps_pending_frame_for_retry_and_stops_seek() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(1));
-        let mut session =
-            test_session_with_decoder_release_failures(events.clone(), release_failures);
-        let handle = session
-            .store_frame(test_pipeline_frame(94, Some(45_000)))
-            .expect("frame should be stored");
-
-        let error = session.seek_to(45_000).expect_err("first seek should fail");
-
-        assert!(error.contains("VideoToolbox frame release failed"));
-        assert!(
-            session.pending_frame(handle).is_some(),
-            "failed bulk release must keep the frame available for retry"
-        );
-        assert_eq!(session.counters.released_frames, 0);
-        assert_eq!(session.counters.seek_count, 0);
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty(),
-            "seek must stop before processor, decoder, packet flush, or packet seek after release failure"
-        );
-
-        session.seek_to(45_000).expect("second seek should succeed");
-
-        assert!(session.pending_frame(handle).is_none());
-        assert_eq!(session.counters.released_frames, 1);
-        assert_eq!(session.counters.seek_count, 1);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::ReleaseDecoder(94),
-                FlushEvent::ReleaseProcessor(1_094),
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet,
-                FlushEvent::Seek(45_000)
-            ]
-        );
-    }
-
-    #[test]
-    fn frame_processor_chain_releases_prior_outputs_when_later_submit_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut chain = test_two_node_processor_chain(
-            Box::new(TestReadyProcessorSession {
-                events: events.clone(),
-                output_handle: 2_001,
-            }),
-            Box::new(TestFailingSubmitProcessorSession),
-        );
-        let mut counters = IosNativeFramePipelineCounters::default();
-        let decoder_frame = test_decoder_frame(101, Some(101_000));
-
-        let error = chain
-            .process(&mut counters, decoder_frame)
-            .expect_err("later submit failure should fail the chain")
-            .0;
-
-        assert!(error.contains("submit failed"));
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[FlushEvent::ReleaseProcessor(2_001)]
-        );
-    }
-
-    #[test]
-    fn frame_processor_chain_retains_prior_outputs_when_cleanup_release_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(1));
-        let mut chain = test_two_node_processor_chain(
-            Box::new(TestReadyFailingReleaseProcessorSession {
-                events: events.clone(),
-                output_handle: 2_003,
-                release_failures_remaining: release_failures,
-            }),
-            Box::new(TestFailingSubmitProcessorSession),
-        );
-        let mut counters = IosNativeFramePipelineCounters::default();
-        let decoder_frame = test_decoder_frame(103, Some(103_000));
-
-        let error = chain
-            .process(&mut counters, decoder_frame)
-            .expect_err("cleanup release failure should fail the chain")
-            .0;
-
-        assert!(error.contains("output release failed"));
-        assert_eq!(chain.processor_outputs_pending_cleanup.len(), 1);
-        chain
-            .release_processor_outputs_pending_cleanup()
-            .expect("retained processor output should be retryable");
-        assert_eq!(chain.processor_outputs_pending_cleanup.len(), 0);
-        let events = events.lock().unwrap_or_else(|error| error.into_inner());
-        assert_eq!(
-            events
+            handles
                 .iter()
-                .filter(|event| **event == FlushEvent::ReleaseProcessor(2_003))
-                .count(),
-            2
+                .all(|handle| session.pending_frame(*handle).is_some())
         );
-    }
-
-    #[test]
-    fn frame_processor_chain_releases_prior_outputs_when_later_receive_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut chain = test_two_node_processor_chain(
-            Box::new(TestReadyProcessorSession {
-                events: events.clone(),
-                output_handle: 2_002,
-            }),
-            Box::new(TestFailingReceiveProcessorSession),
-        );
-        let mut counters = IosNativeFramePipelineCounters::default();
-        let decoder_frame = test_decoder_frame(102, Some(102_000));
-
-        let error = chain
-            .process(&mut counters, decoder_frame)
-            .expect_err("later receive failure should fail the chain")
-            .0;
-
-        assert!(error.contains("receive failed"));
+        session.close();
+        assert!(session.pending_frames.is_empty());
+        let stale = handles[0];
         assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[FlushEvent::ReleaseProcessor(2_002)]
+            session
+                .release_pending_frame(stale, true)
+                .expect_err("reject stale handle"),
+            "invalid iOS native-frame pending frame handle"
         );
-    }
-
-    #[test]
-    fn store_frame_releases_rejected_frame_when_pending_limit_is_full() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-        for index in 0..MAX_PENDING_FRAMES {
-            let handle = session
-                .store_frame(test_pipeline_frame(index, Some(index as i64 * 1_000)))
-                .expect("frame should be stored while under the cap");
-            assert!(session.pending_frame(handle).is_some());
-        }
-
-        let result = session.store_frame(test_pipeline_frame(900, Some(900_000)));
-
-        assert!(result.is_err());
-        assert_eq!(session.pending_frames.len(), MAX_PENDING_FRAMES);
-        assert_eq!(session.counters.released_frames, 1);
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::ReleaseDecoder(900),
-                FlushEvent::ReleaseProcessor(1_900)
-            ]
-        );
-    }
-
-    #[test]
-    fn store_frame_retains_rejected_frame_for_cleanup_when_release_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(1));
-        let mut session =
-            test_session_with_decoder_release_failures(events.clone(), release_failures);
-        for index in 0..MAX_PENDING_FRAMES {
-            let handle = session
-                .store_frame(test_pipeline_frame(index, Some(index as i64 * 1_000)))
-                .expect("frame should be stored while under the cap");
-            assert!(session.pending_frame(handle).is_some());
-        }
-
-        let result = session.store_frame(test_pipeline_frame(901, Some(901_000)));
-
-        let error = result.expect_err("over-cap rejected frame release should fail");
-        assert!(error.contains("retained for cleanup"));
-        assert_eq!(session.pending_frames.len(), MAX_PENDING_FRAMES);
-        assert_eq!(session.rejected_frames_pending_cleanup.len(), 1);
-        assert_eq!(session.counters.released_frames, 0);
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_empty(),
-            "processor output must not be released before decoder release succeeds"
-        );
-
-        session
-            .release_all_pending_frames()
-            .expect("retained frames should be released on retry");
-
-        assert_eq!(session.pending_frames.len(), 0);
-        assert_eq!(session.rejected_frames_pending_cleanup.len(), 0);
         assert_eq!(
             session.counters.released_frames,
             (MAX_PENDING_FRAMES + 1) as u64
         );
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .contains(&FlushEvent::ReleaseDecoder(901))
-        );
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .contains(&FlushEvent::ReleaseProcessor(1_901))
-        );
-    }
-
-    #[test]
-    fn store_frame_does_not_grow_pending_frames_when_prior_cleanup_is_pending() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let release_failures = Arc::new(AtomicUsize::new(2));
-        let mut session =
-            test_session_with_decoder_release_failures(events.clone(), release_failures);
-        for index in 0..MAX_PENDING_FRAMES {
-            let handle = session
-                .store_frame(test_pipeline_frame(index, Some(index as i64 * 1_000)))
-                .expect("frame should be stored while under the cap");
-            assert!(session.pending_frame(handle).is_some());
-        }
-
-        let first_error = session
-            .store_frame(test_pipeline_frame(902, Some(902_000)))
-            .expect_err("first over-cap rejected frame release should fail");
-        let second_error = session
-            .store_frame(test_pipeline_frame(903, Some(903_000)))
-            .expect_err("second over-cap rejected frame release should fail");
-
-        assert!(first_error.contains("retained for cleanup"));
-        assert!(second_error.contains("rejected frame was released"));
-        assert_eq!(session.pending_frames.len(), MAX_PENDING_FRAMES);
-        assert_eq!(session.rejected_frames_pending_cleanup.len(), 1);
-        assert_eq!(session.counters.released_frames, 1);
-        assert!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .contains(&FlushEvent::ReleaseProcessor(1_903)),
-            "second rejected frame should still be released instead of growing pending storage"
-        );
-
-        session
-            .release_all_pending_frames()
-            .expect("retained frames should be released on retry");
-
-        assert_eq!(session.pending_frames.len(), 0);
-        assert_eq!(session.rejected_frames_pending_cleanup.len(), 0);
-        assert_eq!(
-            session.counters.released_frames,
-            (MAX_PENDING_FRAMES + 2) as u64
-        );
-        let events = events.lock().unwrap_or_else(|error| error.into_inner());
-        assert!(events.contains(&FlushEvent::ReleaseDecoder(902)));
-        assert!(events.contains(&FlushEvent::ReleaseProcessor(1_902)));
-        assert!(events.contains(&FlushEvent::ReleaseDecoder(903)));
-        assert!(events.contains(&FlushEvent::ReleaseProcessor(1_903)));
-    }
-
-    #[test]
-    fn pending_frame_processor_release_failure_remains_retryable_without_duplicate_decoder_release()
-    {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let processor_release_failures = Arc::new(AtomicUsize::new(1));
-        let mut session = test_session_with_processor_release_failures(
-            events.clone(),
-            processor_release_failures,
-        );
-        let handle = session
-            .store_frame(test_pipeline_frame(904, Some(904_000)))
-            .expect("frame should be stored");
-
-        let error = session
-            .release_pending_frame(handle, false)
-            .expect_err("processor release failure should keep pending frame retryable");
-
-        assert!(error.contains("processor"));
-        assert!(session.pending_frame(handle).is_some());
-        assert_eq!(session.counters.released_frames, 0);
-
-        session
-            .release_pending_frame(handle, false)
-            .expect("retry should release retained processor output");
-
-        assert!(session.pending_frame(handle).is_none());
-        assert_eq!(session.counters.released_frames, 1);
-        let events = events.lock().unwrap_or_else(|error| error.into_inner());
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| **event == FlushEvent::ReleaseDecoder(904))
-                .count(),
-            1
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| **event == FlushEvent::ReleaseProcessor(1_904))
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn flush_uses_shared_processor_decoder_packet_order() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events.clone());
-
-        session.flush().expect("flush should succeed");
-
-        assert_eq!(
-            events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_slice(),
-            &[
-                FlushEvent::Processor,
-                FlushEvent::Decoder,
-                FlushEvent::Packet
-            ]
-        );
+        assert_eq!(session.counters.presented_frames, 0);
     }
 
     #[test]
@@ -2630,8 +1454,7 @@ mod tests {
 
     #[test]
     fn open_and_status_wire_use_swift_native_audio_bridge_clock() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let session = test_session(events);
+        let session = test_session();
 
         let open = session.open_wire(7);
         let status = session.status_wire(7, None);
@@ -2692,8 +1515,7 @@ mod tests {
 
     #[test]
     fn open_wire_reports_available_audio_pcm_decoder_without_switching_audio_bridge() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events);
+        let mut session = test_session();
         session.audio_decoder_plugin_name = Some("test-audio-decoder".to_owned());
         session.audio_decoder_plugin_ready = true;
 
@@ -2726,8 +1548,7 @@ mod tests {
 
     #[test]
     fn open_and_status_wire_report_sdr_video_summary() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut session = test_session(events);
+        let mut session = test_session();
         session.video_output_format = "nv12".to_owned();
         session.video_transfer = Some("bt709".to_owned());
         session.video_bit_depth = Some(8);
@@ -2811,38 +1632,6 @@ mod tests {
             );
         }
         assert!(!apple_native_frame_video_codec_supported("vp9"));
-        assert_eq!(
-            decoder_bitstream_format("hvc1"),
-            DecoderBitstreamFormat::Hvcc
-        );
-        assert_eq!(
-            decoder_bitstream_format("HEVC"),
-            DecoderBitstreamFormat::Hvcc
-        );
-        assert_eq!(
-            decoder_bitstream_format("dvh1"),
-            DecoderBitstreamFormat::Hvcc
-        );
-        assert_eq!(
-            decoder_bitstream_format("avc1"),
-            DecoderBitstreamFormat::Avcc
-        );
-    }
-
-    #[test]
-    fn video_decoder_session_config_preserves_reorder_depth() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut track = TestPacketSession { events }
-            .stream_info()
-            .tracks
-            .into_iter()
-            .next()
-            .expect("test packet session should expose a video track");
-        track.reorder_depth = Some(4);
-
-        let config = video_decoder_session_config(&track);
-
-        assert_eq!(config.reorder_depth, Some(4));
     }
 
     #[test]
@@ -2884,14 +1673,7 @@ mod tests {
         assert!(reason.contains(HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED));
     }
 
-    fn test_session(events: Arc<Mutex<Vec<FlushEvent>>>) -> IosNativeFramePipelineSession {
-        test_session_with_decoder_release_failures(events, Arc::new(AtomicUsize::new(0)))
-    }
-
-    fn test_session_with_decoder_release_failures(
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        release_failures_remaining: Arc<AtomicUsize>,
-    ) -> IosNativeFramePipelineSession {
+    fn test_session() -> IosNativeFramePipelineSession {
         IosNativeFramePipelineSession {
             source_uri: "file:///tmp/video.mp4".to_owned(),
             duration_millis: Some(60_000),
@@ -2909,76 +1691,12 @@ mod tests {
             dolby_vision_mode: None,
             source_normalizer_plugin_name: Some("test-source-normalizer".to_owned()),
             decoder_plugin_name: "test-decoder".to_owned(),
-            processor_plugin_names: vec!["test-processor".to_owned()],
-            packet_session: Box::new(TestPacketSession {
-                events: events.clone(),
-            }),
-            decoder_session: Box::new(TestDecoderSession {
-                events: events.clone(),
-                release_failures_remaining,
-                frames: VecDeque::new(),
-            }),
-            frame_processor_chain: Some(IosFrameProcessorChain {
-                processors: vec![IosFrameProcessorNode {
-                    plugin_name: "test-processor".to_owned(),
-                    processor_index: 0,
-                    session: Box::new(TestProcessorSession { events }),
-                }],
-                mode: FrameProcessorMode::PreferProcessed,
-                policy: FrameProcessorPolicy::default(),
-                processor_outputs_pending_cleanup: Vec::new(),
-            }),
-            end_of_input_sent: true,
+            video: None,
             end_of_stream_received: true,
             exact_seek_target_us: None,
             next_frame_handle: 1,
             pending_frames: HashMap::new(),
-            rejected_frames_pending_cleanup: Vec::new(),
             counters: IosNativeFramePipelineCounters::default(),
-        }
-    }
-
-    fn test_session_with_processor_release_failures(
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        processor_release_failures_remaining: Arc<AtomicUsize>,
-    ) -> IosNativeFramePipelineSession {
-        let mut session = test_session(events.clone());
-        session.frame_processor_chain = Some(IosFrameProcessorChain {
-            processors: vec![IosFrameProcessorNode {
-                plugin_name: "test-processor".to_owned(),
-                processor_index: 0,
-                session: Box::new(TestFailingReleaseProcessorSession {
-                    events,
-                    release_failures_remaining: processor_release_failures_remaining,
-                }),
-            }],
-            mode: FrameProcessorMode::PreferProcessed,
-            policy: FrameProcessorPolicy::default(),
-            processor_outputs_pending_cleanup: Vec::new(),
-        });
-        session
-    }
-
-    fn test_two_node_processor_chain(
-        first: Box<dyn FrameProcessorSession>,
-        second: Box<dyn FrameProcessorSession>,
-    ) -> IosFrameProcessorChain {
-        IosFrameProcessorChain {
-            processors: vec![
-                IosFrameProcessorNode {
-                    plugin_name: "test-processor-0".to_owned(),
-                    processor_index: 0,
-                    session: first,
-                },
-                IosFrameProcessorNode {
-                    plugin_name: "test-processor-1".to_owned(),
-                    processor_index: 1,
-                    session: second,
-                },
-            ],
-            mode: FrameProcessorMode::PreferProcessed,
-            policy: FrameProcessorPolicy::default(),
-            processor_outputs_pending_cleanup: Vec::new(),
         }
     }
 
@@ -2995,548 +1713,6 @@ mod tests {
                 DecoderPluginCapabilitySummary::from(&capabilities),
             )),
             message: None,
-        }
-    }
-
-    fn test_pipeline_frame(handle: usize, pts_us: Option<i64>) -> IosNativeFramePipelineFrame {
-        let decoder_frame = test_decoder_frame(handle, pts_us);
-        let processor_frame = test_processor_frame(handle + 1_000, pts_us);
-        IosNativeFramePipelineFrame {
-            handle: decoder_frame.handle,
-            presentation_time_us: decoder_frame.metadata.pts_us.unwrap_or(0),
-            duration_us: decoder_frame.metadata.duration_us,
-            width: decoder_frame.metadata.width,
-            height: decoder_frame.metadata.height,
-            frame_id: decoder_frame.metadata.frame_id,
-            decoder_frame_released: false,
-            frame: IosPipelineFrame {
-                decoder_frame: decoder_frame.clone(),
-                presentation_frame: decoder_frame,
-                processor_outputs: vec![ProcessorOwnedNativeFrame {
-                    processor_index: 0,
-                    frame: processor_frame,
-                }],
-            },
-        }
-    }
-
-    fn test_decoder_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
-        DecoderNativeFrame {
-            metadata: player_plugin::DecoderNativeFrameMetadata {
-                media_kind: DecoderMediaKind::Video,
-                format: DecoderFrameFormat::Nv12,
-                codec: "h264".to_owned(),
-                pts_us,
-                duration_us: Some(41_667),
-                width: 2,
-                height: 2,
-                coded_width: Some(2),
-                coded_height: Some(2),
-                visible_rect: None,
-                handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
-                pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
-                color_space: Some("bt709".to_owned()),
-                hdr_metadata: None,
-                color: None,
-                hdr: None,
-                sync_info: None,
-                transform: None,
-                frame_id: Some(handle as u64),
-                release_tracking: Some(player_plugin::DecoderNativeFrameReleaseTracking {
-                    frame_id: Some(handle as u64),
-                    requires_release: true,
-                }),
-            },
-            handle,
-            lease_token: None,
-        }
-    }
-
-    fn test_processor_frame(handle: usize, pts_us: Option<i64>) -> NativeFrame {
-        NativeFrame {
-            metadata: NativeFrameMetadata {
-                media_kind: DecoderMediaKind::Video,
-                format: DecoderFrameFormat::Nv12,
-                codec: "h264".to_owned(),
-                pts_us,
-                duration_us: Some(41_667),
-                width: 2,
-                height: 2,
-                coded_width: Some(2),
-                coded_height: Some(2),
-                visible_rect: None,
-                handle_kind: NativeHandleKind::CvPixelBuffer,
-                pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
-                color_space: Some("bt709".to_owned()),
-                hdr_metadata: None,
-                color: None,
-                hdr: None,
-                sync_info: None,
-                transform: None,
-                frame_id: Some(handle as u64),
-                release_tracking: Some(player_plugin::NativeFrameReleaseTracking {
-                    frame_id: Some(handle as u64),
-                    requires_release: true,
-                }),
-            },
-            handle,
-            lease_token: None,
-        }
-    }
-
-    struct TestPacketSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-    }
-
-    impl SourceNormalizerPacketSession for TestPacketSession {
-        fn stream_info(&self) -> SourceNormalizerPacketStreamInfo {
-            SourceNormalizerPacketStreamInfo {
-                tracks: vec![
-                    SourceNormalizerPacketTrackInfo {
-                        stream_index: 0,
-                        media_kind: SourceNormalizerPacketMediaKind::Video,
-                        codec: "h264".to_owned(),
-                        extradata: Vec::new(),
-                        bitstream_format: Some(DecoderBitstreamFormat::Avcc),
-                        width: Some(2),
-                        height: Some(2),
-                        coded_width: Some(2),
-                        coded_height: Some(2),
-                        reorder_depth: None,
-                        sample_rate: None,
-                        channels: None,
-                        channel_layout: None,
-                        codec_delay_samples: None,
-                        priming_samples: None,
-                        trailing_padding_samples: None,
-                        seek_preroll_samples: None,
-                        color: None,
-                        hdr: None,
-                        frame_rate: None,
-                        time_base_num: None,
-                        time_base_den: None,
-                    },
-                    SourceNormalizerPacketTrackInfo {
-                        stream_index: 1,
-                        media_kind: SourceNormalizerPacketMediaKind::Audio,
-                        codec: "aac".to_owned(),
-                        extradata: Vec::new(),
-                        bitstream_format: None,
-                        width: None,
-                        height: None,
-                        coded_width: None,
-                        coded_height: None,
-                        reorder_depth: None,
-                        sample_rate: Some(48_000),
-                        channels: Some(2),
-                        channel_layout: Some("stereo".to_owned()),
-                        codec_delay_samples: None,
-                        priming_samples: None,
-                        trailing_padding_samples: None,
-                        seek_preroll_samples: Some(1_024),
-                        color: None,
-                        hdr: None,
-                        frame_rate: None,
-                        time_base_num: Some(1),
-                        time_base_den: Some(48_000),
-                    },
-                ],
-                selected_track_index: Some(0),
-                duration_millis: Some(60_000),
-                seekable: true,
-                ..SourceNormalizerPacketStreamInfo::default()
-            }
-        }
-
-        fn read_packet(
-            &mut self,
-        ) -> Result<SourceNormalizerPacketLease<'_>, player_plugin::SourceNormalizerError> {
-            static PACKET_DATA: &[u8] = &[1, 2, 3];
-            Ok(SourceNormalizerPacketLease {
-                metadata: SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
-                    stream_index: 0,
-                    media_kind: SourceNormalizerPacketMediaKind::Video,
-                    channel_layout: None,
-                    ..SourceNormalizerPacket::default()
-                }),
-                data: PACKET_DATA,
-                handle: 1,
-            })
-        }
-
-        fn release_packet(
-            &mut self,
-            _packet_handle: usize,
-        ) -> Result<(), player_plugin::SourceNormalizerError> {
-            Ok(())
-        }
-
-        fn seek(
-            &mut self,
-            seek: &SourceNormalizerPacketSeek,
-        ) -> Result<SourceNormalizerOperationStatus, player_plugin::SourceNormalizerError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::Seek(seek.position_millis));
-            Ok(SourceNormalizerOperationStatus {
-                completed: true,
-                message: None,
-            })
-        }
-
-        fn flush(
-            &mut self,
-        ) -> Result<SourceNormalizerOperationStatus, player_plugin::SourceNormalizerError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::Packet);
-            Ok(SourceNormalizerOperationStatus {
-                completed: true,
-                message: None,
-            })
-        }
-
-        fn close(&mut self) -> Result<(), player_plugin::SourceNormalizerError> {
-            Ok(())
-        }
-    }
-
-    struct TestDecoderSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        release_failures_remaining: Arc<AtomicUsize>,
-        frames: VecDeque<DecoderNativeFrame>,
-    }
-
-    impl NativeDecoderSession for TestDecoderSession {
-        fn session_info(&self) -> player_plugin::DecoderSessionInfo {
-            player_plugin::DecoderSessionInfo::default()
-        }
-
-        fn send_packet(
-            &mut self,
-            _packet: &DecoderPacket,
-            _data: &[u8],
-        ) -> Result<DecoderPacketResult, DecoderError> {
-            Ok(DecoderPacketResult::default())
-        }
-
-        fn receive_native_frame(
-            &mut self,
-        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
-            Ok(self
-                .frames
-                .pop_front()
-                .map_or(DecoderReceiveNativeFrameOutput::NeedMoreInput, |frame| {
-                    DecoderReceiveNativeFrameOutput::Frame(frame)
-                }))
-        }
-
-        fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
-            if self
-                .release_failures_remaining
-                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                    if remaining > 0 {
-                        Some(remaining - 1)
-                    } else {
-                        None
-                    }
-                })
-                .is_ok()
-            {
-                return Err(DecoderError::internal("release failed"));
-            }
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::ReleaseDecoder(frame.handle));
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), DecoderError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::Decoder);
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), DecoderError> {
-            Ok(())
-        }
-    }
-
-    struct TestProcessorSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-    }
-
-    struct TestFailingReleaseProcessorSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        release_failures_remaining: Arc<AtomicUsize>,
-    }
-
-    struct TestReadyProcessorSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        output_handle: usize,
-    }
-
-    struct TestReadyFailingReleaseProcessorSession {
-        events: Arc<Mutex<Vec<FlushEvent>>>,
-        output_handle: usize,
-        release_failures_remaining: Arc<AtomicUsize>,
-    }
-
-    struct TestFailingSubmitProcessorSession;
-
-    struct TestFailingReceiveProcessorSession;
-
-    impl FrameProcessorSession for TestProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::SubmitProcessor(frame.native_handle()));
-            Ok(FrameProcessorSubmitResult::default())
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Ok(FrameProcessorReceiveOutput::Pending)
-        }
-
-        fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::ReleaseProcessor(frame.handle));
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::Processor);
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-    }
-
-    impl FrameProcessorSession for TestFailingReleaseProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            _frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            Ok(FrameProcessorSubmitResult::default())
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Ok(FrameProcessorReceiveOutput::Pending)
-        }
-
-        fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::ReleaseProcessor(frame.handle));
-            let remaining = self.release_failures_remaining.load(Ordering::SeqCst);
-            if remaining > 0 {
-                self.release_failures_remaining
-                    .fetch_sub(1, Ordering::SeqCst);
-                return Err(FrameProcessorError::internal(
-                    "processor release failed in test",
-                ));
-            }
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-    }
-
-    impl FrameProcessorSession for TestReadyProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            _frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            Ok(FrameProcessorSubmitResult {
-                status: FrameProcessorSubmitStatus::Accepted,
-                ..FrameProcessorSubmitResult::default()
-            })
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Ok(FrameProcessorReceiveOutput::Frame(
-                FrameProcessorOutputFrame {
-                    frame: test_processor_frame(
-                        self.output_handle,
-                        Some(self.output_handle as i64),
-                    ),
-                    timings: FrameProcessorFrameTimings::default(),
-                    source_frame_id: Some(self.output_handle as u64),
-                    message: None,
-                },
-            ))
-        }
-
-        fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::ReleaseProcessor(frame.handle));
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-    }
-
-    impl FrameProcessorSession for TestReadyFailingReleaseProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            _frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            Ok(FrameProcessorSubmitResult {
-                status: FrameProcessorSubmitStatus::Accepted,
-                ..FrameProcessorSubmitResult::default()
-            })
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Ok(FrameProcessorReceiveOutput::Frame(
-                FrameProcessorOutputFrame {
-                    frame: test_processor_frame(
-                        self.output_handle,
-                        Some(self.output_handle as i64),
-                    ),
-                    timings: FrameProcessorFrameTimings::default(),
-                    source_frame_id: Some(self.output_handle as u64),
-                    message: None,
-                },
-            ))
-        }
-
-        fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            self.events
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::ReleaseProcessor(frame.handle));
-            let remaining = self.release_failures_remaining.load(Ordering::SeqCst);
-            if remaining > 0 {
-                self.release_failures_remaining
-                    .fetch_sub(1, Ordering::SeqCst);
-                return Err(FrameProcessorError::internal(
-                    "processor release failed in test",
-                ));
-            }
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-    }
-
-    impl FrameProcessorSession for TestFailingSubmitProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            _frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            Err(FrameProcessorError::internal("submit failed"))
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Ok(FrameProcessorReceiveOutput::Pending)
-        }
-
-        fn release_frame(&mut self, _frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-    }
-
-    impl FrameProcessorSession for TestFailingReceiveProcessorSession {
-        fn session_info(&self) -> player_plugin::FrameProcessorSessionInfo {
-            player_plugin::FrameProcessorSessionInfo::default()
-        }
-
-        fn submit_frame(
-            &mut self,
-            _frame: FrameProcessorInputFrame<'_>,
-            _submit: &FrameProcessorSubmitFrame,
-        ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
-            Ok(FrameProcessorSubmitResult {
-                status: FrameProcessorSubmitStatus::Accepted,
-                ..FrameProcessorSubmitResult::default()
-            })
-        }
-
-        fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
-            Err(FrameProcessorError::internal("receive failed"))
-        }
-
-        fn release_frame(&mut self, _frame: NativeFrame) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn flush(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
-        }
-
-        fn close(&mut self) -> Result<(), FrameProcessorError> {
-            Ok(())
         }
     }
 }

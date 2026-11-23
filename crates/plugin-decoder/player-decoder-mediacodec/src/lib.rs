@@ -1,52 +1,55 @@
+#![cfg(any(test, target_os = "android"))]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::borrow::Cow;
 
+#[cfg(target_os = "android")]
+mod plugin_export;
+
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
-    DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeHandleKind,
-    DecoderNativeRequirements, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
-    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
-    NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFramePipelineProfile, Plugin,
-    PluginBuildError, normalize_decoder_codec_identifier,
+    DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
+    DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
+    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderSession, NativeFrameColorMetadata,
+    NativeFrameHdrMetadata, normalize_decoder_codec_identifier,
+};
+#[cfg(test)]
+use player_plugin::{
+    DecoderNativeDeviceContextKind, DecoderNativeRequirements, NativeFramePipelineProfile,
 };
 
+#[cfg(target_os = "android")]
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-mediacodec";
-const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-mediacodec.native";
+#[cfg(target_os = "android")]
 const PLUGIN_NAME: &str = "player-decoder-mediacodec";
 const MEDIACODEC_SUPPORTED: bool = cfg!(target_os = "android");
 const MEDIACODEC_SURFACE_TEXTURE_FORMAT: &str = "mediacodec_surface_texture";
 #[cfg(any(test, target_os = "android"))]
 const MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL: usize = 16;
+#[cfg(any(test, target_os = "android"))]
+pub(crate) const IMAGE_READER_CAPACITIES: [i32; 3] = [4, 3, 2];
+
+#[cfg(any(test, target_os = "android"))]
+pub(crate) fn open_with_capacity_backoff<T, E>(
+    capacities: &[i32; 3],
+    mut open_attempt: impl FnMut(i32) -> Result<T, E>,
+) -> Result<(T, i32), (i32, E)> {
+    let mut last_error = match open_attempt(capacities[0]) {
+        Ok(value) => return Ok((value, capacities[0])),
+        Err(error) => (capacities[0], error),
+    };
+    for &capacity in &capacities[1..] {
+        match open_attempt(capacity) {
+            Ok(value) => return Ok((value, capacity)),
+            Err(error) => last_error = (capacity, error),
+        }
+    }
+    Err(last_error)
+}
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 type MediaStatus = i32;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 const AMEDIA_OK: MediaStatus = 0;
-
-#[derive(Debug, Default)]
-struct MediaCodecDecoderFactory;
-
-impl NativeDecoderPluginFactory for MediaCodecDecoderFactory {
-    fn name(&self) -> &str {
-        PLUGIN_NAME
-    }
-
-    fn capabilities(&self) -> DecoderCapabilities {
-        decoder_capabilities()
-    }
-
-    fn native_requirements(&self) -> DecoderNativeRequirements {
-        decoder_native_requirements()
-    }
-
-    fn open_native_session(
-        &self,
-        config: &DecoderSessionConfig,
-    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
-        Ok(Box::new(MediaCodecDecoderSession::open(config.clone())?))
-    }
-}
 
 #[derive(Debug)]
 struct MediaCodecDecoderSession {
@@ -258,13 +261,6 @@ impl Drop for MediaCodecDecoderSession {
     }
 }
 
-#[player_plugin::export]
-fn mediacodec_decoder_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
-        .with_native_decoder(INSTANCE_ID, MediaCodecDecoderFactory)?
-        .build()
-}
-
 fn decoder_capabilities() -> DecoderCapabilities {
     DecoderCapabilities {
         codecs: if MEDIACODEC_SUPPORTED {
@@ -293,6 +289,7 @@ fn decoder_capabilities() -> DecoderCapabilities {
     }
 }
 
+#[cfg(test)]
 fn decoder_native_requirements() -> DecoderNativeRequirements {
     DecoderNativeRequirements {
         required_device_context_kinds: vec![DecoderNativeDeviceContextKind::AndroidNativeWindow],
@@ -1285,6 +1282,7 @@ mod android_media {
                             coded_height: Some(output_format.coded_height),
                             visible_rect: Some(output_format.visible_rect),
                             handle_kind: DecoderNativeHandleKind::MediaCodecSurfaceTexture,
+                            d3d11_subresource_index: None,
                             pipeline_profile: Some(
                                 NativeFramePipelineProfile::MediaCodecSurfaceTexture,
                             ),
@@ -1633,9 +1631,9 @@ fn media_status_error(operation: &str, status: MediaStatus) -> DecoderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AMEDIA_OK, MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL, MediaCodecDecoderSession,
-        MediaCodecDequeueStep, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
-        MediaCodecPendingOutputEosAction, android_color_standard_label,
+        AMEDIA_OK, IMAGE_READER_CAPACITIES, MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL,
+        MediaCodecDecoderSession, MediaCodecDequeueStep, MediaCodecFrameLeaseIds,
+        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_color_standard_label,
         android_color_standard_matrix_label, android_color_transfer_label,
         android_native_window_ptr, codec_config_buffers, codec_mime,
         complete_mediacodec_frame_release, decoder_capabilities, decoder_native_requirements,
@@ -1643,9 +1641,9 @@ mod tests {
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
-        packet_data_for_mediacodec, packet_input_data_for_mediacodec,
+        open_with_capacity_backoff, packet_data_for_mediacodec, packet_input_data_for_mediacodec,
         required_mediacodec_decoder_implementation_name, run_bounded_mediacodec_dequeue,
-        split_avcc_extradata, split_hvcc_extradata, vesper_plugin_entry,
+        split_avcc_extradata, split_hvcc_extradata,
     };
     use player_plugin::{
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
@@ -1680,13 +1678,6 @@ mod tests {
         .expect_err("release failure should remain visible");
 
         assert!(error.to_string().contains("release outstanding failed"));
-    }
-
-    #[test]
-    fn exports_plugin_entry() {
-        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
-            vesper_plugin_entry;
-        assert!(!entry().is_null());
     }
 
     #[test]
@@ -2228,6 +2219,45 @@ mod tests {
             .expect_err("truncated sample is invalid");
 
         assert!(matches!(error, DecoderError::InvalidPacket { .. }));
+    }
+
+    #[test]
+    fn image_reader_capacity_backoff_tries_smaller_capacities_until_open_succeeds() {
+        let mut tried = Vec::new();
+        let (opened, chosen) = open_with_capacity_backoff(&IMAGE_READER_CAPACITIES, |capacity| {
+            tried.push(capacity);
+            if capacity <= 2 {
+                Ok("opened")
+            } else {
+                Err("too many undequeued buffers")
+            }
+        })
+        .expect("should succeed when capacity backs off to 2");
+
+        assert_eq!(opened, "opened");
+        assert_eq!(chosen, 2);
+        assert_eq!(tried, vec![4, 3, 2]);
+    }
+
+    #[test]
+    fn image_reader_capacity_backoff_stops_on_first_success_and_reports_last_failure() {
+        let mut first_tried = Vec::new();
+        let (_, chosen) = open_with_capacity_backoff(&IMAGE_READER_CAPACITIES, |capacity| {
+            first_tried.push(capacity);
+            Ok::<_, &str>(capacity)
+        })
+        .expect("first capacity should stop immediately");
+        assert_eq!(chosen, 4);
+        assert_eq!(first_tried, vec![4]);
+
+        let mut failed_tried = Vec::new();
+        let error = open_with_capacity_backoff::<(), _>(&IMAGE_READER_CAPACITIES, |capacity| {
+            failed_tried.push(capacity);
+            Err(format!("failed@{capacity}"))
+        })
+        .expect_err("all capacities failing should surface the last failure");
+        assert_eq!(failed_tried, vec![4, 3, 2]);
+        assert_eq!(error, (2, "failed@2".to_owned()));
     }
 
     #[test]

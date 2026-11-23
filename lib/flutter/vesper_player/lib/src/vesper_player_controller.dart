@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
-import 'vesper_performance_diagnostics_session.dart';
 import 'vesper_source_session.dart';
 
 const Duration _progressRefreshInterval = Duration(seconds: 1);
@@ -44,8 +43,6 @@ class VesperPlayerController {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
@@ -59,7 +56,6 @@ class VesperPlayerController {
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       frameProcessorConfiguration: frameProcessorConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
-      pipelineEventHookConfiguration: pipelineEventHookConfiguration,
     );
     return VesperPlayerController._(
       playerId: result.playerId,
@@ -107,7 +103,6 @@ class VesperPlayerController {
 
   StreamSubscription<VesperPlayerEvent>? _platformSubscription;
   Timer? _progressRefreshTimer;
-  VesperPerformanceDiagnosticsSession? _performanceDiagnosticsSession;
   bool _refreshInFlight = false;
   bool _disposed = false;
   int _timelineRevision = 0;
@@ -137,37 +132,6 @@ class VesperPlayerController {
   Future<void> initialize() =>
       _runVoidOperation(() => _platform.initialize(playerId));
 
-  Future<VesperPerformanceDiagnosticsSession> startPerformanceDiagnostics({
-    VesperPerformanceDiagnosticsConfiguration configuration =
-        const VesperPerformanceDiagnosticsConfiguration(),
-  }) async {
-    _ensureActive();
-    final existing = _performanceDiagnosticsSession;
-    if (existing != null && !existing.isStopped) {
-      throw const VesperPerformanceDiagnosticsException(
-        code: 'alreadyActive',
-        message: 'A performance diagnostics run is already active.',
-      );
-    }
-    final session = await VesperPerformanceDiagnosticsSession.start(
-      this,
-      configuration: configuration,
-    );
-    if (_disposed) {
-      await _guardDisposeCleanup(
-        session.stop,
-        context: 'stop performance diagnostics started during disposal',
-      );
-      throw const VesperPerformanceDiagnosticsException(
-        code: 'controllerDisposed',
-        message:
-            'The player controller was disposed while diagnostics started.',
-      );
-    }
-    _performanceDiagnosticsSession = session;
-    return session;
-  }
-
   Future<void> dispose() async {
     if (_disposed) {
       return;
@@ -176,14 +140,6 @@ class VesperPlayerController {
     _advanceTimelineRevision();
     _progressRefreshTimer?.cancel();
     _progressRefreshTimer = null;
-
-    final diagnosticsSession = _performanceDiagnosticsSession;
-    if (diagnosticsSession != null && !diagnosticsSession.isStopped) {
-      await _guardDisposeCleanup(
-        diagnosticsSession.stop,
-        context: 'stop performance diagnostics',
-      );
-    }
 
     Object? platformError;
     StackTrace? platformStackTrace;
@@ -414,8 +370,6 @@ class VesperPlayerController {
                     playback.playbackEpoch) {
               _eventsController.add(event);
             }
-          case VesperPlayerPipelineEventHookReportsEvent():
-            _eventsController.add(event);
           case VesperPlayerPictureInPictureEvent():
             _pictureInPictureController.add(event);
             _eventsController.add(event);

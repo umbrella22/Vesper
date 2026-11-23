@@ -167,16 +167,7 @@ mod implementation {
     const COMPLIANCE_ASSET: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip";
     const COMPLIANCE_ROOT: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance";
 
-    pub(super) const OPTIONAL_FRAMEWORKS: [&str; 8] = [
-        "VesperFFmpegAVCodec",
-        "VesperFFmpegAVFormat",
-        "VesperFFmpegAVUtil",
-        "VesperPlayerRemuxFfmpegPlugin",
-        "VesperPlayerSourceNormalizerFfmpegPlugin",
-        "VesperPlayerDecoderVideoToolboxPlugin",
-        "VesperPlayerFrameProcessorDiagnosticPlugin",
-        "VesperPlayerPerformanceDiagnosticsPlugin",
-    ];
+    pub(super) use crate::ios_release::OPTIONAL_RELEASE_FRAMEWORKS as OPTIONAL_FRAMEWORKS;
     const FFMPEG_FRAMEWORKS: [&str; 5] = [
         "VesperFFmpegAVCodec",
         "VesperFFmpegAVFormat",

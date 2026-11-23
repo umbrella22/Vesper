@@ -256,6 +256,37 @@ impl MacosMetalLayerPresenter {
     }
 
     pub fn present_cv_pixel_buffer_handle(&mut self, handle: usize) -> PlayerResult<()> {
+        self.present_cv_pixel_buffer_inner(handle, std::ptr::null_mut(), None)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn present_leased_cv_pixel_buffer(
+        &mut self,
+        frame: player_plugin_loader::native::NativeVideoFrame,
+    ) -> PlayerResult<()> {
+        type Frame = player_plugin_loader::native::NativeVideoFrame;
+        extern "C" fn complete(context: *mut c_void, rendered: bool) {
+            // SAFETY: a successful Metal submission consumes the boxed lease
+            // exactly once through this completion callback.
+            let frame = unsafe { Box::from_raw(context.cast::<Frame>()) };
+            frame.complete(rendered);
+        }
+        let handle = frame.descriptor().handles[0] as usize;
+        let context = Box::into_raw(Box::new(frame));
+        let result = self.present_cv_pixel_buffer_inner(handle, context.cast(), Some(complete));
+        if result.is_err() {
+            // SAFETY: failed submissions never retain or complete this context.
+            unsafe { drop(Box::from_raw(context)) };
+        }
+        result
+    }
+
+    fn present_cv_pixel_buffer_inner(
+        &mut self,
+        handle: usize,
+        completion_context: *mut c_void,
+        completion: Option<extern "C" fn(*mut c_void, bool)>,
+    ) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
             #[cfg(test)]
@@ -272,6 +303,8 @@ impl MacosMetalLayerPresenter {
                 player_macos_metal_presenter_present_cv_pixel_buffer(
                     self.handle,
                     handle as *mut c_void,
+                    completion_context,
+                    completion,
                     buffer,
                     len,
                 )
@@ -291,7 +324,7 @@ impl MacosMetalLayerPresenter {
 
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = handle;
+            let _ = (handle, completion_context, completion);
             Err(PlayerError::new(
                 PlayerErrorCode::Unsupported,
                 "MetalLayer presenter is only available on macOS targets",
@@ -1056,6 +1089,8 @@ unsafe extern "C" {
     fn player_macos_metal_presenter_present_cv_pixel_buffer(
         presenter_handle: *mut c_void,
         pixel_buffer_handle: *mut c_void,
+        completion_context: *mut c_void,
+        completion: Option<extern "C" fn(*mut c_void, bool)>,
         error_message: *mut c_char,
         error_message_size: usize,
     ) -> bool;

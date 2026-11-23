@@ -199,8 +199,6 @@ jobs:
             "release-assets/android/VesperPlayerKitDecoderMediaCodec-android-${{ matrix.abi }}.aar"
             "release-assets/android/VesperPlayerKitSourceNormalizerFfmpeg-android-${{ matrix.abi }}.aar"
             "release-assets/android/VesperPlayerKitRemuxFfmpeg-android-${{ matrix.abi }}.aar"
-            "release-assets/android/VesperPlayerKitFrameProcessorDiagnostic-android-${{ matrix.abi }}.aar"
-            "release-assets/android/VesperPlayerKitPerformanceDiagnostics-android-${{ matrix.abi }}.aar"
           )
           for unexpected in "${optional_artifacts[@]}"; do
             if [[ -f "$unexpected" ]]; then
@@ -321,7 +319,6 @@ jobs:
           set -euo pipefail
           export VESPER_ANDROID_REMUX_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerFfmpeg/jniLibs"
           export VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs"
-          export VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs"
           exec "$real_flutter" "\$@"
           EOF
           chmod 700 "${wrapper_dir}/flutter"
@@ -908,7 +905,6 @@ jobs:
             vesper-player-kit-external-playback
             vesper-player-kit-source-normalizer-ffmpeg
             vesper-player-kit-remux-ffmpeg
-            vesper-player-kit-performance-diagnostics
           )
 
           for attempt in $(seq 1 60); do
@@ -977,7 +973,6 @@ jobs:
           --pattern VesperFFmpegAVUtil.xcframework.zip
           --pattern VesperPlayerRemuxFfmpegPlugin.xcframework.zip
           --pattern VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip
-          --pattern VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip
           --dir release-assets/ios
 
       - name: Publish remote Swift package index

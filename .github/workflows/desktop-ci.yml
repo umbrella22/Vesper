@@ -93,14 +93,8 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
 
-      - name: Audit workspace and standalone plugin dependencies
-        run: |
-          for lockfile in \
-            Cargo.lock \
-            plugins/audio-processor-diagnostic/Cargo.lock \
-            plugins/wasm-observer-diagnostic/Cargo.lock; do
-            cargo audit --file "$lockfile" --deny unsound --deny yanked
-          done
+      - name: Audit workspace dependencies
+        run: cargo audit --file Cargo.lock --deny unsound --deny yanked
 
   rust-lint:
     name: Rust Format and Clippy
@@ -315,10 +309,6 @@ jobs:
 
       - name: Desktop platform tests
         run: cargo test -p ${{ matrix.platform_crate }} --no-fail-fast
-
-      - name: Verify decoder fixture diagnostics
-        shell: bash
-        run: ./scripts/vesper desktop verify-decoder-diagnostics
 
       - name: Verify VideoToolbox decoder plugin
         if: runner.os == 'macOS'

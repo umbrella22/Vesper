@@ -532,6 +532,9 @@ pub struct DecoderNativeFrameMetadata {
     #[serde(default)]
     pub visible_rect: Option<DecoderVisibleRect>,
     pub handle_kind: DecoderNativeHandleKind,
+    /// Array slice of an ID3D11Texture2D native decoder surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d3d11_subresource_index: Option<u32>,
     #[serde(default)]
     pub pipeline_profile: Option<NativeFramePipelineProfile>,
     #[serde(default)]
@@ -593,6 +596,7 @@ impl From<NativeFrameMetadata> for DecoderNativeFrameMetadata {
             coded_height: value.coded_height,
             visible_rect: value.visible_rect.map(Into::into),
             handle_kind: value.handle_kind.into(),
+            d3d11_subresource_index: None,
             pipeline_profile: value.pipeline_profile,
             color_space: value.color_space,
             hdr_metadata: value.hdr_metadata,
@@ -965,6 +969,7 @@ mod tests {
                     height: 2_160,
                 }),
                 handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
+                d3d11_subresource_index: None,
                 pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
                 color_space: Some("bt709".to_owned()),
                 hdr_metadata: Some("hdr10".to_owned()),

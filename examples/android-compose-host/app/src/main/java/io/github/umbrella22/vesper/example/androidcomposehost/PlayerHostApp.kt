@@ -1199,7 +1199,7 @@ internal fun PlayerHostApp(
             runCatching { externalPlaybackController.disconnectAsync() }
             externalSession = null
             if (resumePosition != null) {
-                controller.seekBy(resumePosition - uiState.timeline.positionMs)
+                runCatching { controller.seekTo(resumePosition) }
             }
             controller.pause()
         }

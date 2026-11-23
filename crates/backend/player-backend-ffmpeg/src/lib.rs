@@ -9,7 +9,14 @@ mod input;
 mod packet;
 mod probe;
 mod time;
+#[cfg(target_os = "linux")]
+mod vaapi;
 mod video;
+#[cfg(target_os = "linux")]
+pub use vaapi::{
+    DrmVideoFrame, DrmVideoPlane, Native420Format, VaapiVideoFrame, VaapiVideoSource,
+    Video420Planes,
+};
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -188,13 +195,17 @@ impl std::fmt::Display for AudioStreamError {
 impl std::error::Error for AudioStreamError {}
 
 pub struct VideoFrameSource {
+    decoded: VideoDecodeSource,
+    output: VideoFrameOutput,
+}
+
+struct VideoDecodeSource {
     pub(crate) input: FfmpegInput,
     pub(crate) stream_index: usize,
     pub(crate) time_base: ffmpeg::Rational,
     pub(crate) fallback_frame_interval: Duration,
     pub(crate) fallback_start_time: Duration,
     pub(crate) decoder: ffmpeg::decoder::Video,
-    pub(crate) output: VideoFrameOutput,
     pub(crate) decode_info: VideoDecodeInfo,
     pub(crate) decoded_frame_index: u64,
     pub(crate) end_of_input_sent: bool,
@@ -306,6 +317,20 @@ impl FfmpegBackend {
         source: MediaSource,
         interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> Result<VideoFrameSource> {
+        let decoded = self.open_video_decode_source(source, interrupt_flag, open_video_decoder)?;
+        let output = create_video_frame_output(&decoded.decoder)
+            .context("failed to create video frame output")?;
+        Ok(VideoFrameSource { decoded, output })
+    }
+
+    fn open_video_decode_source(
+        &self,
+        source: MediaSource,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+        open_decoder: impl FnOnce(
+            &ffmpeg::codec::Parameters,
+        ) -> Result<(ffmpeg::decoder::Video, VideoDecodeInfo)>,
+    ) -> Result<VideoDecodeSource> {
         let video_source = resolve_video_decode_source(&source, interrupt_flag.clone())
             .unwrap_or_else(|error| {
                 warn!(
@@ -325,23 +350,19 @@ impl FfmpegBackend {
         let time_base = stream.time_base();
         let fallback_frame_interval = frame_interval_from_stream(&stream);
         let parameters = stream.parameters();
-        let (decoder, decode_info) = open_video_decoder(&parameters).with_context(|| {
+        let (decoder, decode_info) = open_decoder(&parameters).with_context(|| {
             format!(
                 "failed to open video decoder for media source {}",
                 video_source.uri()
             )
         })?;
-        let output =
-            create_video_frame_output(&decoder).context("failed to create video frame output")?;
-
-        Ok(VideoFrameSource {
+        Ok(VideoDecodeSource {
             input,
             stream_index,
             time_base,
             fallback_frame_interval,
             fallback_start_time: Duration::ZERO,
             decoder,
-            output,
             decode_info,
             decoded_frame_index: 0,
             end_of_input_sent: false,

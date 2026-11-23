@@ -6,7 +6,6 @@ import 'src/download_events.dart';
 import 'src/download_models.dart';
 import 'src/events.dart';
 import 'src/models.dart';
-import 'src/performance_diagnostics_exception.dart';
 import 'src/platform_error_mapping.dart';
 import 'src/sequence_models.dart';
 import 'src/source_models.dart';
@@ -84,8 +83,6 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
@@ -107,8 +104,6 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
         'frameProcessor': frameProcessorConfiguration.toMap(),
       if (nativeFramePipelineConfiguration.hasOverrides)
         'nativeFramePipeline': nativeFramePipelineConfiguration.toMap(),
-      if (pipelineEventHookConfiguration.hasOverrides)
-        'pipelineEventHook': pipelineEventHookConfiguration.toMap(),
     });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)
@@ -161,95 +156,6 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
     return _invokeVoid('disposePlayer', <String, Object?>{
       'playerId': playerId,
     });
-  }
-
-  @override
-  Future<String> startPerformanceDiagnostics(
-    String playerId,
-    VesperPerformanceDiagnosticsConfiguration configuration,
-  ) async {
-    final runId = await _invokeMethod<String>(
-      'startPerformanceDiagnostics',
-      <String, Object?>{
-        'playerId': playerId,
-        'configuration': configuration.toMap(),
-        'probe': VesperPerformanceProbe.flutterFrameTiming.rawValue,
-      },
-    );
-    if (runId == null || runId.isEmpty) {
-      throw const FormatException(
-        'startPerformanceDiagnostics returned an empty run id.',
-      );
-    }
-    return runId;
-  }
-
-  @override
-  Future<void> updatePerformanceOverlayState(
-    String playerId,
-    String runId,
-    VesperPerformanceOverlayState state,
-  ) =>
-      _invokeVoid('updatePerformanceOverlayState', <String, Object?>{
-        'playerId': playerId,
-        'runId': runId,
-        'state': state.toMap(),
-      });
-
-  @override
-  Future<void> recordPerformanceMarker(
-    String playerId,
-    String runId,
-    String name, {
-    double? value,
-    int? sequenceIndex,
-    bool? expectedOverlayActive,
-  }) =>
-      _invokeVoid('recordPerformanceMarker', <String, Object?>{
-        'playerId': playerId,
-        'runId': runId,
-        'name': name,
-        if (value != null) 'value': value,
-        if (sequenceIndex != null) 'sequenceIndex': sequenceIndex,
-        if (expectedOverlayActive != null)
-          'expectedOverlayActive': expectedOverlayActive,
-      });
-
-  @override
-  Future<void> submitPerformanceFrameSamples(
-    String playerId,
-    String runId,
-    List<VesperPerformanceFrameSample> samples,
-  ) =>
-      _invokeVoid('submitPerformanceFrameSamples', <String, Object?>{
-        'playerId': playerId,
-        'runId': runId,
-        'samples':
-            samples.map((sample) => sample.toMap()).toList(growable: false),
-      });
-
-  @override
-  Future<VesperPerformanceDiagnosticsReport> performanceDiagnosticsSnapshot(
-    String playerId,
-    String runId,
-  ) async {
-    final raw = await _invokeMethod<Object?>(
-      'performanceDiagnosticsSnapshot',
-      <String, Object?>{'playerId': playerId, 'runId': runId},
-    );
-    return _decodePerformanceDiagnosticsReport(raw);
-  }
-
-  @override
-  Future<VesperPerformanceDiagnosticsReport> stopPerformanceDiagnostics(
-    String playerId,
-    String runId,
-  ) async {
-    final raw = await _invokeMethod<Object?>(
-      'stopPerformanceDiagnostics',
-      <String, Object?>{'playerId': playerId, 'runId': runId},
-    );
-    return _decodePerformanceDiagnosticsReport(raw);
   }
 
   @override
@@ -888,26 +794,6 @@ Map<Object?, Object?> _downloadRecoveryTaskMap(Object? raw) {
     throw const FormatException('recovery.task keys must be strings');
   }
   return Map<Object?, Object?>.from(raw);
-}
-
-VesperPerformanceDiagnosticsReport _decodePerformanceDiagnosticsReport(
-  Object? raw,
-) {
-  try {
-    if (raw is! Map) {
-      throw const FormatException(
-        'Performance diagnostics report must be a map.',
-      );
-    }
-    return VesperPerformanceDiagnosticsReport.fromMap(
-      Map<Object?, Object?>.from(raw),
-    );
-  } on FormatException {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'protocolViolation',
-      message: 'The native performance diagnostics report is malformed.',
-    );
-  }
 }
 
 VesperSystemPlaybackPermissionStatus _decodePermissionStatus(Object? raw) {

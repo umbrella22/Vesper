@@ -2,9 +2,12 @@ part of '../models.dart';
 
 enum VesperPluginTransport {
   native,
-  wasm,
   unknown,
 }
+
+VesperPluginTransport _decodePluginTransport(Object? raw) => raw == 'native'
+    ? VesperPluginTransport.native
+    : VesperPluginTransport.unknown;
 
 /// Explicit selection of one plugin transport and capability instance.
 final class VesperPluginReference {
@@ -54,11 +57,7 @@ final class VesperPluginReference {
         transportRawValue.isEmpty) {
       throw const FormatException('invalid plugin reference');
     }
-    final transport = switch (transportRawValue) {
-      'native' => VesperPluginTransport.native,
-      'wasm' => VesperPluginTransport.wasm,
-      _ => VesperPluginTransport.unknown,
-    };
+    final transport = _decodePluginTransport(transportRawValue);
     return VesperPluginReference(
       pluginId: pluginId,
       capabilityInstanceId: capabilityInstanceId as String?,
@@ -135,32 +134,6 @@ abstract final class VesperBundledPluginReferences {
     pluginId: 'dev.vesper.frame-processor-diagnostic',
     transport: VesperPluginTransport.native,
   );
-}
-
-/// Native playback EventHook plugins selected for one player instance.
-final class VesperPipelineEventHookConfiguration {
-  const VesperPipelineEventHookConfiguration({
-    this.pluginReferences = const <VesperPluginReference>[],
-  });
-
-  factory VesperPipelineEventHookConfiguration.fromMap(
-    Map<Object?, Object?> map,
-  ) {
-    return VesperPipelineEventHookConfiguration(
-      pluginReferences: _decodePluginReferences(map['pluginReferences']),
-    );
-  }
-
-  final List<VesperPluginReference> pluginReferences;
-
-  bool get hasOverrides => pluginReferences.isNotEmpty;
-
-  Map<String, Object?> toMap() {
-    return <String, Object?>{
-      'pluginReferences':
-          pluginReferences.map((reference) => reference.toMap()).toList(),
-    };
-  }
 }
 
 bool _isValidPluginIdentity(String value) {

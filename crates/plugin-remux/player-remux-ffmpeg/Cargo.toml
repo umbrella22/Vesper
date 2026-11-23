@@ -13,6 +13,9 @@ name = "vesper_remux_ffmpeg"
 [dependencies]
 ffmpeg-next = { workspace = true, features = ["codec", "format"] }
 player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../plugin/player-plugin-abi" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -32,7 +32,7 @@ scripts/
 ./scripts/vesper android jni release arm64-v8a
 ./scripts/vesper android aar
 ./scripts/vesper android source-normalizer-plugin /tmp/vesper-android-source-normalizer release --profile default
-./scripts/vesper android frame-processor-plugin /tmp/vesper-android-frame-processor release
+./scripts/vesper android decoder-mediacodec-plugin /tmp/vesper-android-decoder release
 ./scripts/vesper android stage-release
 VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
@@ -82,7 +82,6 @@ VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/private/tmp/vesper-ios-release \
   --dry-run
 
 ./scripts/vesper desktop ensure-ffmpeg
-./scripts/vesper desktop verify-decoder-diagnostics
 ./scripts/vesper desktop verify-decoder-videotoolbox loader
 ./scripts/vesper desktop verify-remux
 
@@ -386,11 +385,11 @@ Maven publication adds external playback, the shared FFmpeg runtime,
 SourceNormalizer, and remux as hosted coordinates. SourceNormalizer and remux
 remain direct opt-ins; their POMs close over the same-version core and runtime.
 Set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin
-build commands, when you intentionally want the complete source-staged set,
-including Decoder or FrameProcessor extension AARs. `player-remux-ffmpeg`,
+build commands, to produce the complete source-staged set with the MediaCodec
+decoder AAR. `player-remux-ffmpeg`,
 `player-source-normalizer-ffmpeg`, and the external-playback relay FFmpeg JNI
 library must package only their own plugin/JNI libraries and depend on the
-shared runtime AAR. The FrameProcessor diagnostic plugin is not FFmpeg-backed.
+shared runtime AAR.
 
 ```sh
 ./scripts/vesper ffmpeg --platform android --profile default --abi arm64-v8a
@@ -407,7 +406,7 @@ iOS core kit packaging does not include FFmpeg. Local `stage-release` calls are
 core-only unless `--include-optional-plugins` is passed or the lower-priority
 `VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1` environment setting is present. Tagged
 release CI enables that option and publishes the optional FFmpeg runtime, remux,
-SourceNormalizer, decoder, and FrameProcessor XCFrameworks. Repository native
+SourceNormalizer, and decoder XCFrameworks. Repository native
 and Flutter hosts use one canonical optional staging entrypoint:
 
 ```sh
@@ -418,10 +417,8 @@ and Flutter hosts use one canonical optional staging entrypoint:
 
 This produces three FFmpeg component XCFrameworks (`VesperFFmpegAVCodec`,
 `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`) plus Remux,
-SourceNormalizer, VideoToolbox Decoder, diagnostic FrameProcessor, and
-performance-diagnostics plugin XCFrameworks. The App target embeds and signs
-them as eight top-level sibling
-frameworks. Flat dylibs, nested frameworks, and the legacy umbrella runtime are
+SourceNormalizer, and VideoToolbox decoder plugin XCFrameworks. The App target
+embeds and signs them as six top-level sibling frameworks. Flat dylibs, nested frameworks, and the legacy umbrella runtime are
 not distributable layouts. The release verifier also requires exactly one
 device framework slice and one Simulator framework slice, each with exactly one
 `arm64` architecture and matching bundle, SDK, and Mach-O platform metadata.
@@ -455,8 +452,8 @@ Every FFmpeg-backed framework writes `profile-hash.txt`; staging and app-layout
 verification fail if the hashes do not match. Plugin XCFrameworks must not
 contain duplicate `libav*`, `libsw*`, `libxml2*`, `libssl*`, or `libcrypto*`
 libraries. SourceNormalizer can participate through an explicit normalized
-resource route. Decoder and FrameProcessor participation remains opt-in through
-the SDK-managed native-frame route; default AVPlayer playback is unchanged.
+resource route. Decoder participation requires the opt-in SDK-managed
+native-frame route.
 
 Supported overlays are:
 

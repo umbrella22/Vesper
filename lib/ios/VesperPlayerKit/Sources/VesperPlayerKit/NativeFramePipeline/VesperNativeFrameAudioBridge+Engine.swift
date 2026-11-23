@@ -15,6 +15,14 @@ extension VesperNativeFrameAudioOutput {
         timePitch = nil
         self.engine = nil
         scheduledBufferGate = nil
+        let playbackGeneration = playbackGate.beginPlayback()
+        let processor: VesperNativeFrameAudioProcessor?
+        do {
+            processor = try processorBinding?.open(format: preparedAudioFormat, epoch: playbackGeneration)
+        } catch {
+            markBridgeUnavailable(reason: error.localizedDescription)
+            return
+        }
         let engine = AVAudioEngine()
         let playerNode = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
@@ -34,14 +42,22 @@ extension VesperNativeFrameAudioOutput {
         self.engine = engine
         self.playerNode = playerNode
         self.timePitch = timePitch
-        let playbackGeneration = playbackGate.beginPlayback()
         let bufferGate = VesperNativeFrameAudioScheduledBufferGate(maxQueuedBuffers: 12)
         scheduledBufferGate = bufferGate
 
         audioDecodeTask = Task.detached(priority: .userInitiated) {
-            [self, asset, seekPositionMs, playerNode, bufferGate, playbackGeneration] in
+            [self, asset, seekPositionMs, playerNode, bufferGate, playbackGeneration, processor] in
             do {
-                try await Self.streamPcmBuffers(asset: asset, startMs: seekPositionMs) { pcmBuffer in
+                var reportedAudioProcessor = false
+                try await Self.streamPcmBuffers(asset: asset, startMs: seekPositionMs) { pcmBuffer, ptsUs in
+                    try Task.checkCancellation()
+                    if let processor {
+                        try processor.process(pcmBuffer, ptsUs: ptsUs)
+                        if !reportedAudioProcessor {
+                            iosHostLog("native-frame audio processed PCM epoch=\(playbackGeneration)")
+                            reportedAudioProcessor = true
+                        }
+                    }
                     try bufferGate.waitUntilSlotAvailable()
                     if Task.isCancelled {
                         bufferGate.releaseSlot()

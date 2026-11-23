@@ -128,12 +128,11 @@ actor VesperNativeFramePipelineRuntime {
                 release(frame: frame, presented: false)
                 continue
             }
+            let presentationLease = backend.takePresentationLease(handle: handle, frameHandle: frame.frameHandle)
             let presented = await owner?.runtimePresent(frame: frame) ?? false
-            guard frameLeaseIsCurrent(frame) else {
-                // The backend reset owns native-handle cleanup while Swift still
-                // keeps the pixel buffer alive through this local frame value.
-                continue
-            }
+            let current = frameLeaseIsCurrent(frame)
+            presentationLease?.finish(presented: current && presented)
+            guard current else { continue }
             release(frame: frame, presented: presented)
             if presented, isPlaying {
                 let timeline = await owner?.runtimeTimeline(

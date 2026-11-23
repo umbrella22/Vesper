@@ -9,17 +9,25 @@ mod frame_processor;
 mod hook;
 mod invocation;
 mod native_frame;
-mod plan;
 mod plugin_reference;
 mod processor;
 mod protocol;
-mod resolver;
-mod scope;
-mod sdk;
 pub mod source_normalizer;
 
 pub use player_plugin_macros::export;
 
+/// Static Rust author API for native plugins.
+pub mod author {
+    pub use player_plugin_abi::author::*;
+    pub use player_plugin_abi::{
+        VESPER_PITCH_FOLLOW_RATE, VESPER_PITCH_PRESERVE, VESPER_SAMPLE_F32_INTERLEAVED,
+        VesperAudioFormat, VesperPluginRoot,
+    };
+    pub use player_plugin_macros::export;
+
+    #[doc(hidden)]
+    pub use player_plugin_abi::export::export_plugin as __export;
+}
 pub use audio::{
     AudioPitchMode, AudioPlaybackPolicy, AudioProcessorCapabilities, AudioProcessorChain,
     AudioProcessorError, AudioProcessorOperationStatus, AudioProcessorPluginFactory,
@@ -78,10 +86,6 @@ pub use native_frame::{
     NativeFrameReleaseTracking, NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind,
     VisibleRect,
 };
-pub use plan::{
-    MAX_PLUGIN_PLAN_PROVIDERS, PLUGIN_PLAN_SCHEMA_VERSION, PluginPlan, PluginPlanError,
-    PluginPlanPolicy, PluginPlanProvider,
-};
 pub use plugin_reference::{PluginReference, PluginReferenceError, PluginTransport};
 pub use processor::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream,
@@ -97,23 +101,6 @@ pub use protocol::{
     MAX_SOURCE_NORMALIZER_PACKET_BYTES, PluginDiagnostic, PluginDiagnosticSeverity,
     PluginMeasurement, PluginProtocolViolation,
 };
-pub use resolver::{
-    MAX_PLUGIN_RESOLUTION_CONSTRAINTS, MAX_PLUGIN_RESOLUTION_STATES, PluginResolution,
-    PluginResolutionError, PluginResolvedProvider, PluginResolver, PluginResolverPolicy,
-};
-pub use scope::{
-    DEFAULT_PLUGIN_RUNTIME_SHUTDOWN_TIMEOUT, DEFAULT_PLUGIN_SCOPE_CLOSE_TIMEOUT,
-    MAX_PLUGIN_CORRELATION_ID_BYTES, MAX_PLUGIN_RUNTIME_OWNER_REGISTRATIONS,
-    MAX_PLUGIN_RUNTIME_SCOPE_REGISTRATIONS, MAX_PLUGIN_SCOPE_CHILDREN, MAX_PLUGIN_SCOPE_DEPTH,
-    MAX_PLUGIN_SCOPE_OWNERS, MAX_PLUGIN_SCOPE_QUARANTINE_RECORDS, MAX_PLUGIN_SCOPE_REASON_BYTES,
-    PluginActivePlaybackCorrelation, PluginNextPrewarmCorrelation, PluginOwnerDisposalError,
-    PluginOwnerToken, PluginPlaybackAttachment, PluginPlaybackAttachmentToken,
-    PluginPlaybackAuthority, PluginPlaybackError, PluginPlaybackRole,
-    PluginPlaybackTransitionReport, PluginRuntime, PluginScope, PluginScopeCloseReport,
-    PluginScopeError, PluginScopeKind, PluginScopeQuarantine, PluginScopeQuarantineReason,
-    PluginScopeResource, PluginScopeState, PluginSessionCorrelation,
-};
-pub use sdk::{Plugin, PluginBuildError, PluginBuilder, PluginCapability};
 pub use source_normalizer::{
     SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
     SourceNormalizerOutputRoute, SourceNormalizerPacket, SourceNormalizerPacketCapabilities,
@@ -131,15 +118,3 @@ pub use source_normalizer::{
     SourceNormalizerSessionCapabilities, SourceNormalizerSessionRequirements,
     validate_source_normalizer_plugin_input,
 };
-
-#[doc(hidden)]
-pub mod __private {
-    pub use player_plugin_abi::VesperPluginRoot;
-
-    pub fn export_plugin<R>(factory: fn() -> R) -> *const VesperPluginRoot
-    where
-        R: crate::sdk::PluginFactoryResult,
-    {
-        crate::sdk::export_plugin(factory)
-    }
-}

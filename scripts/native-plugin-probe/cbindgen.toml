@@ -1,0 +1,6 @@
+language = "C"
+cpp_compat = true
+include_guard = "VESPER_PROBE_FIXTURE_ABI_H"
+
+[export]
+include = ["VesperProbeAudioBuffer", "VesperProbeGainApi", "VesperProbeVideoFormat", "VesperProbeGpuContext", "VesperProbeVideoFrame", "VesperProbeMetalStats"]

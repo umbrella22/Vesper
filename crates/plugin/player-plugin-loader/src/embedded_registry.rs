@@ -1401,41 +1401,6 @@ mod tests {
     }
 
     #[test]
-    fn public_registry_schema_requires_minimum_os_for_artifacts() {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .canonicalize()
-            .expect("canonical loader crate path");
-        let workspace = manifest_dir.join("../../..");
-        // The public schema belongs to the workspace distribution, outside the
-        // Rust crate package. Only run this drift check from a source checkout.
-        let Ok(workspace_member) = workspace
-            .join("crates/plugin/player-plugin-loader")
-            .canonicalize()
-        else {
-            return;
-        };
-        if manifest_dir != workspace_member {
-            return;
-        }
-        let relative_path = "schemas/vesper-plugin/embedded-registry.schema.json";
-        let bytes = std::fs::read(workspace.join(relative_path)).expect("read registry schema");
-        let schema: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("parse registry schema");
-        let conditional = &schema["allOf"][0];
-
-        assert_eq!(
-            conditional["if"]["properties"]["artifacts"]["minItems"], 1,
-            "{relative_path}"
-        );
-        assert!(
-            conditional["then"]["required"]
-                .as_array()
-                .is_some_and(|required| required.iter().any(|field| field == "minimum_os")),
-            "{relative_path}"
-        );
-    }
-
-    #[test]
     fn registry_rejects_unknown_mobile_transport_without_fallback() {
         let capability = capability_json("dev.vesper.fixture.post-download");
         let artifact = artifact_json("dev.vesper.fixture", "wasm", &capability);

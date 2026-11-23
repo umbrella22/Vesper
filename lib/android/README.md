@@ -23,13 +23,11 @@ budget owns startup preloading independently of player disk-cache settings.
 | `vesper-player-kit-decoder-mediacodec` | Optional MediaCodec decoder plugin AAR used by the explicit SDK-managed native-frame route; it does not bundle FFmpeg runtime libraries                                    |
 | `vesper-player-kit-source-normalizer-ffmpeg` | Optional SourceNormalizer FFmpeg plugin AAR for diagnostics, source preflight, and opt-in normalized-resource playback; depends on the shared FFmpeg runtime |
 | `vesper-player-kit-remux-ffmpeg` | Optional FFmpeg-backed post-download MP4 remux plugin AAR; depends on the core kit and shared FFmpeg runtime and does not bundle `libav*` |
-| `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing and opt-in SDK-managed native-frame processing; it does not bundle FFmpeg runtime libraries |
-| `vesper-player-kit-performance-diagnostics` | Optional BenchmarkSink plugin AAR for bounded playback and overlay-correlated UI performance reports |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
 The external playback, FFmpeg runtime, MediaCodec decoder plugin,
-SourceNormalizer plugin, remux plugin, FrameProcessor diagnostic plugin,
+SourceNormalizer plugin, remux plugin,
 performance diagnostics plugin,
 Compose adapter, and higher-level Compose UI modules are
 optional. View-based or non-Compose hosts can depend on `vesper-player-kit`
@@ -61,26 +59,22 @@ Stable and prerelease tags publish these coordinates to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.github.umbrella22.vesper:vesper-player-kit:0.10.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit:0.11.0")
 
     // Optional Compose integration.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:0.10.0")
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:0.10.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:0.11.0")
 
     // Optional Cast, DLNA, and relay integration. The matching FFmpeg runtime
     // coordinate is resolved transitively for relay format adaptation.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:0.10.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:0.11.0")
 
     // Optional source normalization. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:0.10.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:0.11.0")
 
     // Optional post-download MP4 remux. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:0.10.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:0.11.0")
 
-    // Optional diagnostics. Prefer debugImplementation/profileImplementation
-    // when Release packages must not contain the plugin binary.
-    debugImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:0.10.0")
-    profileImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:0.10.0")
 }
 ```
 
@@ -116,14 +110,13 @@ describe the requirement and runtime. Retrying creation returns the same
 structured failure. Missing or broken native libraries on supported runtimes
 remain native loading errors.
 
-Maven releases publish eight coordinates: core, both Compose modules, external
-playback, the shared FFmpeg runtime, SourceNormalizer, post-download remux, and
-performance diagnostics.
+Maven releases publish seven coordinates covering the core kit, both Compose
+modules, external playback, the shared FFmpeg runtime, SourceNormalizer, and
+post-download remux.
 The two FFmpeg-backed plugin coordinates remain direct opt-ins. Default
 standalone GitHub Release staging remains core-only. Use the dedicated plugin
 build commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for release
-staging, when you intentionally need Decoder, FrameProcessor, or the complete
-source-built plugin set.
+staging of the full source-built set, which includes the MediaCodec decoder.
 
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
@@ -135,8 +128,8 @@ Stable tags publish the matching stable coordinates.
 ### Maven Central Publishing
 
 The `publish-maven-central` release job builds, signs, validates, and uploads one
-Central Portal bundle containing all eight coordinates, including the two
-opt-in FFmpeg-backed plugin AARs and the diagnostics AAR. The Maven
+Central Portal bundle containing all seven coordinates, including the two
+opt-in FFmpeg-backed plugin AARs. The Maven
 `groupId` remains `io.github.umbrella22.vesper`; the Portal namespace controls
 publishing permission and may be that value or one of its parent prefixes. The
 job requires:
@@ -206,8 +199,6 @@ Optional plugin and extension modules can still be assembled explicitly:
 - `:vesper-player-kit-ffmpeg-runtime:assembleRelease`
 - `:vesper-player-kit-decoder-mediacodec:assembleRelease`
 - `:vesper-player-kit-source-normalizer-ffmpeg:assembleRelease`
-- `:vesper-player-kit-frame-processor-diagnostic:assembleRelease`
-- `:vesper-player-kit-performance-diagnostics:assembleRelease`
 
 ## Subtitle Baseline
 
@@ -249,13 +240,43 @@ Core (`vesper-player-kit`):
 
 `setSubtitleTrackSelection` is a suspending API in 0.4. It returns only after
 Media3 confirms the requested state or throws a structured subtitle error.
-`selectSourceAsync`, `seekByAsync`, `seekToRatioAsync`, and
-`seekToLiveEdgeAsync` also wait for Media3 command readiness or completion.
-Superseded commands throw `VesperPlayerCommandException` and do not overwrite
-the current generation's `lastError`.
+`selectSourceAsync` waits for Media3 startup readiness. The suspending seek
+methods wait for Media3 to reach the landing on the system playback route.
+Superseded commands throw `VesperPlayerCommandException`.
 `VesperSubtitleSideLoad` remains a deprecated typealias, and
 `VesperPlayerSource.subtitleConfigurations` remains a deprecated read-only alias;
 new source declarations use `externalSubtitles`.
+
+### Timeline and seeking
+
+`uiState.timeline` is an event-driven snapshot. Its position can stay unchanged
+while playback continues between updates. Custom controls can poll
+`controller.sampleTimeline()` while visible for an up-to-date playback position
+and seekable range. The sample can be `null` during source setup or teardown.
+
+`seekBy` and `seekByAsync` sample the playback head when calculating the target.
+`seekTo` and `seekToAsync` accept an absolute position in the sampled timeline.
+VOD positions are relative to the beginning of the media. Live DVR positions
+use the same coordinates as `seekableRange`. The host clamps targets to the
+available range. The synchronous methods return after dispatch. `seekBy` and
+`seekTo` throw `VesperPlayerCommandException` on an immediate system-route
+rejection. `seekToAsync`
+returns the confirmed Media3 landing. On the optional SDK-managed native-frame
+route, it returns the target accepted for dispatch.
+
+`controller.playbackEvents` carries `SeekCompleted`, `SeekAdjusted`, and
+`SeekFailed` for Media3 seek observations. A seek adjustment includes both the
+clamped target and Media3's landing. `RetryScheduled` carries the attempt and
+delay in milliseconds. `LiveWindowRecoveryStarted` reports the recovery attempt
+and `LiveWindowRecovered` reports the sampled position when playback becomes
+ready. Collect before issuing commands. The stream has no replay and drops
+older events for slow collectors. `sampleTimeline()` provides the current
+position independently of event delivery.
+
+HLS classification, duration, and seekable range follow the current Media3
+playlist. An open playlist can report a moving window or a changing duration.
+`#EXT-X-ENDLIST` signals the end of a finite playlist. The optional
+`#EXT-X-PLAYLIST-TYPE:VOD` tag declares an immutable playlist.
 
 External playback (`vesper-player-kit-external-playback`):
 
@@ -527,8 +548,6 @@ Optional Vesper FFmpeg features use a split runtime:
   `libvesper_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
   the shared runtime AAR and must not carry `libav*`, `libsw*`, `libxml2*`,
   `libssl*`, or `libcrypto*` copies.
-- `vesper-player-kit-frame-processor-diagnostic` contains only
-  `libvesper_frame_processor_diagnostic.so` and does not depend on FFmpeg.
 
 The mobile SourceNormalizer configuration is opt-in through
 `VesperSourceNormalizerConfiguration`. `DiagnosticsOnly` loads the plugin and
@@ -546,13 +565,13 @@ Standard HLS and DASH stay native-first unless normalization is explicitly
 required or forced by a test profile. The repository smoke expectations live in
 `fixtures/media/source-normalizer-smoke-matrix.json`.
 
-The mobile FrameProcessor path is opt-in through
-`VesperNativeFramePipelineConfiguration`. The Android host kit now reports the
+The SDK-managed native-frame path is opt-in through
+`VesperNativeFramePipelineConfiguration`. The Android host kit reports the
 native-frame route decision for SourceNormalizer packet input, MediaCodec,
 SurfaceView presentation, fallback reason, and frame counters. When
 `preferNativeFrame` or `requireNativeFrame` is selected and the
-SourceNormalizer, MediaCodec decoder, and optional FrameProcessor references
-resolve from the embedded registry, the explicit SDK-managed SDR native-frame route reads packets,
+SourceNormalizer and MediaCodec decoder references resolve from the embedded
+registry, the explicit SDK-managed SDR native-frame route reads packets,
 decodes through MediaCodec, and presents through a `SurfaceView`. HDR and
 Dolby Vision are routed to ExoPlayer / system playback; the
 SDK-managed native-frame route is SDR-only today and is not an HDR-ready path.

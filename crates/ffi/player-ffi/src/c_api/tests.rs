@@ -806,7 +806,7 @@ fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
             std::slice::from_raw_parts(startup.plugin_diagnostics, startup.plugin_diagnostics_len);
         assert_eq!(
             copy_c_string(diagnostics[0].path),
-            "/tmp/player-decoder-fixture.dylib"
+            "/tmp/fixture-decoder.dylib"
         );
         assert_eq!(copy_c_string(diagnostics[0].plugin_name), "fixture-decoder");
         assert_eq!(
@@ -1151,7 +1151,7 @@ impl FakeRuntimeAdapterInitializer {
             }),
             plugin_diagnostics: vec![
                 PlayerPluginDiagnostic {
-                    path: "/tmp/player-decoder-fixture.dylib".to_owned(),
+                    path: "/tmp/fixture-decoder.dylib".to_owned(),
                     plugin_name: Some("fixture-decoder".to_owned()),
                     plugin_kind: Some("decoder".to_owned()),
                     status: PlayerPluginDiagnosticStatus::DecoderSupported,

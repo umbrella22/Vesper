@@ -12,3 +12,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../plugin/player-plugin-abi" }
+serde.workspace = true
+serde_json.workspace = true

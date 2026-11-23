@@ -268,7 +268,6 @@ typedef struct PlayerFfiDownloadConfig {
   bool run_post_processors_on_completion;
   uint64_t plugin_registry_handle;
   const char *post_download_plugin_references_json;
-  const char *event_hook_plugin_references_json;
 } PlayerFfiDownloadConfig;
 
 typedef enum PlayerFfiDownloadContentFormat {
@@ -745,56 +744,6 @@ extern void player_ffi_ios_plugin_registry_dispose(uint64_t handle);
 
 extern void player_ffi_ios_plugin_string_free(char *value);
 
-extern PlayerFfiCallStatus player_ffi_benchmark_session_create_with_references_json(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    PlayerFfiError *out_error);
-
-extern void player_ffi_benchmark_session_dispose(uint64_t handle);
-
-extern PlayerFfiCallStatus player_ffi_benchmark_session_on_event_batch_json(
-    uint64_t handle,
-    const char *batch_json,
-    char **out_report_json,
-    PlayerFfiError *out_error);
-
-extern PlayerFfiCallStatus player_ffi_benchmark_session_flush_json(
-    uint64_t handle,
-    char **out_report_json,
-    PlayerFfiError *out_error);
-
-extern void player_ffi_benchmark_report_string_free(char *value);
-
-extern PlayerFfiCallStatus player_ffi_ios_playback_event_hook_session_create(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    PlayerFfiError *out_error);
-
-extern PlayerFfiCallStatus player_ffi_ios_playback_event_hook_session_submit_json(
-    uint64_t handle,
-    const char *event_json,
-    PlayerFfiError *out_error);
-
-extern PlayerFfiCallStatus player_ffi_ios_playback_event_hook_session_flush(
-    uint64_t handle,
-    uint64_t timeout_ms,
-    PlayerFfiError *out_error);
-
-extern PlayerFfiCallStatus player_ffi_ios_playback_event_hook_session_drain_json(
-    uint64_t handle,
-    char **out_report_json,
-    PlayerFfiError *out_error);
-
-extern PlayerFfiCallStatus player_ffi_ios_playback_event_hook_session_close(
-    uint64_t handle,
-    PlayerFfiError *out_error);
-
-extern void player_ffi_ios_playback_event_hook_session_dispose(uint64_t handle);
-
-extern void player_ffi_ios_playback_event_hook_report_string_free(char *value);
-
 extern PlayerFfiCallStatus player_ffi_ios_plugin_abi_summary_json(
     char **out_json,
     PlayerFfiError *out_error);
@@ -885,6 +834,43 @@ extern void player_ffi_dash_bridge_string_free(char *value);
 extern void player_ffi_error_free(PlayerFfiError *error);
 
 extern void player_ffi_track_preferences_free(PlayerFfiTrackPreferences *track_preferences);
+
+extern void * player_ffi_ios_metal_filter_create(
+    const void *device,
+    const void *queue,
+    const uint8_t *parameters,
+    size_t parameters_len);
+
+extern void player_ffi_ios_metal_filter_destroy(void *host);
+
+extern uint32_t player_ffi_ios_metal_filter_encode(
+    void *host,
+    const void *command,
+    CVPixelBufferRef pixel_buffer,
+    const void **out_texture);
+
+extern void * player_ffi_ios_native_frame_pipeline_take_presentation_lease(
+    uint64_t handle,
+    uint64_t frame_handle);
+
+extern void player_ffi_ios_native_frame_pipeline_finish_presentation_lease(
+    void *lease,
+    bool presented);
+
+extern uint64_t player_ffi_ios_native_frame_audio_open(
+    const char *binding,
+    size_t length,
+    uint32_t sample_rate,
+    uint16_t channels,
+    uint64_t epoch);
+
+extern bool player_ffi_ios_native_frame_audio_process(
+    uint64_t handle,
+    float *samples,
+    size_t sample_count,
+    int64_t pts_us);
+
+extern void player_ffi_ios_native_frame_audio_close(uint64_t handle);
 
 static uint64_t non_negative_u64(int64_t value) {
   return value > 0 ? (uint64_t)value : 0;
@@ -989,8 +975,6 @@ static PlayerFfiDownloadConfig ffi_download_config_from_runtime(
       .plugin_registry_handle = config->plugin_registry_handle,
       .post_download_plugin_references_json =
           config->post_download_plugin_references_json,
-      .event_hook_plugin_references_json =
-          config->event_hook_plugin_references_json,
   };
   return ffi_config;
 }
@@ -3267,258 +3251,6 @@ void vesper_runtime_ios_plugin_string_free(char *value) {
   player_ffi_ios_plugin_string_free(value);
 }
 
-bool vesper_runtime_benchmark_sink_session_create_with_references_json(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    char **out_error_message) {
-  if (out_handle == NULL || references_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-  *out_handle = 0;
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-
-  PlayerFfiCallStatus status = player_ffi_benchmark_session_create_with_references_json(
-      plugin_registry_handle,
-      references_json,
-      out_handle,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return *out_handle != 0;
-}
-
-void vesper_runtime_benchmark_sink_session_dispose(uint64_t handle) {
-  player_ffi_benchmark_session_dispose(handle);
-}
-
-bool vesper_runtime_benchmark_sink_session_submit_json(
-    uint64_t handle,
-    const char *batch_json,
-    char **out_report_json,
-    char **out_error_message) {
-  if (batch_json == NULL || out_report_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-  *out_report_json = NULL;
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-
-  PlayerFfiCallStatus status = player_ffi_benchmark_session_on_event_batch_json(
-      handle,
-      batch_json,
-      out_report_json,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return *out_report_json != NULL;
-}
-
-bool vesper_runtime_benchmark_sink_session_flush_json(
-    uint64_t handle,
-    char **out_report_json,
-    char **out_error_message) {
-  if (out_report_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-  *out_report_json = NULL;
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-
-  PlayerFfiCallStatus status = player_ffi_benchmark_session_flush_json(
-      handle,
-      out_report_json,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return *out_report_json != NULL;
-}
-
-bool vesper_runtime_playback_event_hook_session_create(
-    uint64_t plugin_registry_handle,
-    const char *references_json,
-    uint64_t *out_handle,
-    char **out_error_message) {
-  if (out_handle == NULL || references_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-  *out_handle = 0;
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-  PlayerFfiCallStatus status = player_ffi_ios_playback_event_hook_session_create(
-      plugin_registry_handle,
-      references_json,
-      out_handle,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return *out_handle != 0;
-}
-
-bool vesper_runtime_playback_event_hook_session_submit_json(
-    uint64_t handle,
-    const char *event_json,
-    char **out_error_message) {
-  if (handle == 0 || event_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-  PlayerFfiCallStatus status = player_ffi_ios_playback_event_hook_session_submit_json(
-      handle,
-      event_json,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return true;
-}
-
-bool vesper_runtime_playback_event_hook_session_flush(
-    uint64_t handle,
-    uint64_t timeout_ms,
-    char **out_error_message) {
-  if (handle == 0) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-  PlayerFfiCallStatus status = player_ffi_ios_playback_event_hook_session_flush(
-      handle,
-      timeout_ms,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return true;
-}
-
-bool vesper_runtime_playback_event_hook_session_drain_json(
-    uint64_t handle,
-    char **out_report_json,
-    char **out_error_message) {
-  if (handle == 0 || out_report_json == NULL) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-  *out_report_json = NULL;
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-  PlayerFfiCallStatus status = player_ffi_ios_playback_event_hook_session_drain_json(
-      handle,
-      out_report_json,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return *out_report_json != NULL;
-}
-
-bool vesper_runtime_playback_event_hook_session_close(
-    uint64_t handle,
-    char **out_error_message) {
-  if (handle == 0) {
-    return false;
-  }
-  if (out_error_message != NULL) {
-    *out_error_message = NULL;
-  }
-
-  PlayerFfiError ffi_error;
-  memset(&ffi_error, 0, sizeof(ffi_error));
-  PlayerFfiCallStatus status = player_ffi_ios_playback_event_hook_session_close(
-      handle,
-      &ffi_error);
-  if (status != PlayerFfiCallStatusOk) {
-    if (out_error_message != NULL) {
-      *out_error_message = ffi_error.message;
-      ffi_error.message = NULL;
-    }
-    player_ffi_error_free(&ffi_error);
-    return false;
-  }
-  return true;
-}
-
-void vesper_runtime_playback_event_hook_session_dispose(uint64_t handle) {
-  player_ffi_ios_playback_event_hook_session_dispose(handle);
-}
-
-void vesper_runtime_playback_event_hook_report_string_free(char *value) {
-  player_ffi_ios_playback_event_hook_report_string_free(value);
-}
-
-void vesper_runtime_benchmark_string_free(char *value) {
-  player_ffi_benchmark_report_string_free(value);
-}
-
 bool vesper_ios_plugin_abi_summary_json(
     char **out_json,
     char **out_error_message) {
@@ -3933,4 +3665,57 @@ bool vesper_dash_bridge_parse_sidx(
 
 void vesper_dash_bridge_string_free(char *value) {
   player_ffi_dash_bridge_string_free(value);
+}
+
+void * vesper_ios_metal_filter_create(
+    const void *device,
+    const void *queue,
+    const uint8_t *parameters,
+    size_t parameters_len) {
+    return player_ffi_ios_metal_filter_create(device, queue, parameters, parameters_len);
+}
+
+void vesper_ios_metal_filter_destroy(void *host) {
+    player_ffi_ios_metal_filter_destroy(host);
+}
+
+uint32_t vesper_ios_metal_filter_encode(
+    void *host,
+    const void *command,
+    CVPixelBufferRef pixel_buffer,
+    const void **out_texture) {
+    return player_ffi_ios_metal_filter_encode(host, command, pixel_buffer, out_texture);
+}
+
+void * vesper_ios_native_frame_pipeline_take_presentation_lease(
+    uint64_t handle,
+    uint64_t frame_handle) {
+    return player_ffi_ios_native_frame_pipeline_take_presentation_lease(handle, frame_handle);
+}
+
+void vesper_ios_native_frame_pipeline_finish_presentation_lease(
+    void *lease,
+    bool presented) {
+    player_ffi_ios_native_frame_pipeline_finish_presentation_lease(lease, presented);
+}
+
+uint64_t vesper_ios_native_frame_audio_open(
+    const char *binding,
+    size_t length,
+    uint32_t sample_rate,
+    uint16_t channels,
+    uint64_t epoch) {
+    return player_ffi_ios_native_frame_audio_open(binding, length, sample_rate, channels, epoch);
+}
+
+bool vesper_ios_native_frame_audio_process(
+    uint64_t handle,
+    float *samples,
+    size_t sample_count,
+    int64_t pts_us) {
+    return player_ffi_ios_native_frame_audio_process(handle, samples, sample_count, pts_us);
+}
+
+void vesper_ios_native_frame_audio_close(uint64_t handle) {
+    player_ffi_ios_native_frame_audio_close(handle);
 }

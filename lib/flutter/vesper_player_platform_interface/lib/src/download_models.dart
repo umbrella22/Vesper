@@ -68,7 +68,6 @@ final class VesperDownloadConfiguration {
     this.restoreTasksOnStartup = true,
     this.baseDirectory,
     this.postDownloadPluginReferences = const <VesperPluginReference>[],
-    this.eventHookPluginReferences = const <VesperPluginReference>[],
     this.rangeChunkBytes,
     this.minProgressBytes = 512 * 1024,
     this.minProgressIntervalMs = 250,
@@ -93,9 +92,6 @@ final class VesperDownloadConfiguration {
       postDownloadPluginReferences: _decodeDownloadPluginReferences(
         normalized['postDownloadPluginReferences'],
       ),
-      eventHookPluginReferences: _decodeDownloadPluginReferences(
-        normalized['eventHookPluginReferences'],
-      ),
     );
   }
 
@@ -105,7 +101,6 @@ final class VesperDownloadConfiguration {
   final bool restoreTasksOnStartup;
   final String? baseDirectory;
   final List<VesperPluginReference> postDownloadPluginReferences;
-  final List<VesperPluginReference> eventHookPluginReferences;
   final int? rangeChunkBytes;
   final int minProgressBytes;
   final int minProgressIntervalMs;
@@ -118,9 +113,6 @@ final class VesperDownloadConfiguration {
       'restoreTasksOnStartup': restoreTasksOnStartup,
       'baseDirectory': baseDirectory,
       'postDownloadPluginReferences': postDownloadPluginReferences
-          .map((reference) => reference.toMap())
-          .toList(growable: false),
-      'eventHookPluginReferences': eventHookPluginReferences
           .map((reference) => reference.toMap())
           .toList(growable: false),
       'rangeChunkBytes': rangeChunkBytes,

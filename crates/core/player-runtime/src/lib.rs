@@ -16,7 +16,6 @@ mod command;
 mod event_queue;
 mod media;
 mod options;
-mod plugin_sequence;
 /// Shared policy resolution helpers.
 pub mod policy;
 
@@ -91,12 +90,7 @@ pub use player_playlist::{
     SequenceSourceRevision, SequenceSourceState, SequenceWarmupGoal, SequenceWarmupReport,
     SequenceWarmupStats, SequenceWarmupStatus, SequenceWarmupTaskId, SequenceWarmupTaskSnapshot,
 };
-pub use player_plugin::{
-    AudioPitchMode as PitchMode, PipelineEventHook, PipelineEventHookError,
-    PluginActivePlaybackCorrelation, PluginNextPrewarmCorrelation, PluginPlaybackAttachment,
-    PluginPlaybackAttachmentToken, PluginPlaybackAuthority, PluginPlaybackError,
-    PluginPlaybackRole, PluginPlaybackTransitionReport, PluginSessionCorrelation,
-};
+pub use player_plugin::{AudioPitchMode as PitchMode, PipelineEventHook, PipelineEventHookError};
 pub use player_preload::{
     DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
     DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, InMemoryPreloadBudgetProvider,
@@ -107,7 +101,6 @@ pub use player_preload::{
     PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState,
     PreloadTaskStatus,
 };
-pub use plugin_sequence::{PlayerPluginSequenceCorrelation, PlayerPluginSequenceCorrelationError};
 pub use policy::{
     PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
     PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy,

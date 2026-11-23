@@ -88,23 +88,7 @@ extension VesperNativePlayerBridge {
         tearDownActivePlayback(cancelSourceCommand: false)
         preloadCoordinator.close()
         deactivateAudioSessionIfNeeded()
-        benchmarkRecorder.dispose(player: player)
-        if let session = pipelineEventHookSession {
-            pipelineEventHookSession = nil
-            let cleanup = session.dispose()
-            Task { @MainActor [weak self] in
-                let reportBatch = await cleanup.value
-                guard !reportBatch.isEmpty else { return }
-                self?.finalizedPipelineEventHookReports = reportBatch
-                let dispatcherError = reportBatch.dispatcherError ?? "none"
-                iosHostLog(
-                    "playback EventHook reports drained count=\(reportBatch.reports.count) " +
-                        "droppedEvents=\(reportBatch.droppedEvents) " +
-                        "droppedReports=\(reportBatch.droppedReports) " +
-                        "error=\(dispatcherError)"
-                )
-            }
-        }
+        benchmarkRecorder.dispose()
     }
 
     func refresh() {

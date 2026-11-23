@@ -63,15 +63,15 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: 0.10.0
+  vesper_player: 0.11.0
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: 0.10.0
+  vesper_player_external_playback: 0.11.0
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: 0.10.0
+  vesper_player_ui: 0.11.0
   # Optional normalized-resource playback.
-  vesper_player_source_normalizer_ffmpeg: 0.10.0
+  vesper_player_source_normalizer_ffmpeg: 0.11.0
   # Optional post-download MP4 remux.
-  vesper_player_remux_ffmpeg: 0.10.0
+  vesper_player_remux_ffmpeg: 0.11.0
 ```
 
 Repository source-checkout development writes ignored local dependency
@@ -465,26 +465,12 @@ not required. Startup elapsed time and media position are separate fields;
 iOS layer readiness and Android rendered-frame evidence preserve their native
 meaning. See the [playback diagnostics contract and example](../vesper_player_platform_interface/doc/playback-diagnostics.md).
 
-### Performance Diagnostics Session
+### Performance Observations
 
-The optional `vesper_player_performance_diagnostics` package supplies the
-native BenchmarkSink artifact. The session API remains in `vesper_player` so
-apps can exclude that artifact from selected native build configurations:
-
-```dart
-final diagnostics = await controller.startPerformanceDiagnostics();
-await diagnostics.updateOverlayState(
-  const VesperPerformanceOverlayState(active: true),
-);
-final snapshot = await diagnostics.snapshot();
-final report = await diagnostics.stop();
-```
-
-Flutter submits `FrameTiming` samples in bounded batches and captures overlay
-state with each sample. The plugin performs no upload and reports correlation,
-not causation. The complete schema, thresholds, error codes, and native probe
-differences are defined in
-[`docs/performance-diagnostics.md`](../../../docs/performance-diagnostics.md).
+Record playback observations through the controller's event stream and use
+Flutter's frame timing callbacks for UI measurements. native plugin ABI retires the
+optional native BenchmarkSink artifact. See the
+[plugin migration guide](../../doc/native-plugin-migration.md) for host observability.
 
 ## Track Selection And ABR
 
@@ -910,7 +896,6 @@ if (caps.isExperimental) {
 | `vesper_player_platform_interface` | Shared platform contract and DTOs         |
 | `vesper_player_android`            | Android implementation built on ExoPlayer |
 | `vesper_player_ios`                | iOS implementation built on AVPlayer      |
-| `vesper_player_performance_diagnostics` | Optional native BenchmarkSink artifact |
 
 ## Video presentation and portrait playback
 

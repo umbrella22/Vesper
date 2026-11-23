@@ -90,21 +90,15 @@ against them.
   tables. `player-plugin` is the `#![deny(unsafe_code)]` author SDK and export
   macro surface; external Rust authors should not write `unsafe` or
   `extern "C"`.
-- Native plugins export one `vesper_plugin_entry` root. The root exposes
-  identity, version, interface query, byte ownership, and destruction hooks.
-- `player-plugin-loader` validates the root and typed interface headers before
-  constructing checked wrappers and trait objects. Interface IDs are stable;
-  minor revisions append fields and major revisions change compatibility.
-- `PluginReference` requires a validated reverse-DNS identity and explicit
-  `Native` or `Wasm` transport. Omitting a capability instance is valid only
-  when exactly one implementation matches.
-- Rust authors use the safe `player-plugin` SDK. Rust WASM components target
-  `wasm32-wasip2` and currently cover EventHook and BenchmarkSink with bounded
-  structured input/output. They do not receive media bytes, files, network,
-  DRM, environment, process, clock, or random access.
-- The public authoring surface supports Rust Native and Rust WASM only. There
-  is no C or C++ author SDK; C-compatible ABI, iOS bridge FFI, and FFmpeg C
-  dependencies remain internal integration boundaries.
+- Native plugins export `vesper_native_plugin_entry` and return a
+  `VesperPluginRoot` with identity, ABI version, typed interface lookup, and an
+  optional destruction hook. `player_plugin_loader::native` checks the ABI
+  major and advertised sizes before exposing typed capabilities.
+- `PluginReference` names a validated reverse-DNS identity and native transport.
+  Omitting a capability instance is valid only when one implementation matches.
+- Rust authors use `player_plugin::author` and `#[player_plugin::export]`. C99
+  and C++17 authors use `include/vesper_plugin.h`. Playback events and benchmark
+  observations are host callbacks.
 - Native signatures establish source and integrity only; native plugins are
   trusted code. `inspect` and `check` worker processes provide tool failure
   isolation, not a runtime sandbox.

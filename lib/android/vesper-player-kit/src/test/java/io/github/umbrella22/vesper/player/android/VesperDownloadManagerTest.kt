@@ -471,12 +471,6 @@ class VesperDownloadManagerTest {
                 capabilityInstanceId = "dev.vesper.remux-ffmpeg.post-download",
                 transport = VesperPluginTransport.Native,
             )
-        val eventHookReference =
-            VesperPluginReference(
-                pluginId = "dev.vesper.download-metrics",
-                capabilityInstanceId = "dev.vesper.download-metrics.event-hook",
-                transport = VesperPluginTransport.Native,
-            )
         val registry = RecordingPluginRegistryHandleOwner(73L)
         var loadedReferences = emptyList<VesperPluginReference>()
         val manager =
@@ -486,7 +480,6 @@ class VesperDownloadManagerTest {
                         autoStart = false,
                         runPostProcessorsOnCompletion = false,
                         postDownloadPluginReferences = listOf(postDownloadReference),
-                        eventHookPluginReferences = listOf(eventHookReference),
                     ),
                 executor = RecordingDownloadExecutor(),
                 bindings = bindings,
@@ -498,15 +491,11 @@ class VesperDownloadManagerTest {
                 runtimeDispatcher = Dispatchers.Unconfined,
             )
 
-        assertEquals(listOf(postDownloadReference, eventHookReference), loadedReferences)
+        assertEquals(listOf(postDownloadReference), loadedReferences)
         assertEquals(73L, bindings.createdConfig?.pluginRegistryHandle)
         assertEquals(
             encodeVesperPluginReferences(listOf(postDownloadReference)),
             bindings.createdConfig?.postDownloadPluginReferencesJson,
-        )
-        assertEquals(
-            encodeVesperPluginReferences(listOf(eventHookReference)),
-            bindings.createdConfig?.eventHookPluginReferencesJson,
         )
         assertEquals(false, bindings.createdConfig?.runPostProcessorsOnCompletion)
         manager.dispose()

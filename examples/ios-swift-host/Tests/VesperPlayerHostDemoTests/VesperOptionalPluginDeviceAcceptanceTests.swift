@@ -369,7 +369,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
         defer { dlclose(handle) }
 
         dlerror()
-        guard dlsym(handle, "vesper_plugin_entry") != nil else {
+        guard dlsym(handle, "vesper_native_plugin_entry") != nil else {
             throw OptionalPluginAcceptanceError.missingEntry(
                 path: path,
                 message: dynamicLoaderMessage()
@@ -419,7 +419,7 @@ private enum OptionalPluginAcceptanceError: LocalizedError {
         case .dynamicLoader(let path, let message):
             "Failed to load optional plugin at \(path): \(message)"
         case .missingEntry(let path, let message):
-            "Optional plugin at \(path) is missing vesper_plugin_entry: \(message)"
+            "Optional plugin at \(path) is missing vesper_native_plugin_entry: \(message)"
         }
     }
 }

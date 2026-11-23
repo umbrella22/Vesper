@@ -1,31 +1,37 @@
+#![cfg(any(test, target_os = "windows"))]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 //! D3D11 native-frame decoder plugin.
 //!
-//! Windows builds route Safe SDK sessions into the platform D3D11
-//! implementation. Non-Windows builds retain the plugin root for contract tests
-//! but do not advertise decoder capabilities.
+//! Windows builds expose the native entry backed by D3D11 sessions.
+//! Contract tests also run on other platforms.
 
 use player_plugin::{
-    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContextKind, DecoderNativeFrame,
-    DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-    DecoderNativeRequirements, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
-    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
-    NativeFramePipelineProfile, Plugin, PluginBuildError,
+    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderFrameFormat,
+    DecoderMediaKind, DecoderNativeDeviceContextKind, DecoderNativeHandleKind,
+    DecoderNativeRequirements, NativeFramePipelineProfile,
+};
+#[cfg(test)]
+use player_plugin::{
+    DecoderError, DecoderNativeFrame, DecoderNativeFrameMetadata,
+    DecoderNativeFrameReleaseTracking, DecoderPacket, DecoderPacketResult,
+    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
+    NativeDecoderPluginFactory, NativeDecoderSession,
 };
 
+#[cfg(target_os = "windows")]
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-d3d11";
-const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-d3d11.native";
 const PLUGIN_NAME: &str = "player-decoder-d3d11";
 #[cfg(target_os = "windows")]
 const DEFAULT_WIDTH: u32 = 16;
 #[cfg(target_os = "windows")]
 const DEFAULT_HEIGHT: u32 = 16;
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 struct D3D11DecoderFactory;
 
+#[cfg(test)]
 impl NativeDecoderPluginFactory for D3D11DecoderFactory {
     fn name(&self) -> &str {
         PLUGIN_NAME
@@ -47,6 +53,7 @@ impl NativeDecoderPluginFactory for D3D11DecoderFactory {
     }
 }
 
+#[cfg(test)]
 struct D3D11DecoderSession {
     codec: String,
     inner: Option<platform::SessionInner>,
@@ -54,6 +61,7 @@ struct D3D11DecoderSession {
     eof_sent: bool,
 }
 
+#[cfg(test)]
 impl D3D11DecoderSession {
     fn open(config: DecoderSessionConfig) -> Result<Self, DecoderError> {
         if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
@@ -117,6 +125,7 @@ impl D3D11DecoderSession {
                     coded_height: Some(frame.coded_height),
                     visible_rect: None,
                     handle_kind: frame.handle_kind,
+                    d3d11_subresource_index: None,
                     pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
                     color_space: None,
                     hdr_metadata: None,
@@ -182,6 +191,7 @@ impl D3D11DecoderSession {
     }
 }
 
+#[cfg(test)]
 impl NativeDecoderSession for D3D11DecoderSession {
     fn session_info(&self) -> DecoderSessionInfo {
         DecoderSessionInfo {
@@ -216,17 +226,11 @@ impl NativeDecoderSession for D3D11DecoderSession {
     }
 }
 
+#[cfg(test)]
 impl Drop for D3D11DecoderSession {
     fn drop(&mut self) {
         let _ = self.close_impl();
     }
-}
-
-#[player_plugin::export]
-fn d3d11_decoder_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
-        .with_native_decoder(INSTANCE_ID, D3D11DecoderFactory)?
-        .build()
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
@@ -279,6 +283,9 @@ fn decoder_native_requirements() -> DecoderNativeRequirements {
 }
 
 #[cfg(target_os = "windows")]
+mod plugin_export;
+
+#[cfg(target_os = "windows")]
 mod platform {
     use std::collections::HashMap;
     use std::ffi::c_void;
@@ -325,6 +332,7 @@ mod platform {
     }
 
     pub struct NativeFrame {
+        pub color: player_plugin_abi::VesperColorInfo,
         pub pts_us: Option<i64>,
         pub duration_us: Option<i64>,
         pub width: u32,
@@ -346,11 +354,15 @@ mod platform {
         draining: bool,
         eof_sent: bool,
         next_frame_id: u64,
+        output_color: Option<player_plugin_abi::VesperColorInfo>,
     }
 
-    struct OutstandingTexture {
+    pub(super) struct OutstandingTexture {
         handle: usize,
+        pub(super) subresource_index: u32,
         _texture: ID3D11Texture2D,
+        // The sample retains the decoder surface slot, including its array slice.
+        _sample: AgileReference<IMFSample>,
     }
 
     struct ComApartmentScope {
@@ -390,7 +402,15 @@ mod platform {
     }
 
     impl SessionInner {
+        #[cfg(test)]
         pub fn open(config: &DecoderSessionConfig) -> Result<Self, DecoderError> {
+            Self::open_with_sharing(config, false)
+        }
+
+        pub(super) fn open_with_sharing(
+            config: &DecoderSessionConfig,
+            share_textures: bool,
+        ) -> Result<Self, DecoderError> {
             let _apartment = ComApartmentScope::enter()?;
             ensure_media_foundation_started()?;
             let Some(context) = config.native_device_context.as_ref() else {
@@ -434,6 +454,7 @@ mod platform {
                 input_subtype,
                 coded_width,
                 coded_height,
+                share_textures,
             )?;
             let decoder = AgileReference::new(&decoder)
                 .map_err(|error| mf_error("AgileReference<IMFTransform>::new", error))?;
@@ -446,6 +467,7 @@ mod platform {
                 draining: false,
                 eof_sent: false,
                 next_frame_id: 1,
+                output_color: None,
             })
         }
 
@@ -520,7 +542,10 @@ mod platform {
                                 "D3D11 Media Foundation decoder returned no output sample",
                             )
                         })?;
-                    self.native_frame_from_sample(sample)
+                    let color = *self
+                        .output_color
+                        .get_or_insert_with(|| read_output_color(&decoder));
+                    self.native_frame_from_sample(sample, color)
                         .map(ReceiveNativeFrame::Frame)
                 }
                 Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
@@ -532,11 +557,16 @@ mod platform {
                     }
                 }
                 Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                    self.output_color = None;
                     self.set_output_type_in_apartment(&apartment)?;
                     Ok(ReceiveNativeFrame::NeedMoreInput)
                 }
                 Err(error) => Err(mf_error("IMFTransform::ProcessOutput", error)),
             }
+        }
+
+        pub(super) fn take_frame_texture(&mut self, frame_id: u64) -> Option<OutstandingTexture> {
+            self.outstanding_textures.remove(&frame_id)
         }
 
         pub fn release_frame_texture(
@@ -652,6 +682,7 @@ mod platform {
         fn native_frame_from_sample(
             &mut self,
             sample: IMFSample,
+            color: player_plugin_abi::VesperColorInfo,
         ) -> Result<NativeFrame, DecoderError> {
             let pts_us =
                 // SAFETY: The sample owns a live IMFSample reference throughout this timestamp query.
@@ -681,6 +712,20 @@ mod platform {
             // SAFETY: GetResource succeeded for the texture IID and returned a non-null owned
             // reference. from_raw takes that reference exactly once.
             let texture = unsafe { ID3D11Texture2D::from_raw(resource) };
+            let mut desc = Default::default();
+            // SAFETY: both COM objects are live and desc is writable.
+            let subresource_index = unsafe {
+                texture.GetDesc(&mut desc);
+                dxgi_buffer.GetSubresourceIndex()
+            }
+            .map_err(|error| mf_error("IMFDXGIBuffer::GetSubresourceIndex", error))?;
+            if desc.MipLevels != 1 || subresource_index >= desc.ArraySize {
+                return Err(DecoderError::abi_violation(
+                    "invalid D3D11 decoder subresource",
+                ));
+            }
+            let sample = AgileReference::new(&sample)
+                .map_err(|error| mf_error("AgileReference<IMFSample>::new", error))?;
             let handle = texture.as_raw() as usize;
             let frame_id = self.next_frame_id;
             self.next_frame_id = self.next_frame_id.checked_add(1).ok_or_else(|| {
@@ -690,21 +735,113 @@ mod platform {
                 frame_id,
                 OutstandingTexture {
                     handle,
+                    subresource_index,
                     _texture: texture,
+                    _sample: sample,
                 },
             );
             Ok(NativeFrame {
+                color,
                 pts_us,
                 duration_us,
                 width: self.width,
                 height: self.height,
-                coded_width: self.width,
-                coded_height: self.height,
+                coded_width: desc.Width,
+                coded_height: desc.Height,
                 format: DecoderFrameFormat::Nv12,
                 handle_kind: DecoderNativeHandleKind::D3D11Texture2D,
                 handle,
                 frame_id,
             })
+        }
+    }
+
+    #[allow(non_upper_case_globals)] // Media Foundation SDK enum constants.
+    fn read_output_color(decoder: &IMFTransform) -> player_plugin_abi::VesperColorInfo {
+        use player_plugin_abi::{
+            VESPER_HDR_HDR10, VESPER_HDR_HLG, VESPER_HDR_SDR, VesperColorInfo,
+        };
+        use windows::Win32::Media::MediaFoundation::*;
+
+        // SAFETY: the apartment-local transform has produced a sample on stream zero.
+        let media_type = unsafe { decoder.GetOutputCurrentType(0) }.ok();
+        let attribute = |key: &windows::core::GUID| {
+            // SAFETY: the media type and GUID remain live through GetUINT32.
+            media_type
+                .as_ref()
+                .and_then(|media_type| unsafe { media_type.GetUINT32(key) }.ok())
+                .unwrap_or(0)
+        };
+        let primaries = match MFVideoPrimaries(attribute(&MF_MT_VIDEO_PRIMARIES) as i32) {
+            MFVideoPrimaries_BT709 => 1,
+            MFVideoPrimaries_BT470_2_SysM => 4,
+            MFVideoPrimaries_BT470_2_SysBG => 5,
+            MFVideoPrimaries_SMPTE170M | MFVideoPrimaries_SMPTE_C => 6,
+            MFVideoPrimaries_SMPTE240M => 7,
+            MFVideoPrimaries_BT2020 => 9,
+            MFVideoPrimaries_XYZ => 10,
+            MFVideoPrimaries_DCI_P3 => 11,
+            MFVideoPrimaries_EBU3213 => 22,
+            other => {
+                if other != MFVideoPrimaries_Unknown {
+                    tracing::debug!(raw = other.0, "Unmapped Media Foundation video primaries");
+                }
+                2
+            }
+        };
+        let transfer = match MFVideoTransferFunction(attribute(&MF_MT_TRANSFER_FUNCTION) as i32) {
+            MFVideoTransFunc_709 => 1,
+            MFVideoTransFunc_22 => 4,
+            MFVideoTransFunc_28 => 5,
+            MFVideoTransFunc_240M => 7,
+            MFVideoTransFunc_10 => 8,
+            MFVideoTransFunc_Log_100 => 9,
+            MFVideoTransFunc_Log_316 => 10,
+            MFVideoTransFunc_sRGB => 13,
+            MFVideoTransFunc_2084 => 16,
+            MFVideoTransFunc_HLG => 18,
+            other => {
+                if other != MFVideoTransFunc_Unknown {
+                    tracing::debug!(raw = other.0, "Unmapped Media Foundation transfer function");
+                }
+                2
+            }
+        };
+        let matrix = match MFVideoTransferMatrix(attribute(&MF_MT_YUV_MATRIX) as i32) {
+            MFVideoTransferMatrix_BT709 => 1,
+            MFVideoTransferMatrix_BT601 if primaries == 5 => 5,
+            MFVideoTransferMatrix_BT601 => 6,
+            MFVideoTransferMatrix_SMPTE240M => 7,
+            MFVideoTransferMatrix_BT2020_10 | MFVideoTransferMatrix_BT2020_12 => 9,
+            other => {
+                if other != MFVideoTransferMatrix_Unknown {
+                    tracing::debug!(raw = other.0, "Unmapped Media Foundation YUV matrix");
+                }
+                2
+            }
+        };
+        let range = match MFNominalRange(attribute(&MF_MT_VIDEO_NOMINAL_RANGE) as i32) {
+            MFNominalRange_0_255 => 2,
+            MFNominalRange_16_235 => 1,
+            other => {
+                if other != MFNominalRange_Unknown {
+                    tracing::debug!(raw = other.0, "Unmapped Media Foundation nominal range");
+                }
+                0
+            }
+        };
+        VesperColorInfo {
+            primaries,
+            transfer,
+            matrix,
+            range,
+            bit_depth: 8,
+            hdr_kind: match transfer {
+                16 => VESPER_HDR_HDR10,
+                18 => VESPER_HDR_HLG,
+                _ => VESPER_HDR_SDR,
+            },
+            ..Default::default()
         }
     }
 
@@ -804,6 +941,7 @@ mod platform {
         input_subtype: windows::core::GUID,
         width: u32,
         height: u32,
+        share_textures: bool,
     ) -> Result<(), DecoderError> {
         let input_type = create_video_media_type(
             input_subtype,
@@ -818,6 +956,18 @@ mod platform {
             decoder
                 .SetInputType(0, &input_type, 0)
                 .map_err(|error| mf_error("IMFTransform::SetInputType", error))?;
+        }
+        if share_textures {
+            // SAFETY: the transform is live in the current COM apartment. A
+            // transform may ignore the request. The host still checks every texture.
+            unsafe {
+                if let Ok(attributes) = decoder.GetOutputStreamAttributes(0) {
+                    let _ = attributes.SetUINT32(
+                        &windows::Win32::Media::MediaFoundation::MF_SA_D3D11_SHARED_WITHOUT_MUTEX,
+                        1,
+                    );
+                }
+            }
         }
         let output_type = create_video_media_type(MFVideoFormat_NV12, width, height, None, true)?;
         // SAFETY: The live transform and initialized NV12 output type remain valid
@@ -1035,13 +1185,6 @@ mod tests {
         DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
         DecoderNativeDeviceContextKind, DecoderNativeHandleKind, NativeFramePipelineProfile,
     };
-
-    #[test]
-    fn exports_plugin_entry() {
-        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
-            vesper_plugin_entry;
-        assert!(!entry().is_null());
-    }
 
     #[test]
     fn capabilities_advertise_windows_d3d11_native_frames() {

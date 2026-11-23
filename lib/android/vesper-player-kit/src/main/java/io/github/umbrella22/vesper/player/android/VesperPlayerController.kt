@@ -7,6 +7,7 @@ import kotlinx.coroutines.*
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
@@ -32,8 +33,16 @@ class VesperPlayerController internal constructor(
     val backendFamily: VesperPlayerBackendFamily
         get() = bridge.backend.toBackendFamily()
 
+    /** Event-driven playback state. Sample [sampleTimeline] for the current playback position. */
     val uiState: StateFlow<PlayerHostUiState>
         get() = bridge.uiState
+
+    /**
+     * Seek outcomes, load retries, and live-window recovery observations from Media3.
+     * Collect before issuing commands. The stream has no replay and drops older events for slow collectors.
+     */
+    val playbackEvents: SharedFlow<VesperPlaybackEvent>
+        get() = bridge.playbackEvents
 
     val trackCatalog: StateFlow<VesperTrackCatalog>
         get() = bridge.trackCatalog
@@ -152,6 +161,7 @@ class VesperPlayerController internal constructor(
 
     fun refresh() = bridge.refresh()
 
+    /** Reads the current native timeline, or returns `null` when there is no current sample. */
     fun sampleTimeline(): TimelineUiState? = bridge.sampleTimeline()
 
     /**
@@ -266,10 +276,10 @@ class VesperPlayerController internal constructor(
                         checkCurrent()
                         bridge.setPlaybackRate(options.playbackRate)
                         checkCurrent()
-                        val timeline = bridge.uiState.value.timeline
+                        val timeline = bridge.sampleTimeline() ?: bridge.uiState.value.timeline
                         if (options.startPositionMs != timeline.positionMs &&
                             (options.startPositionMs != 0L || timeline.isSeekable)) {
-                            bridge.seekByAsync(options.startPositionMs - timeline.positionMs)
+                            bridge.seekToAsync(options.startPositionMs)
                         }
                         checkCurrent()
                         val playbackEpoch = diagnostics.snapshot.value.playbackEpoch
@@ -321,11 +331,29 @@ class VesperPlayerController internal constructor(
 
     fun stop() = bridge.stop()
 
+    /**
+     * Requests a seek relative to the playback head sampled at dispatch.
+     * @throws VesperPlayerCommandException if the system playback route rejects the request.
+     */
     fun seekBy(deltaMs: Long) = bridge.seekBy(deltaMs)
 
-    /** Seeks relatively and resumes only after the active native route confirms completion. */
+    /** Seeks relative to the sampled playback head. Media3 completes when it reports readiness at the landing. */
     suspend fun seekByAsync(deltaMs: Long) = withContext(Dispatchers.Main.immediate) {
         bridge.seekByAsync(deltaMs)
+    }
+
+    /**
+     * Requests an absolute position in the coordinate system returned by [sampleTimeline].
+     * @throws VesperPlayerCommandException if the system playback route rejects the request.
+     */
+    fun seekTo(positionMs: Long) = bridge.seekTo(positionMs)
+
+    /**
+     * Seeks to an absolute timeline position. Media3 returns the confirmed landing and an SDK-managed
+     * native-frame route returns its accepted target.
+     */
+    suspend fun seekToAsync(positionMs: Long): Long = withContext(Dispatchers.Main.immediate) {
+        bridge.seekToAsync(positionMs)
     }
 
     fun seekToRatio(ratio: Float) = bridge.seekToRatio(ratio)
@@ -391,22 +419,11 @@ class VesperPlayerController internal constructor(
 
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()
 
-    /** Returns and clears structured reports emitted by playback EventHooks. */
-    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
-        bridge.drainPipelineEventHookReports()
-
     fun benchmarkSummary(): VesperBenchmarkSummary = bridge.benchmarkSummary()
 
-    /**
-     * Waits for the benchmark sink's final flush after [dispose].
-     *
-     * The bounded wait runs off the caller thread so UI hosts can emit their
-     * disposal state immediately and collect the final report afterward.
-     */
-    suspend fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
-        withContext(Dispatchers.IO) {
-            bridge.awaitBenchmarkSinkShutdown(timeoutMs)
-        }
+    /** Compatibility method. Benchmark recording is synchronous and has no shutdown worker. */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean = true
 
     suspend fun startPerformanceDiagnostics(
         window: Window,
@@ -529,8 +546,7 @@ object VesperPlayerControllerFactory {
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(),
-        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
-            VesperPipelineEventHookConfiguration(),
+        fixedBlockAudioProcessorId: String? = null,
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
@@ -546,7 +562,7 @@ object VesperPlayerControllerFactory {
                 sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                 frameProcessorConfiguration = frameProcessorConfiguration,
                 nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
-                pipelineEventHookConfiguration = pipelineEventHookConfiguration,
+                fixedBlockAudioProcessorId = fixedBlockAudioProcessorId,
             )
         )
 

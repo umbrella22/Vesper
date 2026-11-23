@@ -122,6 +122,7 @@ targets:
         OTHER_LDFLAGS:
           - $(inherited)
           - -lvesper_player_ffi_ios
+          - -lc++
     info:
       path: Sources/Generated-Info.plist
       properties:
@@ -131,8 +132,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.10.0"
-        CFBundleVersion: "1000"
+        CFBundleShortVersionString: "0.11.0"
+        CFBundleVersion: "1100"
     scheme:
       testTargets:
         - VesperPlayerKitTests
@@ -166,6 +167,7 @@ targets:
     deploymentTarget: "17.0"
     dependencies:
       - target: VesperPlayerKit
+      - target: VesperPlayerKitDeviceTestHost
     sources:
       - path: Tests/VesperPlayerKitTests
         excludes:

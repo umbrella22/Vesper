@@ -5,114 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
-  test('performance diagnostics preserve unknown wire values and extensions',
-      () {
-    final payload = _validPerformanceReportMap(
-      platform: 'future-platform',
-      probe: 'futureProbe',
-      diagnosisKind: 'futureDiagnosis',
-      confidence: 'veryCertain',
-      evidenceCodes: <String>['future_evidence'],
-      diagnosticSeverity: 'notice',
-    );
-    final inactive = (payload['cohorts']
-        as Map<Object?, Object?>)['overlayInactive'] as Map<Object?, Object?>;
-    inactive.addAll(<Object?, Object?>{
-      'sampleCount': 4,
-      'jankCount': 1,
-      'severeJankCount': 1,
-      'jankRatio': 0.25,
-      'severeJankRatio': 0.25,
-      'minLoadNs': 1,
-      'p50LoadNs': 2,
-      'p95LoadNs': 3,
-      'maxLoadNs': 4,
-    });
-    payload['futureField'] = <String, Object?>{'enabled': true};
-    final report = VesperPerformanceDiagnosticsReport.fromMap(
-      payload,
-    );
+  test('obsolete plugin transports round-trip through the unknown variant', () {
+    final input = <Object?, Object?>{
+      'pluginId': 'dev.vesper.example-plugin',
+      'transport': 'wasm',
+    };
+    final reference = VesperPluginReference.fromMap(input);
 
-    expect(report.probe.rawValue, 'futureProbe');
-    expect(report.diagnosis.kind.rawValue, 'futureDiagnosis');
-    expect(report.diagnosis.confidence.rawValue, 'veryCertain');
-    expect(report.diagnostics.single.severity.rawValue, 'notice');
-    expect(
-      report.cohorts['overlayInactive']?.severeJankRatio,
-      0.25,
-    );
-    expect(
-        report.extensions['futureField'], <String, Object?>{'enabled': true});
-    expect(report.toMap()['probe'], 'futureProbe');
-  });
-
-  test('performance diagnostics reject incomplete schema v1 reports', () {
-    final payload = _validPerformanceReportMap()..remove('playback');
-
-    expect(
-      () => VesperPerformanceDiagnosticsReport.fromMap(payload),
-      throwsFormatException,
-    );
-  });
-
-  test('performance diagnostics reject lossy and non-finite report values', () {
-    final lossyDuration = _validPerformanceReportMap()..['durationNs'] = 1.5;
-    final nonFiniteRatio = _validPerformanceReportMap();
-    ((nonFiniteRatio['cohorts'] as Map<Object?, Object?>)['overlayActive']
-        as Map<Object?, Object?>)['jankRatio'] = double.nan;
-
-    expect(
-      () => VesperPerformanceDiagnosticsReport.fromMap(lossyDuration),
-      throwsFormatException,
-    );
-    expect(
-      () => VesperPerformanceDiagnosticsReport.fromMap(nonFiniteRatio),
-      throwsFormatException,
-    );
-  });
-
-  test('performance diagnostics reject inconsistent cohorts and diagnostics',
-      () {
-    final invalidCohort = _validPerformanceReportMap();
-    ((invalidCohort['cohorts'] as Map<Object?, Object?>)['overlayInactive']
-        as Map<Object?, Object?>)
-      ..['sampleCount'] = 1
-      ..['jankCount'] = 2;
-    final lossyAttributes = _validPerformanceReportMap();
-    (((lossyAttributes['diagnostics'] as List<Object?>).single
-            as Map<Object?, Object?>)['attributes']
-        as Map<Object?, Object?>)['numericValue'] = 42;
-
-    expect(
-      () => VesperPerformanceDiagnosticsReport.fromMap(invalidCohort),
-      throwsFormatException,
-    );
-    expect(
-      () => VesperPerformanceDiagnosticsReport.fromMap(lossyAttributes),
-      throwsFormatException,
-    );
-  });
-
-  test('performance diagnostics configuration rejects out-of-range wire values',
-      () {
-    expect(
-      () => VesperPerformanceDiagnosticsConfiguration.fromMap(
-        <Object?, Object?>{'maxRawEvents': 2049},
-      ),
-      throwsFormatException,
-    );
-  });
-
-  test('performance diagnostics configuration rejects lossy integer inputs',
-      () {
-    for (final value in <Object>[1.5, double.infinity]) {
-      expect(
-        () => VesperPerformanceDiagnosticsConfiguration.fromMap(
-          <Object?, Object?>{'maxRawEvents': value},
-        ),
-        throwsFormatException,
-      );
-    }
+    expect(reference.transport, VesperPluginTransport.unknown);
+    expect(reference.transportRawValue, 'wasm');
+    expect(reference.toMap(), input);
   });
 
   test('plugin references preserve unknown transport and reject lossy identity',
@@ -152,25 +54,7 @@ void main() {
     }
   });
 
-  test('pipeline EventHook configuration round-trips plugin references', () {
-    final configuration = VesperPipelineEventHookConfiguration(
-      pluginReferences: <VesperPluginReference>[
-        VesperPluginReference(
-          pluginId: 'dev.vesper.pipeline-hook',
-          capabilityInstanceId: 'dev.vesper.pipeline-hook.default',
-          transport: VesperPluginTransport.native,
-        ),
-      ],
-    );
 
-    final decoded = VesperPipelineEventHookConfiguration.fromMap(
-      Map<Object?, Object?>.from(configuration.toMap()),
-    );
-
-    expect(decoded.pluginReferences, configuration.pluginReferences);
-    expect(decoded.hasOverrides, isTrue);
-    expect(decoded.toMap().containsKey('pluginLibraryPaths'), isFalse);
-  });
 
   test('bundled remux reference has the canonical native identity', () {
     expect(VesperBundledPluginReferences.remuxFfmpeg.toMap(), <String, Object?>{

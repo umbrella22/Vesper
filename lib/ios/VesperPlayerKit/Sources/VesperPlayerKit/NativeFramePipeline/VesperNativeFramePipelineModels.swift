@@ -15,14 +15,15 @@ struct VesperNativeFrameAudioBridgeState: Equatable {
     static func resolved(
         hasAudioTrack: Bool,
         bridgePrepared: Bool,
-        unavailableReason: String? = nil
+        unavailableReason: String? = nil,
+        usesAudioProcessor: Bool = false
     ) -> VesperNativeFrameAudioBridgeState {
         if bridgePrepared {
             return VesperNativeFrameAudioBridgeState(
                 hasAudioTrack: true,
                 decoderKind: "swiftNativeAudioBridge",
                 outputKind: "swiftNativeAudioBridge",
-                pipelineKind: "swiftNativeAudioBridgeV1",
+                pipelineKind: usesAudioProcessor ? "swiftNativeAudioBridge" : "swiftNativeAudioBridgeV1",
                 rateControlKind: "swiftNativeAudioBridgeTimePitch",
                 clockSource: "swiftNativeAudioBridge",
                 issue: nil

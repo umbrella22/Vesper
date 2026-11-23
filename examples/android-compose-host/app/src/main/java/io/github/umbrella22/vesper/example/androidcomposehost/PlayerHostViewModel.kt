@@ -52,7 +52,7 @@ internal class PlayerHostViewModel(
     val decoderMediaCodecPluginReferences: List<VesperPluginReference> =
         listOf(VesperBundledPluginReferences.decoderMediaCodec)
     val frameProcessorPluginReferences: List<VesperPluginReference> =
-        listOf(VesperBundledPluginReferences.frameProcessorDiagnostic)
+        emptyList()
 
     private val _controller =
         MutableStateFlow(
@@ -112,8 +112,7 @@ internal class PlayerHostViewModel(
                     restorePositionMs
                         ?.takeIf { position -> position > 0L }
                         ?.let { position ->
-                            val currentPositionMs = initialized.uiState.value.timeline.positionMs
-                            runCatching { initialized.seekBy(position - currentPositionMs) }
+                            runCatching { initialized.seekTo(position) }
                         }
                     if (restorePlaybackRate != 1.0f) {
                         runCatching { initialized.setPlaybackRate(restorePlaybackRate) }

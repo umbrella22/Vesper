@@ -184,9 +184,10 @@ fn android_factory_can_initialize_with_bridge() {
 
 #[test]
 fn android_native_frame_pipeline_open_requires_explicit_native_frame_mode() {
-    let error = AndroidNativeFramePipelineSession::open(test_native_frame_open_config(
-        NativeFramePipelineMode::DiagnosticsOnly,
-    ))
+    let error = AndroidNativeFramePipelineSession::open(
+        test_native_frame_open_config(NativeFramePipelineMode::DiagnosticsOnly),
+        |_, _, _| panic!("invalid mode must reject before decoder selection"),
+    )
     .expect_err("diagnostics-only mode must not open the native-frame session");
 
     assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
@@ -205,8 +206,10 @@ fn android_native_frame_pipeline_rejects_raw_paths_without_development_policy() 
     config.native_frame_pipeline.native_plugin_loading_policy =
         player_runtime::NativePluginLoadingPolicy::DenyRawPaths;
 
-    let error = AndroidNativeFramePipelineSession::open(config)
-        .expect_err("raw paths must be rejected before any plugin opens");
+    let error = AndroidNativeFramePipelineSession::open(config, |_, _, _| {
+        panic!("raw paths must reject before decoder selection")
+    })
+    .expect_err("raw paths must be rejected before any plugin opens");
 
     assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
     assert!(
@@ -220,31 +223,30 @@ fn android_native_frame_pipeline_rejects_raw_paths_without_development_policy() 
 
 #[test]
 fn android_native_frame_pipeline_selects_component_for_normalized_video_codec() {
-    let mut config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
-    config.avc_decoder_implementation_name = Some(" c2.test.avc.decoder ".to_owned());
-
-    assert_eq!(
-        required_android_decoder_implementation_name(&config, "video/avc1.640028")
-            .expect("AVC component should be selected"),
-        " c2.test.avc.decoder "
-    );
-    assert_eq!(
-        required_android_decoder_implementation_name(&config, "hev1.1.6.L93.B0")
-            .expect("HEVC component should be selected"),
-        "c2.test.hevc.decoder"
-    );
+    for (codec, mime) in [
+        ("video/avc1.640028", "video/avc"),
+        ("hev1.1.6.L93.B0", "video/hevc"),
+    ] {
+        let mut track = test_video_track();
+        track.codec = codec.to_owned();
+        let name =
+            required_android_decoder_implementation_name(&track, |requested, width, height| {
+                assert_eq!((requested, width, height), (mime, 1920, 1080));
+                Ok(Some("c2.test.decoder".to_owned()))
+            })
+            .expect("hardware component should be selected for this stream size");
+        assert_eq!(name, "c2.test.decoder");
+    }
 }
 
 #[test]
 fn android_native_frame_pipeline_rejects_missing_hardware_component_before_decoder_open() {
-    let mut config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
-    config.hevc_decoder_implementation_name = None;
-
-    let error = required_android_decoder_implementation_name(&config, "hvc1")
-        .expect_err("missing HEVC component must reject the native-frame route");
+    let error =
+        required_android_decoder_implementation_name(&test_video_track(), |_, _, _| Ok(None))
+            .expect_err("missing hardware component must reject the native-frame route");
 
     assert_eq!(error.code(), PlayerErrorCode::Unsupported);
-    assert!(error.message().contains("host-selected hardware decoder"));
+    assert!(error.message().contains("video/avc at 1920x1080"));
 }
 
 #[test]
@@ -260,6 +262,7 @@ fn android_native_frame_pipeline_open_reports_missing_decoder_plugin_after_packe
             1,
             128,
         )])),
+        |_, _, _| Ok(Some("c2.test.avc.decoder".to_owned())),
     )
     .expect_err("missing decoder plugin should fail real decoder sink open");
 
@@ -335,6 +338,7 @@ fn android_native_frame_pipeline_rejects_hdr_programmable_processing() {
         config,
         source,
         Some(test_packet_source_with_session(packet_session)),
+        |_, _, _| panic!("HDR must reject before decoder selection"),
     )
     .expect_err("HDR native-frame processing should be rejected before decoder selection");
 
@@ -2901,8 +2905,6 @@ fn test_native_frame_open_config(
                 player_runtime::NativePluginLoadingPolicy::DevelopmentRawPaths,
             max_in_flight_frames: Some(2),
         },
-        avc_decoder_implementation_name: Some("c2.test.avc.decoder".to_owned()),
-        hevc_decoder_implementation_name: Some("c2.test.hevc.decoder".to_owned()),
         presenter_profile: AndroidNativeFramePresenterProfile::SurfaceView,
     }
 }
@@ -3090,6 +3092,7 @@ fn test_decoder_native_frame(handle: usize, pts_us: i64) -> DecoderNativeFrame {
             coded_height: Some(1_080),
             visible_rect: None,
             handle_kind: DecoderNativeHandleKind::MediaCodecSurfaceTexture,
+            d3d11_subresource_index: None,
             pipeline_profile: Some(NativeFramePipelineProfile::MediaCodecSurfaceTexture),
             color_space: None,
             hdr_metadata: None,

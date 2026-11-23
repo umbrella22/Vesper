@@ -388,6 +388,7 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                     )
                 }
             }
+            is NativeBridgeEvent.PlaybackObservation -> _playbackEvents.tryEmit(event.event)
             is NativeBridgeEvent.SeekCompleted -> {
                 recordBenchmark(
                     "seek_completed",
@@ -398,6 +399,7 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                 }
             }
             is NativeBridgeEvent.RetryScheduled -> {
+                _playbackEvents.tryEmit(VesperPlaybackEvent.RetryScheduled(event.attempt, event.delayMs))
                 recordBenchmark(
                     "retry_scheduled",
                     mapOf(

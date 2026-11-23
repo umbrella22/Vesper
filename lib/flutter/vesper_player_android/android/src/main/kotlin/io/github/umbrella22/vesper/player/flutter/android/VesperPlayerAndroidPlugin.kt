@@ -68,7 +68,6 @@ import io.github.umbrella22.vesper.player.android.VesperPictureInPictureError
 import io.github.umbrella22.vesper.player.android.VesperPictureInPictureErrorCode
 import io.github.umbrella22.vesper.player.android.VesperMediaTrack
 import io.github.umbrella22.vesper.player.android.VesperMediaTrackKind
-import io.github.umbrella22.vesper.player.android.VesperPipelineEventHookReportBatch
 import io.github.umbrella22.vesper.player.android.VesperPlaybackCapabilityConfidence
 import io.github.umbrella22.vesper.player.android.VesperPlaybackCapabilityHdrKind
 import io.github.umbrella22.vesper.player.android.VesperPlaybackCapabilityProbeResult
@@ -326,68 +325,6 @@ class VesperPlayerAndroidPlugin :
                 session.controller.refresh()
                 emitSnapshot(session)
                 null
-            }
-            "drainPipelineEventHookReports" -> handleSessionCommand(call, result) { session ->
-                session.controller.drainPipelineEventHookReports().toPipelineEventHookReportMap()
-            }
-            "startPerformanceDiagnostics" -> handleSessionCommandAsync(call, result) { session ->
-                val arguments = call.argumentMap()
-                val configuration =
-                    (arguments["configuration"] as? Map<*, *>)?.stringMap()
-                        ?.toPerformanceDiagnosticsConfiguration()
-                        ?: io.github.umbrella22.vesper.player.android.VesperPerformanceDiagnosticsConfiguration()
-                val probe = VesperPerformanceProbe(
-                    arguments["probe"] as? String ?: "flutterFrameTiming",
-                )
-                val diagnostics = session.controller.startPerformanceDiagnostics(
-                    probe = probe,
-                    configuration = configuration,
-                )
-                session.performanceDiagnosticsSession = diagnostics
-                diagnostics.runId
-            }
-            "updatePerformanceOverlayState" -> handleSessionCommandAsync(call, result) { session ->
-                val arguments = call.argumentMap()
-                val diagnostics = session.requirePerformanceDiagnostics(arguments)
-                val state = requireNestedMap(arguments, "state").toPerformanceOverlayState()
-                diagnostics.updateOverlayState(state)
-                null
-            }
-            "recordPerformanceMarker" -> handleSessionCommandAsync(call, result) { session ->
-                val arguments = call.argumentMap()
-                val diagnostics = session.requirePerformanceDiagnostics(arguments)
-                val name = arguments["name"] as? String
-                    ?: throw IllegalArgumentException("Missing performance marker name.")
-                diagnostics.recordMarker(
-                    name,
-                    value = arguments.optionalPerformanceMarkerValue(),
-                    sequenceIndex = arguments.optionalPerformanceSequenceIndex(),
-                    expectedOverlayActive =
-                        arguments.optionalPerformanceExpectedOverlayActive(),
-                )
-                null
-            }
-            "submitPerformanceFrameSamples" -> handleSessionCommandAsync(call, result) { session ->
-                val arguments = call.argumentMap()
-                val diagnostics = session.requirePerformanceDiagnostics(arguments)
-                val rawSamples = arguments["samples"] as? List<*>
-                    ?: throw IllegalArgumentException("Missing performance frame samples.")
-                require(rawSamples.size <= 120) { "Performance frame batches are limited to 120 samples." }
-                diagnostics.submitFrameSamples(
-                    rawSamples.map { sample ->
-                        require(sample is Map<*, *>) { "Performance frame sample must be a map." }
-                        sample.stringMap().toPerformanceFrameSample()
-                    },
-                )
-                null
-            }
-            "performanceDiagnosticsSnapshot" -> handleSessionCommandAsync(call, result) { session ->
-                val diagnostics = session.requirePerformanceDiagnostics(call.argumentMap())
-                diagnostics.snapshot().toMap()
-            }
-            "stopPerformanceDiagnostics" -> handleSessionCommandAsync(call, result) { session ->
-                val diagnostics = session.requirePerformanceDiagnostics(call.argumentMap())
-                diagnostics.stop().toMap()
             }
             "sampleTimeline" -> handleTimelineSample(call, result)
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
@@ -987,8 +924,6 @@ class VesperPlayerAndroidPlugin :
             val nativeFramePipelineConfiguration =
                 arguments.optionalInputMap("nativeFramePipeline")
                     .toNativeFramePipelineConfiguration()
-            val pipelineEventHookConfiguration =
-                arguments.toPipelineEventHookConfiguration()
             val benchmarkConfiguration =
                 (arguments["benchmarkConfiguration"] as? Map<*, *>)
                     ?.stringMap()
@@ -1014,7 +949,6 @@ class VesperPlayerAndroidPlugin :
                     sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                     frameProcessorConfiguration = frameProcessorConfiguration,
                     nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
-                    pipelineEventHookConfiguration = pipelineEventHookConfiguration,
                 ),
                 benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )
@@ -1917,16 +1851,9 @@ class VesperPlayerAndroidPlugin :
                     } else {
                         session.controller.drainRuntimeWarnings()
                     }
-                val hookReports =
-                    if (eventSink == null) {
-                        VesperPipelineEventHookReportBatch()
-                    } else {
-                        session.controller.drainPipelineEventHookReports()
-                    }
-                Triple(buildSnapshotMap(session), drained, hookReports)
-            }.collect { (snapshot, drained, hookReports) ->
+                buildSnapshotMap(session) to drained
+            }.collect { (snapshot, drained) ->
                 emitRuntimeWarnings(session, drained)
-                emitPipelineEventHookReports(session, hookReports)
                 emitHostTerminalErrorIfNeeded(session, snapshot)
                 emitSnapshot(session, snapshot)
             }
@@ -2088,27 +2015,6 @@ class VesperPlayerAndroidPlugin :
                 ),
             )
         }
-    }
-
-    private fun emitPipelineEventHookReports(
-        session: PlayerSession,
-        batch: VesperPipelineEventHookReportBatch,
-    ) {
-        if (
-            batch.reports.isEmpty() &&
-            batch.droppedEvents == 0L &&
-            batch.droppedReports == 0L &&
-            batch.dispatcherError == null
-        ) {
-            return
-        }
-        emitEvent(
-            mapOf(
-                "playerId" to session.id,
-                "type" to "pipelineEventHookReports",
-                "reports" to batch.toPipelineEventHookReportMap(),
-            ),
-        )
     }
 
     private fun emitDownloadSnapshot(session: DownloadSession) {
@@ -2310,10 +2216,6 @@ class VesperPlayerAndroidPlugin :
         session.warningDrainJob?.cancel()
         surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()
-        emitPipelineEventHookReports(
-            session,
-            session.controller.drainPipelineEventHookReports(),
-        )
         sessions.remove(session.id)
         emitEvent(
             mapOf(

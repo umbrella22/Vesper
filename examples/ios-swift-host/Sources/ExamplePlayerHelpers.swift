@@ -622,14 +622,11 @@ func bundledDecoderPluginArtifactPaths() -> [String] {
 }
 
 func bundledFrameProcessorPluginReferences() -> [VesperPluginReference] {
-    [VesperBundledPluginReferences.frameProcessorDiagnostic]
+    []
 }
 
 func bundledFrameProcessorPluginArtifactPaths() -> [String] {
-    bundledPluginLibraryPaths(
-        frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
-        binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
-    )
+    []
 }
 
 private func bundledPluginLibraryPaths(

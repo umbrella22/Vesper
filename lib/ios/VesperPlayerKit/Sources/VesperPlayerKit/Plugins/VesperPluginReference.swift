@@ -155,15 +155,22 @@ func encodeVesperResolvedPluginArtifactsJSON(
     _ artifacts: VesperResolvedPluginArtifacts,
     registryHandle: UInt64
 ) throws -> String {
-    guard artifacts.artifacts.count <= 256 else {
-        throw VesperBundledPluginResolutionError.tooManyReferences(artifacts.artifacts.count)
+    try encodeVesperPluginBindingsJSON(artifacts.artifacts.map(\.reference), registryHandle: registryHandle)
+}
+
+func encodeVesperPluginBindingsJSON(
+    _ references: [VesperPluginReference],
+    registryHandle: UInt64
+) throws -> String {
+    guard references.count <= 256 else {
+        throw VesperBundledPluginResolutionError.tooManyReferences(references.count)
     }
-    guard artifacts.artifacts.isEmpty || registryHandle != 0 else {
+    guard references.isEmpty || registryHandle != 0 else {
         throw VesperEmbeddedPluginRegistryError.bridge("Mobile plugin artifacts require a live registry handle.")
     }
-    let values = artifacts.artifacts.map { artifact in
+    let values = references.map { reference in
         [
-            "reference": vesperPluginReferenceJSONObject(artifact.reference),
+            "reference": vesperPluginReferenceJSONObject(reference),
             "registryHandle": registryHandle,
         ] as [String: Any]
     }

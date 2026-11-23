@@ -3,9 +3,6 @@ use std::path::{Path, PathBuf};
 
 mod native_dynamic_tests;
 mod participation_projection_tests;
-mod resolver_tests;
-#[cfg(feature = "wasm")]
-mod wasm_registry_tests;
 
 fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {
     let workspace_root = workspace_root()?;

@@ -24,16 +24,18 @@ const CORE_RELEASE_ASSETS: [&str; 3] = [
     "VesperPlayerKit-ios-simulator-arm64.framework.zip",
     "VesperPlayerKit.xcframework.zip",
 ];
-const OPTIONAL_RELEASE_FRAMEWORKS: [&str; 8] = [
+pub(crate) const OPTIONAL_RELEASE_FRAMEWORKS: [&str; 6] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
+pub(crate) const RETIRED_FRAME_PROCESSOR_FRAMEWORK: &str =
+    "VesperPlayerFrameProcessorDiagnosticPlugin";
+const RETIRED_FRAME_PROCESSOR_ASSET: &str =
+    "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip";
 const OPTIONAL_COMPLIANCE_ASSET: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip";
 const LEGACY_OPTIONAL_RUNTIME_ASSET: &str = "VesperPlayerFfmpegRuntime.xcframework.zip";
 const OPTIONAL_AGGREGATE_INPUT_DIRECTORY: &str = "ios-optional-release-inputs-v1";
@@ -718,7 +720,10 @@ fn stage_optional_release_bundle_with_profile(
     let plugin_guard = crate::ios_plugin::acquire_build_guard(root)?;
     let aggregate_inputs = persistent_optional_aggregate_inputs(root)?;
     let mut runtime_owner_selected = false;
-    for plugin in &crate::ios_plugin::IOS_PLUGIN_SPECS {
+    for plugin in crate::ios_plugin::IOS_PLUGIN_SPECS
+        .iter()
+        .filter(|plugin| OPTIONAL_RELEASE_FRAMEWORKS.contains(&plugin.framework_name))
+    {
         let mut arguments = vec![aggregate_inputs.as_os_str().to_owned()];
         if plugin.uses_ffmpeg {
             arguments.extend([OsString::from("--profile"), OsString::from(profile)]);
@@ -1611,7 +1616,8 @@ fn validate_existing_package_target(target: &Path) -> Result<(), IosError> {
     validate_tree(target, "existing iOS package artifacts")?;
 
     let allowed = OPTIONAL_RELEASE_FRAMEWORKS
-        .iter()
+        .into_iter()
+        .chain([RETIRED_FRAME_PROCESSOR_FRAMEWORK])
         .map(|framework| OsString::from(format!("{framework}.xcframework")))
         .collect::<BTreeSet<_>>();
     let entries = fs::read_dir(target).map_err(|error| {
@@ -1631,7 +1637,7 @@ fn validate_existing_package_target(target: &Path) -> Result<(), IosError> {
         count = count.checked_add(1).ok_or_else(|| {
             IosError::storage("existing iOS package artifacts entry count overflowed")
         })?;
-        if count > OPTIONAL_RELEASE_FRAMEWORKS.len() {
+        if count > allowed.len() {
             return Err(IosError::storage(format!(
                 "existing iOS package artifacts '{}' contain unmanaged entries",
                 target.display()
@@ -1690,7 +1696,9 @@ fn optional_release_asset_name(name: &OsStr) -> bool {
         .any(|asset| asset == name)
         || matches!(
             name,
-            OPTIONAL_COMPLIANCE_ASSET | LEGACY_OPTIONAL_RUNTIME_ASSET
+            OPTIONAL_COMPLIANCE_ASSET
+                | LEGACY_OPTIONAL_RUNTIME_ASSET
+                | RETIRED_FRAME_PROCESSOR_ASSET
         )
         || optional_source_asset_name(OsStr::new(name))
 }

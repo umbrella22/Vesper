@@ -33,13 +33,6 @@ impl<'a> FrameProcessorInputFrame<'a> {
         }
     }
 
-    pub(crate) fn from_abi(metadata: &'a NativeFrameMetadata, native_handle: usize) -> Self {
-        Self {
-            metadata,
-            native_handle,
-        }
-    }
-
     /// Returns metadata borrowed from the host-owned input frame.
     pub fn metadata(&self) -> &'a NativeFrameMetadata {
         self.metadata

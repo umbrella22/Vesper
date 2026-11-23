@@ -1,6 +1,6 @@
-//! Compile-time assets required by the standalone `vesper` binary.
+//! Compile-time assets for the standalone `vesper` binary.
 
-pub(crate) const NATIVE_CARGO_TEMPLATE: &str = r#"[package]
+pub(crate) const RUST_CARGO_TEMPLATE: &str = r###"[package]
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
@@ -8,222 +8,234 @@ rust-version = "{{RUST_VERSION}}"
 license = {{LICENSE}}
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 player-plugin = { package = "vesper-player-plugin", version = "={{VESPER_SDK_VERSION}}" }
 
 [workspace]
-"#;
+"###;
 
-pub(crate) const NATIVE_SOURCE_TEMPLATE: &str = r#"#![deny(unsafe_code)]
+pub(crate) const RUST_SOURCE_TEMPLATE: &str = r###"#![deny(unsafe_code)]
 
-use player_plugin::{Plugin, PluginBuildError};
+use player_plugin::author::{
+    AudioBlock, AudioProcessor, AudioProcessorCapabilities, AudioProcessorFactory,
+    OpenAudioProcessor, Plugin, PluginError, PluginResult, VesperAudioFormat,
+};
 
-{{IMPLEMENTATIONS}}
+const MODES: AudioProcessorCapabilities = AudioProcessorCapabilities {
+    fixed_block: true,
+    buffered: false,
+};
+const GAIN: f32 = 0.5;
 
-#[player_plugin::export]
-fn plugin() -> Result<Plugin, PluginBuildError> {
-    let builder = Plugin::builder({{PLUGIN_ID}}, {{PLUGIN_NAME}})?;
-{{BUILDER_STEPS}}
-    builder.build()
+struct GainFactory;
+struct Gain;
+
+impl AudioProcessorFactory for GainFactory {
+    fn capabilities(&self) -> AudioProcessorCapabilities {
+        MODES
+    }
+
+    fn capabilities_json(&self) -> &str {
+        r#"{"fixedBlock":true}"#
+    }
+
+    fn open(&self, input: VesperAudioFormat, _params: &[u8]) -> PluginResult<OpenAudioProcessor> {
+        Ok(OpenAudioProcessor {
+            output_format: input,
+            processor: Box::new(Gain),
+        })
+    }
 }
-"#;
 
-pub(crate) const NATIVE_README_TEMPLATE: &str = r#"# {{PLUGIN_NAME}}
+impl AudioProcessor for Gain {
+    fn capabilities(&self) -> AudioProcessorCapabilities {
+        MODES
+    }
 
-This is a Native Rust plugin for Vesper Player SDK.
+    fn process_block(&mut self, block: AudioBlock<'_>) -> PluginResult<()> {
+        match block {
+            AudioBlock::InPlace { mut audio, .. } => {
+                for sample in audio.samples() {
+                    *sample *= GAIN;
+                }
+            }
+            AudioBlock::Split { input, mut output } => {
+                for (target, &sample) in output.samples().iter_mut().zip(input.samples()) {
+                    *target = sample * GAIN;
+                }
+            }
+        }
+        Ok(())
+    }
 
-Build and inspect it with:
+    fn set_playback_policy(&mut self, _rate: f32, _pitch: u32, _epoch: u64) -> PluginResult<()> {
+        Ok(())
+    }
+
+    fn set_param(&mut self, _key: &[u8], _value: &[u8]) -> PluginResult<()> {
+        Err(PluginError::Contract("this gain processor has no parameters"))
+    }
+
+    fn latency_frames(&self) -> u32 {
+        0
+    }
+
+    fn flush(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+}
+
+#[player_plugin::author::export]
+pub fn gain_plugin() -> Plugin {
+    Plugin::new({{PLUGIN_ID}}, {{PLUGIN_NAME}}).with_audio_processor(GainFactory)
+}
+"###;
+
+pub(crate) const RUST_README: &str = r###"# Rust native gain plugin
+
+The factory exposes one fixed-block `AudioProcessor` through both the static Rust author API and the `vesper_native_plugin_entry` symbol. Each call halves the input samples and leaves the negotiated sample rate, channel count, and frame count unchanged.
+
+Copy `Cargo.toml.template` to `Cargo.toml` and `src/lib.rs.template` to `src/lib.rs`. Replace `{{VESPER_SDK_VERSION}}` with an SDK version that exports native plugin ABI. For a source-checkout build before publication, specify the local `crates/plugin/player-plugin` path for that dependency. Run `cargo build --release` to produce the native library. Linked hosts can call `gain_plugin()` directly.
+"###;
+
+pub(crate) const CPP_CMAKE: &str = r###"cmake_minimum_required(VERSION 3.16)
+project(vesper_gain_cpp LANGUAGES CXX)
+
+set(VESPER_PLUGIN_HEADERS "" CACHE PATH "Directory containing vesper_plugin.h")
+if(NOT EXISTS "${VESPER_PLUGIN_HEADERS}/vesper_plugin.h")
+    message(FATAL_ERROR "Set VESPER_PLUGIN_HEADERS to the directory containing the native plugin ABI header")
+endif()
+
+add_library(vesper_gain_cpp SHARED gain.cpp)
+target_include_directories(vesper_gain_cpp PRIVATE "${VESPER_PLUGIN_HEADERS}")
+target_compile_definitions(vesper_gain_cpp PRIVATE VESPER_PLUGIN_BUILD)
+target_compile_features(vesper_gain_cpp PRIVATE cxx_std_17)
+set_target_properties(vesper_gain_cpp PROPERTIES CXX_VISIBILITY_PRESET hidden CXX_EXTENSIONS OFF)
+"###;
+
+pub(crate) const CPP_SOURCE: &str = r###"#include "vesper_plugin.h"
+
+#include <cstddef>
+#include <cstring>
+#include <new>
+
+namespace {
+
+struct Session {
+    VesperAudioFormat format;
+};
+
+template <std::size_t N>
+VesperBytes bytes(const char (&text)[N]) noexcept {
+    return {reinterpret_cast<const uint8_t *>(text), N - 1};
+}
+
+extern "C" VesperStatus capabilities(void *, VesperBytes *out) noexcept {
+    if (!out) return VESPER_ERR_INVALID_ARG;
+    *out = bytes(R"({"fixedBlock":true})");
+    return VESPER_OK;
+}
+
+extern "C" VesperStatus open(void *, const VesperAudioFormat *input, VesperBytes,
+                              VesperAudioFormat *output, uint32_t *latency,
+                              VesperSession **session) noexcept {
+    if (!session) return VESPER_ERR_INVALID_ARG;
+    *session = nullptr;
+    if (!input || input->struct_size < sizeof(VesperAudioFormat) || !output ||
+        output->struct_size < sizeof(VesperAudioFormat) || !latency || input->format_id == 0 ||
+        input->sample_format != VESPER_SAMPLE_F32_INTERLEAVED || !input->channels ||
+        !input->max_block_frames || !input->sample_rate) {
+        return VESPER_ERR_INVALID_ARG;
+    }
+    auto *state = new (std::nothrow) Session{*input};
+    if (!state) return VESPER_ERR_EXHAUSTED;
+    *output = state->format;
+    output->struct_size = sizeof(VesperAudioFormat);
+    *latency = 0;
+    *session = state;
+    return VESPER_OK;
+}
+
+extern "C" VesperStatus process(VesperSession *session, const VesperAudioBuffer *input,
+                                 VesperAudioBuffer *output) noexcept {
+    const auto *state = static_cast<const Session *>(session);
+    if (!state || !input || input->struct_size < sizeof(VesperAudioBuffer) ||
+        !output || output->struct_size < sizeof(VesperAudioBuffer) ||
+        input->format_id != state->format.format_id || output->format_id != state->format.format_id ||
+        input->frame_count > state->format.max_block_frames ||
+        input->frame_count > input->frame_capacity || input->frame_count > output->frame_capacity) {
+        return VESPER_ERR_INVALID_ARG;
+    }
+    const auto count = static_cast<std::size_t>(input->frame_count) * state->format.channels;
+    const auto *source = static_cast<const float *>(input->planes[0]);
+    auto *target = static_cast<float *>(output->planes[0]);
+    if (count && (!source || !target || (input != output && source == target))) {
+        return VESPER_ERR_INVALID_ARG;
+    }
+    for (std::size_t sample = 0; sample < count; ++sample) {
+        target[sample] = source[sample] * 0.5f;
+    }
+    output->frame_count = input->frame_count;
+    output->pts_us = input->pts_us;
+    output->rate_epoch = input->rate_epoch;
+    return VESPER_OK;
+}
+
+extern "C" VesperStatus policy(VesperSession *, float, uint32_t, uint64_t) noexcept {
+    return VESPER_OK;
+}
+
+extern "C" VesperStatus flush(VesperSession *) noexcept { return VESPER_OK; }
+extern "C" uint32_t latency(VesperSession *) noexcept { return 0; }
+extern "C" void destroy(VesperSession *session) noexcept { delete static_cast<Session *>(session); }
+
+const VesperAudioProcessorVtable audio{
+    sizeof(VesperAudioProcessorVtable), capabilities, open, policy, nullptr, process,
+    nullptr, nullptr, latency, flush, destroy, nullptr,
+};
+
+extern "C" VesperStatus interface_at(void *, uint32_t index, VesperInterfaceId *out) noexcept {
+    if (index || !out) return VESPER_ERR_INVALID_ARG;
+    *out = VESPER_AUDIO_PROCESSOR_ID;
+    return VESPER_OK;
+}
+
+extern "C" VesperStatus query(void *, const VesperInterfaceId *id, const void **out) noexcept {
+    if (!out) return VESPER_ERR_INVALID_ARG;
+    *out = nullptr;
+    if (!id || std::memcmp(id->bytes, VESPER_AUDIO_PROCESSOR_ID.bytes, sizeof(id->bytes))) {
+        return VESPER_ERR_UNSUPPORTED;
+    }
+    *out = &audio;
+    return VESPER_OK;
+}
+
+const VesperPluginRoot root{
+    sizeof(VesperPluginRoot), VESPER_PLUGIN_ABI_MAJOR, VESPER_PLUGIN_ABI_MINOR,
+    nullptr, bytes("dev.vesper.example.gain-cpp"), bytes("C++ Fixed Gain"),
+    1, interface_at, query, nullptr,
+};
+
+}  // namespace
+
+extern "C" VESPER_PLUGIN_API const VesperPluginRoot *vesper_native_plugin_entry() noexcept {
+    return &root;
+}
+"###;
+
+pub(crate) const CPP_README: &str = r###"# C++17 native gain plugin
+
+The shared library exports `vesper_native_plugin_entry` and one fixed-block `AudioProcessor`. Split processing reads the input and writes the output. In-place processing uses the same writable buffer descriptor for both arguments. Both modes preserve the time and rate epoch of the input block.
 
 ```sh
-vesper plugin build vesper-plugin.toml --profile dev
-vesper plugin inspect vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport native
-vesper plugin check vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport native
+cmake -S . -B build -DVESPER_PLUGIN_HEADERS=/path/to/sdk/include
+cmake --build build --config Release
 ```
 
-The generated experimental capability implementations expose metadata-only stubs. Implement their session behavior before distributing the plugin.
-"#;
-
-pub(crate) const WASM_CARGO_TEMPLATE: &str = r#"[package]
-name = {{CRATE_NAME}}
-version = "0.1.0"
-edition = "2024"
-rust-version = "{{RUST_VERSION}}"
-license = {{LICENSE}}
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-player-plugin-wasm = { package = "vesper-player-plugin-wasm", version = "={{VESPER_SDK_VERSION}}" }
-
-[profile.release]
-panic = "abort"
-
-[workspace]
-"#;
-
-pub(crate) const WASM_SOURCE_TEMPLATE: &str = r#"#![no_std]
-#![deny(unsafe_code)]
-
-extern crate alloc;
-
-use alloc::vec::Vec;
-
-mod bindings {
-    player_plugin_wasm::generate!({
-        path: "wit",
-        world: {{WIT_WORLD}},
-        runtime_path: "player_plugin_wasm::rt",
-    });
-}
-
-struct Component;
-
-{{IMPLEMENTATIONS}}
-
-player_plugin_wasm::export_component!(bindings, Component);
-"#;
-
-pub(crate) const WASM_README_TEMPLATE: &str = r#"# {{PLUGIN_NAME}}
-
-This is a Rust WASM Component plugin for Vesper Player SDK. The component receives bounded structured events only; it has no filesystem, network, environment, process, clock, or random host imports.
-
-Build and inspect it with:
-
-```sh
-vesper plugin build vesper-plugin.toml --profile dev
-vesper plugin inspect vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport wasm
-vesper plugin check vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport wasm
-```
-"#;
-
-pub(crate) const CANONICAL_WIT: &[u8] = r#"package vesper:plugin;
-
-interface protocol {
-  enum diagnostic-severity {
-    info,
-    warning,
-    error,
-  }
-
-  record attribute {
-    key: string,
-    value: string,
-  }
-
-  record diagnostic {
-    code: string,
-    severity: diagnostic-severity,
-    message: string,
-    attributes: list<attribute>,
-  }
-
-  record measurement {
-    name: string,
-    value: f64,
-    unit: string,
-    attributes: list<attribute>,
-  }
-
-  record pipeline-event {
-    run-id: string,
-    session-id: string,
-    platform: string,
-    protocol: option<string>,
-    event-name: string,
-    timestamp-ns: u64,
-    thread: option<string>,
-    resource-identity: option<string>,
-    attributes: list<attribute>,
-    diagnostic: option<diagnostic>,
-  }
-
-  record event-hook-outcome {
-    accepted: bool,
-    measurements: list<measurement>,
-    diagnostics: list<diagnostic>,
-  }
-
-  record benchmark-event {
-    run-id: string,
-    session-id: string,
-    platform: string,
-    protocol: option<string>,
-    event-name: string,
-    timestamp-ns: u64,
-    elapsed-ns: u64,
-    thread: option<string>,
-    attributes: list<attribute>,
-  }
-
-  record benchmark-batch {
-    events: list<benchmark-event>,
-  }
-
-  record threshold-violation {
-    measurement: string,
-    actual: f64,
-    threshold: f64,
-    comparison: string,
-  }
-
-  record benchmark-report {
-    accepted-events: u64,
-    dropped-events: u64,
-    measurements: list<measurement>,
-    threshold-violations: list<threshold-violation>,
-    diagnostics: list<diagnostic>,
-  }
-
-  variant plugin-error {
-    invalid-input(string),
-    rejected(string),
-    failed(string),
-  }
-}
-
-interface host {
-  enum log-level {
-    trace,
-    debug,
-    info,
-    warn,
-    error,
-  }
-
-  log: func(level: log-level, code: string, message: string);
-}
-
-interface event-hook {
-  use protocol.{pipeline-event, event-hook-outcome, plugin-error};
-  on-event: func(event: pipeline-event) -> result<event-hook-outcome, plugin-error>;
-}
-
-interface benchmark-sink {
-  use protocol.{benchmark-batch, benchmark-report, plugin-error};
-  on-event-batch: func(batch: benchmark-batch) -> result<u64, plugin-error>;
-  flush: func() -> result<benchmark-report, plugin-error>;
-}
-
-world event-hook-plugin {
-  import host;
-  export event-hook;
-}
-
-world benchmark-sink-plugin {
-  import host;
-  export benchmark-sink;
-}
-
-world event-and-benchmark-plugin {
-  import host;
-  export event-hook;
-  export benchmark-sink;
-}
-"#
-.as_bytes();
+The build needs the native plugin ABI header and a C++17 compiler. It has no Rust crate dependencies.
+"###;
 
 pub(crate) const APACHE_2_LICENSE: &str = r#"                                 Apache License
                            Version 2.0, January 2004

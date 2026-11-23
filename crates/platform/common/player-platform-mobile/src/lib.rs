@@ -22,7 +22,7 @@ use player_model::MediaSource;
 use player_plugin::{
     DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata, PluginReference,
     PluginTransport, ProcessorProgress, SourceNormalizerNormalizeLevel,
-    SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSession,
+    SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
     SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
     SourceNormalizerResourceCachePolicy, SourceNormalizerResourceSession,
@@ -40,17 +40,16 @@ use player_runtime::{
     DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
     DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
     FrameProcessorMode, InMemoryDownloadStore, InMemoryPreloadBudgetProvider,
-    MAX_PIPELINE_EVENT_HOOKS, NativeFramePipelineMode, NativePluginLoadingPolicy,
-    PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReportBatch,
-    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerPlaybackRoute,
-    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
-    PlayerPluginSourceNormalizerCapabilitySummary, PlayerResult, PlayerRuntimeEvent,
-    PlayerRuntimeOptions, PlayerRuntimeStartup, PlaylistActiveItem, PlaylistAdvanceDecision,
-    PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent, PlaylistQueueItem,
-    PlaylistSnapshot, PlaylistViewportHint, PostDownloadProcessorRegistration, PreloadBudget,
-    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
-    PreloadTaskId, PreloadTaskSnapshot, SourceNormalizerMode,
+    NativeFramePipelineMode, NativePluginLoadingPolicy, PipelineEventDispatcher,
+    PipelineEventHookRegistration, PipelineEventHookReportBatch, PlayerError, PlayerErrorCategory,
+    PlayerErrorCode, PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
+    PlayerPluginParticipation, PlayerPluginSourceNormalizerCapabilitySummary, PlayerResult,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlaylistActiveItem,
+    PlaylistAdvanceDecision, PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent,
+    PlaylistQueueItem, PlaylistSnapshot, PlaylistViewportHint, PostDownloadProcessorRegistration,
+    PreloadBudget, PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner,
+    PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot, SourceNormalizerMode,
 };
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
@@ -564,13 +563,9 @@ pub fn mobile_download_manager_config_from_registry(
     run_post_processors_on_completion: bool,
     registry: &PluginRegistry,
     post_download_references: impl IntoIterator<Item = PluginReference>,
-    event_hook_references: impl IntoIterator<Item = PluginReference>,
 ) -> PlayerResult<DownloadManagerConfig> {
     let post_download_references = post_download_references.into_iter().collect::<Vec<_>>();
-    let event_hook_references = event_hook_references.into_iter().collect::<Vec<_>>();
     ensure_unique_plugin_references(platform_label, "post-download", &post_download_references)?;
-    ensure_unique_plugin_references(platform_label, "event-hook", &event_hook_references)?;
-    ensure_event_hook_limit(platform_label, event_hook_references.len())?;
 
     let resolved_post_processors = post_download_references
         .iter()
@@ -599,53 +594,13 @@ pub fn mobile_download_manager_config_from_registry(
         })
         .collect::<PlayerResult<Vec<_>>>()?;
 
-    let resolved_event_hooks = event_hook_references
-        .iter()
-        .map(|reference| registry.resolve_pipeline_event_hook(reference))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            PlayerError::with_category(
-                PlayerErrorCode::InvalidArgument,
-                PlayerErrorCategory::Input,
-                format!("failed to resolve {platform_label} event-hook plugin: {error}"),
-            )
-        })?;
-    let canonical_event_hook_references = resolved_event_hooks
-        .iter()
-        .map(|value| value.reference().clone())
-        .collect::<Vec<_>>();
-    ensure_unique_plugin_references(
-        platform_label,
-        "resolved event-hook",
-        &canonical_event_hook_references,
-    )?;
-    let event_hooks = resolved_event_hooks
-        .into_iter()
-        .map(|value| {
-            PipelineEventHookRegistration::new(value.reference().clone(), value.capability())
-        })
-        .collect::<PlayerResult<Vec<_>>>()?;
-
     Ok(DownloadManagerConfig {
         auto_start,
         run_post_processors_on_completion,
         post_processors,
-        event_hooks,
+        event_hooks: Vec::new(),
         pipeline_event_platform: platform_label.to_owned(),
     })
-}
-
-fn ensure_event_hook_limit(platform_label: &str, count: usize) -> PlayerResult<()> {
-    if count > MAX_PIPELINE_EVENT_HOOKS {
-        return Err(PlayerError::with_category(
-            PlayerErrorCode::InvalidArgument,
-            PlayerErrorCategory::Input,
-            format!(
-                "{platform_label} event-hook plugin references exceed the {MAX_PIPELINE_EVENT_HOOKS}-hook limit"
-            ),
-        ));
-    }
-    Ok(())
 }
 
 fn ensure_unique_plugin_references(
@@ -1395,7 +1350,7 @@ pub struct MobileSourceNormalizerPacketOpen {
     pub reference: PluginReference,
     pub plugin_name: Option<String>,
     pub plugin_path: String,
-    pub session: Box<dyn SourceNormalizerPacketSession>,
+    pub session: player_plugin_loader::native::NativePacketStream,
     pub info: SourceNormalizerPacketStreamInfo,
     pub diagnostics: Vec<PlayerPluginDiagnostic>,
 }
@@ -2233,7 +2188,7 @@ fn preflight_source_normalizer(
     record: &PluginDiagnosticRecord,
 ) -> PlayerPluginDiagnostic {
     let started = Instant::now();
-    let mut opened =
+    let opened =
         match open_source_normalizer_packet_session(source, configuration, registry, record) {
             Ok(opened) => opened,
             Err(error) => {
@@ -2252,7 +2207,7 @@ fn preflight_source_normalizer(
             }
         };
     let stream_info = opened.info.clone();
-    let close_message = match opened.session.close() {
+    let close_message = match opened.session.into_rust_session().close() {
         Ok(()) => None,
         Err(error) => Some(format!("; close failed: {error}")),
     };
@@ -2518,10 +2473,15 @@ fn open_source_normalizer_packet_session(
         session_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
         preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
     };
-    let session = factory
-        .open_packet_session(&config)
-        .map_err(|error| format!("open_packet_session failed: {error}"))?;
-    let info = session.stream_info();
+    let native = registry
+        .native_artifact(&canonical_reference)
+        .map_err(|error| error.to_string())?
+        .native_plugin()
+        .ok_or_else(|| "source normalizer has no admitted native plugin".to_owned())?;
+    let session = native
+        .open_packet_stream(&config)
+        .map_err(|error| format!("open native packet stream failed: {error}"))?;
+    let info = session.stream_info().clone();
     let diagnostic = runtime_source_normalizer_diagnostic(
         path.clone(),
         info.normalizer_name
@@ -2754,9 +2714,15 @@ fn open_source_normalizer_resource_session(
         startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT.as_millis() as u64),
         read_idle_timeout_ms: Some(SOURCE_NORMALIZER_SESSION_TIMEOUT.as_millis() as u64),
     };
-    let mut session = factory
-        .open_resource_session(&config)
-        .map_err(|error| format!("open_resource_session failed: {error}"))?;
+    let native = registry
+        .native_artifact(&canonical_reference)
+        .map_err(|error| error.to_string())?
+        .native_plugin()
+        .ok_or_else(|| "source normalizer has no admitted native plugin".to_owned())?;
+    let mut session = native
+        .open_source_resource(&config)
+        .and_then(|resource| resource.into_rust_session())
+        .map_err(|error| format!("open native source resource failed: {error}"))?;
     let mut status = wait_for_resource_session_ready(session.as_mut())?;
     let info = status
         .info
@@ -4150,27 +4116,21 @@ mod tests {
         let registry = Arc::new(
             PluginRegistry::load_native_development([&path]).expect("trusted test fixture"),
         );
-        let hook = registry.pipeline_event_hook_references().unwrap().remove(0);
-        let post_download = registry.post_download_references().unwrap().remove(0);
-        let json = serde_json::json!([
-            {"reference": hook, "registryHandle": 7},
-            {"reference": post_download, "registryHandle": 7},
-        ])
-        .to_string();
+        let reference = registry.post_download_references().unwrap().remove(0);
+        let json = serde_json::json!([{"reference": reference, "registryHandle": 7}]).to_string();
         let mut artifacts = parse_mobile_native_plugin_artifacts_json(&json, |handle| {
             assert_eq!(handle, 7);
             Ok(registry.clone())
         })
         .expect("registered mobile artifacts");
         drop(registry);
-        assert_eq!(artifacts[0].reference, hook);
-        assert_eq!(artifacts[1].reference, post_download);
+        assert_eq!(artifacts[0].reference, reference);
         assert_eq!(artifacts[0].library_path, path);
         let retained =
             registered_mobile_native_plugin_artifacts(&artifacts).expect("owned libraries");
         assert_eq!(retained.len(), 1);
         let consumer = PluginRegistry::load_native_artifacts(retained).expect("retained root");
-        assert!(consumer.resolve_pipeline_event_hook(&hook).is_ok());
+        assert!(consumer.resolve_post_download(&reference).is_ok());
         artifacts[0].library_path = PathBuf::from("/tmp/substituted.dylib");
         assert!(
             artifacts[0]

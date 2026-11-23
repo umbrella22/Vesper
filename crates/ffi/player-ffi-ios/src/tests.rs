@@ -13,19 +13,12 @@ use super::{
     player_ffi_download_session_dispose, player_ffi_download_session_export_task,
     player_ffi_ios_native_frame_pipeline_advance, player_ffi_ios_native_frame_pipeline_close,
     player_ffi_ios_native_frame_pipeline_open, player_ffi_ios_native_frame_pipeline_release_frame,
-    player_ffi_ios_native_frame_pipeline_seek, player_ffi_ios_playback_event_hook_session_close,
-    player_ffi_ios_playback_event_hook_session_drain_json,
-    player_ffi_ios_playback_event_hook_session_flush,
-    player_ffi_ios_playback_event_hook_session_submit_json, player_ffi_ios_plugin_abi_summary_json,
+    player_ffi_ios_native_frame_pipeline_seek, player_ffi_ios_plugin_abi_summary_json,
     player_ffi_preload_session_fail, player_ffi_resolve_resilience_policy,
     player_ffi_source_normalizer_resource_open,
 };
 use crate::handles::HandleRegistry;
 use player_plugin::PluginTransport;
-use player_plugin_abi::{
-    VESPER_INTERFACE_MAJOR, VESPER_INTERFACE_MINOR, VESPER_PLUGIN_ABI_MAJOR,
-    VESPER_PLUGIN_ABI_MINOR,
-};
 use player_plugin_loader::PluginRegistry;
 use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
 
@@ -88,12 +81,8 @@ fn download_config_decodes_capability_specific_plugin_references() {
         r#"[{"pluginId":"io.github.umbrella22.vesper.remux-ffmpeg","capabilityInstanceId":"io.github.umbrella22.vesper.remux-ffmpeg.default","transport":"native"}]"#,
     )
     .expect("post-download references CString");
-    let event_hooks =
-        CString::new(r#"[{"pluginId":"dev.vesper.event-hook","transport":"native"}]"#)
-            .expect("event-hook references CString");
     let config = PlayerFfiDownloadConfig {
         post_download_plugin_references_json: post_download.as_ptr(),
-        event_hook_plugin_references_json: event_hooks.as_ptr(),
         ..PlayerFfiDownloadConfig::default()
     };
 
@@ -113,18 +102,11 @@ fn download_config_decodes_capability_specific_plugin_references() {
         resolved.post_download_plugin_references[0].transport(),
         PluginTransport::Native
     );
-    assert_eq!(resolved.event_hook_plugin_references.len(), 1);
-    assert_eq!(
-        resolved.event_hook_plugin_references[0].plugin_id(),
-        "dev.vesper.event-hook"
-    );
 }
 
 #[test]
 fn download_config_rejects_missing_or_invalid_plugin_reference_json() {
-    let empty_references = CString::new("[]").expect("empty references CString");
     let missing = PlayerFfiDownloadConfig {
-        event_hook_plugin_references_json: empty_references.as_ptr(),
         ..PlayerFfiDownloadConfig::default()
     };
     let mut missing_error = super::conversions::read_download_config(&missing)
@@ -138,7 +120,6 @@ fn download_config_rejects_missing_or_invalid_plugin_reference_json() {
             .expect("invalid references CString");
     let invalid = PlayerFfiDownloadConfig {
         post_download_plugin_references_json: invalid_references.as_ptr(),
-        event_hook_plugin_references_json: empty_references.as_ptr(),
         ..PlayerFfiDownloadConfig::default()
     };
     let mut invalid_error = super::conversions::read_download_config(&invalid)
@@ -154,14 +135,12 @@ fn download_session_create_preserves_plugin_selection_error_and_zeroes_handle() 
         r#"[{"pluginId":"dev.vesper.missing-remux","capabilityInstanceId":"dev.vesper.missing-remux.post-download","transport":"native"}]"#,
     )
     .expect("post-download references CString");
-    let empty_references = CString::new("[]").expect("empty references CString");
     let plugin_registry_handle =
         super::plugin_registry::register_test_plugin_registry(PluginRegistry::default())
             .expect("empty plugin registry should register");
     let config = PlayerFfiDownloadConfig {
         plugin_registry_handle,
         post_download_plugin_references_json: post_download.as_ptr(),
-        event_hook_plugin_references_json: empty_references.as_ptr(),
         ..PlayerFfiDownloadConfig::default()
     };
     let mut out_handle = u64::MAX;
@@ -187,29 +166,6 @@ fn download_session_create_preserves_plugin_selection_error_and_zeroes_handle() 
         message.contains("plugin `dev.vesper.missing-remux` is not loaded for transport Native"),
         "{message}"
     );
-    free_ffi_error(&mut error);
-}
-
-#[test]
-fn benchmark_session_create_zeroes_handle_before_input_validation() {
-    let mut out_handle = u64::MAX;
-    let mut error = PlayerFfiError::default();
-
-    // SAFETY: the writable output slots remain live; the null references pointer is the invalid
-    // input under test and is rejected before dereference.
-    let status = unsafe {
-        super::player_ffi_benchmark_session_create_with_references_json(
-            0,
-            ptr::null(),
-            &mut out_handle,
-            &mut error,
-        )
-    };
-
-    assert_eq!(status, PlayerFfiCallStatus::Error);
-    assert_eq!(out_handle, 0);
-    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    assert!(ffi_error_message(&error).contains("references_json was null"));
     free_ffi_error(&mut error);
 }
 
@@ -790,42 +746,22 @@ fn plugin_abi_summary_reports_root_and_typed_interface_versions() {
     // SAFETY: `out_json` is the unchanged bridge-owned pointer and this is its only release.
     unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse ABI summary JSON");
+    let v1_0 = serde_json::json!({ "major": 1, "minor": 0 });
     assert_eq!(
-        value["rootAbi"]["major"].as_u64(),
-        Some(VESPER_PLUGIN_ABI_MAJOR as u64)
-    );
-    assert_eq!(
-        value["rootAbi"]["minor"].as_u64(),
-        Some(VESPER_PLUGIN_ABI_MINOR as u64)
-    );
-    for interface in [
-        "postDownloadProcessor",
-        "pipelineEventHook",
-        "benchmarkSink",
-        "nativeDecoder",
-        "frameProcessor",
-        "sourceNormalizerPacket",
-        "sourceNormalizerResource",
-    ] {
-        assert_eq!(
-            value["typedInterfaces"][interface]["major"].as_u64(),
-            Some(VESPER_INTERFACE_MAJOR as u64)
-        );
-        assert_eq!(
-            value["typedInterfaces"][interface]["minor"].as_u64(),
-            Some(VESPER_INTERFACE_MINOR as u64)
-        );
-    }
-    assert!(value.get("decoderAbiVersion").is_none());
-    assert!(value.get("frameProcessorAbiVersion").is_none());
-    assert!(value.get("sourceNormalizerAbiVersion").is_none());
-    assert_eq!(
-        value["abiSemantics"].as_str(),
-        Some("stable-root-typed-interfaces")
-    );
-    assert_eq!(
-        value["capabilityMatching"].as_str(),
-        Some("explicit-plugin-reference")
+        value,
+        serde_json::json!({
+            "rootAbi": { "major": 2, "minor": 0 },
+            "typedInterfaces": {
+                "postDownloadProcessor": v1_0,
+                "videoDecoder": v1_0,
+                "videoFilter": v1_0,
+                "audioProcessor": v1_0,
+                "sourceNormalizerPacket": v1_0,
+                "sourceNormalizerResource": v1_0,
+            },
+            "abiSemantics": "native-typed-interfaces",
+            "capabilityMatching": "explicit-plugin-reference",
+        })
     );
 }
 
@@ -1042,132 +978,6 @@ fn ios_native_frame_pipeline_seek_requires_json_output_pointer() {
     free_ffi_error(&mut error);
 }
 
-#[test]
-fn ios_playback_event_hook_invalid_handles_are_rejected() {
-    let mut error = PlayerFfiError::default();
-    let event = test_c_string(
-        r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
-    );
-    // SAFETY: the event string and writable error output remain live; the invalid handle is
-    // rejected before session state is accessed.
-    let status = unsafe {
-        player_ffi_ios_playback_event_hook_session_submit_json(
-            0xDEAD_BEEF,
-            event.as_ptr(),
-            &mut error,
-        )
-    };
-    assert_eq!(status, PlayerFfiCallStatus::Error);
-    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    assert!(ffi_error_message(&error).contains("invalid playback event-hook session handle"));
-    free_ffi_error(&mut error);
-
-    let flush_status =
-        // SAFETY: the writable error output remains live and the invalid scalar handle is rejected
-        // before session state is accessed.
-        unsafe { player_ffi_ios_playback_event_hook_session_flush(0xDEAD_BEEF, 100, &mut error) };
-    assert_eq!(flush_status, PlayerFfiCallStatus::Error);
-    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    free_ffi_error(&mut error);
-
-    let mut report_json = ptr::null_mut();
-    // SAFETY: both output slots remain writable and the invalid scalar handle is rejected before
-    // session state is accessed.
-    let drain_status = unsafe {
-        player_ffi_ios_playback_event_hook_session_drain_json(
-            0xDEAD_BEEF,
-            &mut report_json,
-            &mut error,
-        )
-    };
-    assert_eq!(drain_status, PlayerFfiCallStatus::Error);
-    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    assert!(report_json.is_null());
-    free_ffi_error(&mut error);
-
-    // SAFETY: the writable error output remains live and the invalid scalar handle is rejected
-    // before session state is accessed.
-    unsafe {
-        player_ffi_ios_playback_event_hook_session_close(0xDEAD_BEEF, &mut error);
-    }
-    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    free_ffi_error(&mut error);
-}
-
-#[test]
-fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
-    let references = test_c_string("[]");
-    let plugin_registry_handle =
-        super::plugin_registry::register_test_plugin_registry(PluginRegistry::default())
-            .expect("empty plugin registry should register");
-    let mut handle = 0;
-    let mut error = PlayerFfiError::default();
-    // SAFETY: the registry handle is live, the references CString remains readable, and both
-    // output slots remain writable for the call.
-    let created = unsafe {
-        super::player_ffi_ios_playback_event_hook_session_create(
-            plugin_registry_handle,
-            references.as_ptr(),
-            &mut handle,
-            &mut error,
-        )
-    };
-    // SAFETY: the registry handle came from the test registry and is not used after disposal.
-    unsafe { super::player_ffi_ios_plugin_registry_dispose(plugin_registry_handle) };
-    assert_eq!(created, PlayerFfiCallStatus::Ok);
-    assert_ne!(handle, 0);
-
-    let event = test_c_string(
-        r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
-    );
-    // SAFETY: the event CString and writable error output remain live, and `handle` identifies the
-    // session created above.
-    let submitted = unsafe {
-        player_ffi_ios_playback_event_hook_session_submit_json(handle, event.as_ptr(), &mut error)
-    };
-    assert_eq!(submitted, PlayerFfiCallStatus::Ok);
-    assert_eq!(
-        // SAFETY: `handle` identifies the live session and the error output remains writable.
-        unsafe { player_ffi_ios_playback_event_hook_session_flush(handle, 100, &mut error) },
-        PlayerFfiCallStatus::Ok
-    );
-
-    let mut report_json = ptr::null_mut();
-    assert_eq!(
-        // SAFETY: `handle` is live and both output slots remain writable for the call.
-        unsafe {
-            player_ffi_ios_playback_event_hook_session_drain_json(
-                handle,
-                &mut report_json,
-                &mut error,
-            )
-        },
-        PlayerFfiCallStatus::Ok
-    );
-    assert!(!report_json.is_null());
-    // SAFETY: the successful drain returned a live owned NUL-terminated string in `report_json`.
-    let report_text = unsafe { CStr::from_ptr(report_json) }
-        .to_string_lossy()
-        .into_owned();
-    assert!(report_text.contains("\"reports\":[]"));
-    // SAFETY: `report_json` is the unchanged bridge-owned pointer and this is its only release.
-    unsafe { super::player_ffi_ios_playback_event_hook_report_string_free(report_json) };
-
-    assert_eq!(
-        // SAFETY: `handle` identifies the live session and the error output remains writable.
-        unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
-        PlayerFfiCallStatus::Ok
-    );
-    assert_eq!(
-        // SAFETY: close is idempotent for the same session handle and the error output remains
-        // writable.
-        unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
-        PlayerFfiCallStatus::Ok
-    );
-    // SAFETY: the handle was created and closed above and is not used after this disposal.
-    unsafe { super::player_ffi_ios_playback_event_hook_session_dispose(handle) };
-}
-
 fn ffi_error_message(error: &PlayerFfiError) -> String {
     if error.message.is_null() {
         return String::new();
@@ -1192,44 +1002,4 @@ fn test_c_string(value: &str) -> CString {
         Ok(value) => value,
         Err(error) => panic!("test string contained an unexpected NUL byte: {error}"),
     }
-}
-
-#[test]
-fn pipeline_event_report_json_bounds_only_the_outward_utf8_diagnostic() {
-    let full_message = "界".repeat(100);
-    let original = player_plugin::PipelineEventHookError::AbiViolation(full_message.clone());
-    let report = player_runtime::PipelineEventHookReport {
-        reference: player_plugin::PluginReference::new(
-            "dev.vesper.fixture",
-            Some("dev.vesper.fixture.events".to_owned()),
-            player_plugin::PluginTransport::Native,
-        )
-        .expect("plugin reference"),
-        run_id: "run".to_owned(),
-        session_id: "session".to_owned(),
-        event_name: "fixture.event".to_owned(),
-        result: Err(original.clone()),
-    };
-    let batch = player_runtime::PipelineEventHookReportBatch {
-        reports: vec![report.clone()],
-        dropped_events: 2,
-        dropped_reports: 3,
-        dispatcher_error: None,
-    };
-    let json: serde_json::Value =
-        serde_json::from_str(&super::pipeline_event_hook_reports_json(batch)).expect("report JSON");
-    assert_eq!(
-        json,
-        serde_json::json!({
-            "reports": [{
-                "pluginId": "dev.vesper.fixture", "capabilityInstanceId": "dev.vesper.fixture.events",
-                "transport": "native", "runId": "run", "sessionId": "session",
-                "eventName": "fixture.event",
-                "result": {"status": "error", "error": {"code": "abiViolation", "message": "界".repeat(85)}},
-            }],
-            "droppedEvents": 2, "droppedReports": 3, "dispatcherError": null,
-        })
-    );
-    assert_eq!(report.result, Err(original));
-    assert_eq!(full_message.len(), 300);
 }

@@ -30,7 +30,7 @@ publisher = "dev.vesper.publisher"
 
 [compatibility]
 host_sdk = "={host_sdk}"
-abi_major = 1
+abi_major = 2
 abi_minor_min = 0
 abi_minor_max = 0
 
@@ -54,7 +54,8 @@ fn temporary_manifest(source: &str) -> PathBuf {
     path
 }
 
-fn package_manifest() -> String {
+#[cfg(unix)]
+fn native_build_manifest(source: &str) -> String {
     format!(
         r#"{}
 
@@ -62,38 +63,9 @@ fn package_manifest() -> String {
 transport = "native"
 target = "aarch64-apple-darwin"
 format = "dylib"
-source = "fixture plugin.dylib"
-path = "artifacts/aarch64-apple-darwin/fixture plugin.dylib"
-architecture = "arm64"
-minimum_os = "13.0"
-capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instance_id = "dev.vesper.fixture.post-download" }}]
-
-[[package_files]]
-source = "LICENSE"
-path = "licenses/LICENSE"
-kind = "license"
-
-[[package_files]]
-source = "NOTICE"
-path = "notices/NOTICE"
-kind = "notice"
-"#,
-        manifest("dev.vesper.fixture")
-    )
-}
-
-#[cfg(unix)]
-fn wasm_build_manifest(source: &str) -> String {
-    format!(
-        r#"{}
-
-[[artifacts]]
-transport = "wasm"
-target = "wasm32-wasip2"
-format = "wasm-component"
 source = {source:?}
-path = "artifacts/wasm32-wasip2/fixture.wasm"
-architecture = "wasm32"
+path = "artifacts/aarch64-apple-darwin/fixture.dylib"
+architecture = "arm64"
 capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instance_id = "dev.vesper.fixture.post-download" }}]
 "#,
         manifest("dev.vesper.fixture")
@@ -356,14 +328,6 @@ fn android_release_apk_entries(
             b"\x7fELF remux".as_slice(),
         ),
         (
-            "lib/arm64-v8a/libvesper_frame_processor_diagnostic.so",
-            b"\x7fELF frame processor".as_slice(),
-        ),
-        (
-            "lib/arm64-v8a/libvesper_performance_diagnostics.so",
-            b"\x7fELF performance diagnostics".as_slice(),
-        ),
-        (
             "lib/arm64-v8a/libvesper_player_relay_ffmpeg.so",
             b"\x7fELF relay".as_slice(),
         ),
@@ -379,14 +343,6 @@ fn android_release_apk_entries(
         ),
         (
             "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.source-normalizer-ffmpeg.json",
-            b"{}".as_slice(),
-        ),
-        (
-            "assets/vesper/plugins/arm64-v8a/dev.vesper.frame-processor-diagnostic.json",
-            b"{}".as_slice(),
-        ),
-        (
-            "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.performance-diagnostics.json",
             b"{}".as_slice(),
         ),
         (
@@ -659,11 +615,21 @@ fn ios_native_frame_fixture() -> IosNativeFrameFixture {
     )
     .expect("write iOS native-frame XcodeGen manifest");
     fs::write(&source, b"native-frame fixture\n").expect("write iOS native-frame smoke source");
-    fs::write(
-        ffmpeg_runtime.join("libavutil.60.dylib"),
-        b"fixture FFmpeg dylib\n",
-    )
-    .expect("write iOS native-frame FFmpeg runtime");
+    for component in ["libavutil", "libavformat", "libavcodec"] {
+        fs::write(
+            ffmpeg_runtime.join(format!("{component}.dylib")),
+            b"fixture FFmpeg dylib\n",
+        )
+        .expect("write iOS native-frame FFmpeg runtime");
+    }
+    fs::write(root.join("smoke.metallib"), b"fixture Metal library\n").expect("write smoke shader");
+    for plugin in ["source-normalizer-ffmpeg", "decoder-videotoolbox"] {
+        let relative = PathBuf::from("plugins").join(plugin);
+        fs::create_dir_all(root.join(&relative)).expect("create plugin manifest directory");
+        let manifest = relative.join("vesper-plugin.toml");
+        fs::copy(workspace_root().join(&manifest), root.join(manifest))
+            .expect("stage real plugin manifest");
+    }
 
     write_executable_script(
         &root.join("scripts/vesper"),
@@ -673,7 +639,6 @@ set -eu
 case "${2:-}" in
   source-normalizer-plugin) dylib=libvesper_source_normalizer_ffmpeg.dylib ;;
   decoder-videotoolbox-plugin) dylib=libvesper_decoder_videotoolbox.dylib ;;
-  frame-processor-plugin) dylib=libvesper_frame_processor_diagnostic.dylib ;;
   *) exit 74 ;;
 esac
 printf 'plugin command=%s root=%s profile=%s slice=%s staging=%s config=%s bash_env=%s env=%s cdpath=%s ffi_prebuilt=%s\n' \
@@ -700,14 +665,14 @@ printf 'fixture plugin\n' > "$3/iphonesimulator/$dylib"
         r#"#!/bin/sh
 set -eu
 printf 'otool %s\n' "$*" >> "$VESPER_TEST_NATIVE_FRAME_ACTIONS"
-case "${VESPER_TEST_OTOOL_RPATH:-exact}" in
-  exact) printf 'path @loader_path (offset 12)\n' ;;
-  parent) printf 'path @loader_path/.. (offset 12)\n' ;;
-  none) printf 'cmd LC_ID_DYLIB\n' ;;
-  *) exit 85 ;;
+printf '%s:\n @rpath/example.dylib (compatibility version 1.0.0)\n' "$2"
+case "$2" in
+  *SourceNormalizerFfmpegPlugin.framework/*)
+    printf ' @rpath/libavutil.60.dylib (compatibility version 60.0.0)\n' ;;
 esac
 "#,
     );
+    write_executable_script(&tools.join("codesign"), "#!/bin/sh\nexit 0\n");
     write_executable_script(
         &tools.join("xcodegen"),
         r#"#!/bin/sh
@@ -741,7 +706,7 @@ case "$action" in
     done
     [ -n "$derived_data" ] || exit 75
     products="$derived_data/Build/Products"
-    /bin/mkdir -p "$products"
+    /bin/mkdir -p "$products/Debug-iphonesimulator/VesperPlayerKitDeviceTestHost.app"
     xctestrun="$products/VesperPlayerKit_fixture.xctestrun"
     /usr/bin/plutil -create xml1 "$xctestrun"
     /usr/libexec/PlistBuddy -c 'Add :VesperPlayerKitTests dict' "$xctestrun"
@@ -764,30 +729,32 @@ case "$action" in
     done
     [ -f "$xctestrun" ] || exit 76
     config="$(/usr/bin/plutil -extract VesperPlayerKitTests.EnvironmentVariables.VESPER_IOS_NATIVE_FRAME_SMOKE_CONFIG raw -o - "$xctestrun")"
-    mode="$(/usr/bin/plutil -extract VesperPlayerKitTests.EnvironmentVariables.VESPER_FRAME_PROCESSOR_DIAGNOSTIC_MODE raw -o - "$xctestrun")"
-    [ "$mode" = noop ] || exit 77
     [ -f "$config" ] || exit 78
     source="$(/usr/bin/plutil -extract VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE raw -o - "$config")"
-    source_plugin="$(/usr/bin/plutil -extract VESPER_IOS_SOURCE_NORMALIZER_PLUGIN_PATH raw -o - "$config")"
-    decoder_plugin="$(/usr/bin/plutil -extract VESPER_IOS_DECODER_VIDEOTOOLBOX_PLUGIN_PATH raw -o - "$config")"
-    frame_plugin="$(/usr/bin/plutil -extract VESPER_IOS_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH raw -o - "$config")"
+    shader="$(/usr/bin/plutil -extract VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB raw -o - "$config")"
+    host="$(dirname "$xctestrun")/Debug-iphonesimulator/VesperPlayerKitDeviceTestHost.app"
+    source_plugin="$host/Frameworks/VesperPlayerSourceNormalizerFfmpegPlugin.framework/VesperPlayerSourceNormalizerFfmpegPlugin"
+    decoder_plugin="$host/Frameworks/VesperPlayerDecoderVideoToolboxPlugin.framework/VesperPlayerDecoderVideoToolboxPlugin"
     [ -f "$source" ] || exit 79
     [ -f "$source_plugin" ] || exit 80
     [ -f "$decoder_plugin" ] || exit 81
-    [ -f "$frame_plugin" ] || exit 82
-    printf 'config=%s\nsource=%s\nsource_plugin=%s\ndecoder_plugin=%s\nframe_plugin=%s\n' \
-      "$config" "$source" "$source_plugin" "$decoder_plugin" "$frame_plugin" \
+    [ -f "$shader" ] || exit 82
+    printf 'config=%s\nsource=%s\nsource_plugin=%s\ndecoder_plugin=%s\nshader=%s\n' \
+      "$config" "$source" "$source_plugin" "$decoder_plugin" "$shader" \
       > "$VESPER_TEST_NATIVE_FRAME_EVIDENCE"
     case "${VESPER_TEST_XCODE_MODE:-success}" in
       success)
         printf 'real iOS native-frame smoke presentedFrames=3 processedFrames=3 skippedAudioPackets=5\n'
+        printf 'real iOS normalized resource smoke advanced=true removed=true\n'
         ;;
       success-with-diagnostic)
         printf 'real iOS native-frame smoke presentedFrames=3 processedFrames=3 skippedAudioPackets=5\n'
+        printf 'real iOS normalized resource smoke advanced=true removed=true\n'
         printf 'fixture xcode diagnostic\n' >&2
         ;;
       duplicate-summary)
         printf 'real iOS native-frame smoke presentedFrames=3 processedFrames=3 skippedAudioPackets=5\n'
+        printf 'real iOS normalized resource smoke advanced=true removed=true\n'
         printf 'real iOS native-frame smoke presentedFrames=4 processedFrames=4 skippedAudioPackets=5\n'
         ;;
       compatibility)
@@ -809,6 +776,7 @@ case "$action" in
       release-failure)
         printf 'native-frame release failed\n'
         printf 'real iOS native-frame smoke presentedFrames=3 processedFrames=3 skippedAudioPackets=5\n'
+        printf 'real iOS normalized resource smoke advanced=true removed=true\n'
         ;;
       signal)
         kill -KILL "$$"
@@ -848,6 +816,10 @@ fn ios_native_frame_command(fixture: &IosNativeFrameFixture) -> Command {
     command
         .env("PATH", path)
         .env("VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE", &fixture.source)
+        .env(
+            "VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB",
+            fixture.root.join("smoke.metallib"),
+        )
         .env(
             "VESPER_IOS_NATIVE_FRAME_DESTINATION",
             "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000001",
@@ -1065,8 +1037,6 @@ fn ios_plugin_fixture() -> IosPluginFixture {
         "remux-ffmpeg",
         "source-normalizer-ffmpeg",
         "decoder-videotoolbox",
-        "frame-processor-diagnostic",
-        "performance-diagnostics",
     ] {
         let destination = root.join("plugins").join(plugin);
         fs::create_dir_all(&destination).expect("create plugin project fixture directory");
@@ -1127,7 +1097,7 @@ set -eu
 printf 'install_name_tool:%s\n' "$*" >> "$VESPER_TEST_TOOL_LOG"
 last=
 for argument in "$@"; do last=$argument; done
-if [ "$(/usr/bin/basename "$last")" = VesperPlayerFrameProcessorDiagnosticPlugin ] &&
+if [ "$(/usr/bin/basename "$last")" = VesperPlayerDecoderVideoToolboxPlugin ] &&
    [ -n "${VESPER_TEST_PLUGIN_CONSUMER_READY:-}" ]; then
   printf '%s' "$$" > "$VESPER_TEST_PLUGIN_CONSUMER_READY"
   while [ ! -e "$VESPER_TEST_PLUGIN_CONSUMER_RELEASE" ]; do
@@ -1267,8 +1237,8 @@ fn run_ios_plugin_fixture(
 ) -> std::process::Output {
     run_ios_plugin_fixture_for(
         fixture,
-        "frame-processor-plugin",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "decoder-videotoolbox-plugin",
+        "libvesper_decoder_videotoolbox.dylib",
         arguments,
         extra_environment,
     )
@@ -1362,16 +1332,16 @@ fn ios_plugin_fixture_command(
 }
 
 #[cfg(target_os = "macos")]
-fn frame_processor_release_xcframework(fixture: &IosPluginFixture) -> PathBuf {
+fn videotoolbox_release_xcframework(fixture: &IosPluginFixture) -> PathBuf {
     fixture.root.join(
-        "lib/ios/VesperPlayerKit/.build/player-frame-processor-diagnostic-plugin/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework",
+        "lib/ios/VesperPlayerKit/.build/player-decoder-videotoolbox-plugin/VesperPlayerDecoderVideoToolboxPlugin.xcframework",
     )
 }
 
 #[cfg(target_os = "macos")]
-fn frame_processor_release_binary(fixture: &IosPluginFixture) -> PathBuf {
-    frame_processor_release_xcframework(fixture).join(
-        "ios-arm64/VesperPlayerFrameProcessorDiagnosticPlugin.framework/VesperPlayerFrameProcessorDiagnosticPlugin",
+fn videotoolbox_release_binary(fixture: &IosPluginFixture) -> PathBuf {
+    videotoolbox_release_xcframework(fixture).join(
+        "ios-arm64/VesperPlayerDecoderVideoToolboxPlugin.framework/VesperPlayerDecoderVideoToolboxPlugin",
     )
 }
 
@@ -1483,15 +1453,15 @@ fn assert_no_ios_plugin_release_staging(
 }
 
 #[cfg(target_os = "macos")]
-fn stage_frame_processor_release(
+fn stage_videotoolbox_release(
     fixture: &IosPluginFixture,
     release_output: &std::path::Path,
     environment: &[(&str, &str)],
 ) -> std::process::Output {
     run_ios_plugin_fixture_for(
         fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             release_output
                 .to_str()
@@ -1527,11 +1497,11 @@ fn ios_ffmpeg_remux_release_command(
 }
 
 #[cfg(target_os = "macos")]
-fn seed_owned_frame_processor_output(output: &std::path::Path) {
+fn seed_owned_videotoolbox_output(output: &std::path::Path) {
     let device = output.join("iphoneos");
     fs::create_dir_all(&device).expect("create owned iOS plugin output");
     fs::write(
-        device.join("libvesper_frame_processor_diagnostic.dylib"),
+        device.join("libvesper_decoder_videotoolbox.dylib"),
         b"previous plugin\n",
     )
     .expect("write previous iOS plugin library");
@@ -1539,7 +1509,7 @@ fn seed_owned_frame_processor_output(output: &std::path::Path) {
         output.join(".vesper-ios-plugin-output"),
         concat!(
             "{\"format\":\"vesper-ios-plugin-output\",",
-            "\"plugin_id\":\"frame-processor-diagnostic\",",
+            "\"plugin_id\":\"decoder-videotoolbox\",",
             "\"cargo_profile\":\"debug\",",
             "\"slices\":[\"ios-arm64\"],",
             "\"ffmpeg_profile\":null,",
@@ -2878,7 +2848,7 @@ fn ios_ffi_keeps_typed_help_and_usage_contracts() {
 }
 
 #[test]
-fn ios_plugin_build_commands_are_public_but_videotoolbox_remains_internal() {
+fn ios_plugin_build_help_omits_internal_commands() {
     let help = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["ios", "--help"])
         .output()
@@ -2889,12 +2859,8 @@ fn ios_plugin_build_commands_are_public_but_videotoolbox_remains_internal() {
     for command in [
         "remux-plugin",
         "source-normalizer-plugin",
-        "frame-processor-plugin",
-        "performance-diagnostics-plugin",
         "stage-remux-plugin-release",
         "stage-source-normalizer-plugin-release",
-        "stage-frame-processor-plugin-release",
-        "stage-performance-diagnostics-plugin-release",
     ] {
         assert!(help.contains(command), "missing iOS command {command}");
     }
@@ -2902,12 +2868,13 @@ fn ios_plugin_build_commands_are_public_but_videotoolbox_remains_internal() {
     assert!(!help.contains("stage-decoder-videotoolbox-plugin-release"));
 
     let command_help = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["ios", "frame-processor-plugin", "--help"])
+        .args(["ios", "decoder-videotoolbox-plugin", "--help"])
         .output()
-        .expect("show frame processor plugin help");
+        .expect("show VideoToolbox plugin help");
     assert_eq!(command_help.status.code(), Some(0));
     let command_help =
-        String::from_utf8(command_help.stdout).expect("UTF-8 frame processor plugin help");
+        String::from_utf8(command_help.stdout).expect("UTF-8 VideoToolbox plugin help");
+    assert!(command_help.contains("Builds the internal VideoToolbox decoder plugin libraries"));
     assert!(command_help.contains("<OUTPUT_DIRECTORY>"));
 }
 
@@ -2991,14 +2958,9 @@ fn ios_plugin_release_dry_run_preserves_declared_profiles_and_does_not_write() {
             "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
         ),
         (
-            "stage-frame-processor-plugin-release",
+            "stage-decoder-videotoolbox-plugin-release",
             None,
-            "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
-        ),
-        (
-            "stage-performance-diagnostics-plugin-release",
-            None,
-            "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
+            "VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip",
         ),
     ];
     for (index, (command, declared_profile, archive)) in cases.into_iter().enumerate() {
@@ -3042,7 +3004,7 @@ fn ios_plugin_release_dry_run_preserves_declared_profiles_and_does_not_write() {
     let duplicate = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["ios", "--root"])
         .arg(&root)
-        .arg("stage-frame-processor-plugin-release")
+        .arg("stage-decoder-videotoolbox-plugin-release")
         .args(["--dry-run", "ios-arm64", "ios-arm64"])
         .output()
         .expect("reject duplicate iOS plugin release slices");
@@ -3053,7 +3015,7 @@ fn ios_plugin_release_dry_run_preserves_declared_profiles_and_does_not_write() {
     let incomplete = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["ios", "--root"])
         .arg(&root)
-        .arg("stage-frame-processor-plugin-release")
+        .arg("stage-decoder-videotoolbox-plugin-release")
         .args(["--dry-run", "ios-arm64"])
         .output()
         .expect("reject incomplete iOS plugin release slices");
@@ -3092,8 +3054,8 @@ fn ios_plugin_release_holds_the_raw_guard_through_consumption_and_commits_atomic
     ];
     let mut release_command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &release_arguments,
         &release_environment,
     );
@@ -3149,23 +3111,23 @@ fn ios_plugin_release_holds_the_raw_guard_through_consumption_and_commits_atomic
     let staged_stdout = String::from_utf8(staged.stdout).expect("UTF-8 iOS plugin release stdout");
     assert!(!staged_stdout.contains(".vesper-ios-plugin-"));
     assert!(!staged_stdout.contains("ffmpeg-snapshot"));
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let canonical = fixture
         .root
-        .join("lib/ios/VesperPlayerKit/.build/player-frame-processor-diagnostic-plugin/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework");
+        .join("lib/ios/VesperPlayerKit/.build/player-decoder-videotoolbox-plugin/VesperPlayerDecoderVideoToolboxPlugin.xcframework");
     assert!(archive.is_file());
     assert!(canonical.join("Info.plist").is_file());
     assert!(
         canonical
-            .join("ios-arm64/VesperPlayerFrameProcessorDiagnosticPlugin.framework/VesperPlayerFrameProcessorDiagnosticPlugin")
+            .join("ios-arm64/VesperPlayerDecoderVideoToolboxPlugin.framework/VesperPlayerDecoderVideoToolboxPlugin")
             .is_file()
     );
     let archive_before = fs::read(&archive).expect("read committed iOS plugin release archive");
 
     let failed = run_ios_plugin_fixture_for(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &release_arguments,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
     );
@@ -3192,19 +3154,19 @@ fn ios_plugin_release_holds_the_raw_guard_through_consumption_and_commits_atomic
 fn ios_plugin_release_rolls_back_every_output_after_a_partial_promotion_failure() {
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("partial promotion output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(
         initial.status.code(),
         Some(0),
         "stderr: {}",
         String::from_utf8_lossy(&initial.stderr)
     );
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let previous_archive = fs::read(&archive).expect("read previous plugin archive");
-    let previous_binary = fs::read(frame_processor_release_binary(&fixture))
+    let previous_binary = fs::read(videotoolbox_release_binary(&fixture))
         .expect("read previous canonical plugin binary");
 
-    let failed = stage_frame_processor_release(
+    let failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[
@@ -3223,7 +3185,7 @@ fn ios_plugin_release_rolls_back_every_output_after_a_partial_promotion_failure(
         previous_archive
     );
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read rolled-back canonical plugin binary"),
         previous_binary
     );
@@ -3239,11 +3201,11 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_commit_journal() {
         .directory
         .path()
         .join("commit journal replacement output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let previous_archive = fs::read(&archive).expect("read pre-replacement plugin archive");
-    let previous_binary = fs::read(frame_processor_release_binary(&fixture))
+    let previous_binary = fs::read(videotoolbox_release_binary(&fixture))
         .expect("read pre-replacement canonical plugin binary");
     let ready = fixture
         .directory
@@ -3257,8 +3219,8 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_commit_journal() {
     let release_argument = release.to_str().expect("UTF-8 commit journal gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             release_output
                 .to_str()
@@ -3315,7 +3277,7 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_commit_journal() {
 
     fs::remove_file(&journal).expect("remove promotion journal replacement sentinel");
     fs::rename(&preserved, &journal).expect("restore rollback promotion journal");
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
@@ -3326,7 +3288,7 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_commit_journal() {
         previous_archive
     );
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read rollback-restored canonical plugin binary"),
         previous_binary
     );
@@ -3342,11 +3304,11 @@ fn ios_plugin_release_recovers_a_sigkill_before_starting_the_next_build() {
 
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("crash recovery output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let previous_archive = fs::read(&archive).expect("read pre-crash plugin archive");
-    let previous_binary = fs::read(frame_processor_release_binary(&fixture))
+    let previous_binary = fs::read(videotoolbox_release_binary(&fixture))
         .expect("read pre-crash canonical plugin binary");
     let ready = fixture.directory.path().join("partial-promotion.ready");
     let release = fixture.directory.path().join("partial-promotion.release");
@@ -3357,8 +3319,8 @@ fn ios_plugin_release_recovers_a_sigkill_before_starting_the_next_build() {
     let release_argument = release.to_str().expect("UTF-8 partial promotion gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PAYLOAD", "crashed generation"),
@@ -3384,7 +3346,7 @@ fn ios_plugin_release_recovers_a_sigkill_before_starting_the_next_build() {
     }
     assert!(ios_plugin_release_journal(&fixture).is_file());
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read partially promoted canonical plugin binary"),
         b"crashed generation\n"
     );
@@ -3405,7 +3367,7 @@ fn ios_plugin_release_recovers_a_sigkill_before_starting_the_next_build() {
     assert!(!journal.exists());
     assert!(journal_removal.is_file());
 
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
@@ -3414,7 +3376,7 @@ fn ios_plugin_release_recovers_a_sigkill_before_starting_the_next_build() {
     assert!(recovered_then_failed.stdout.is_empty());
     assert!(!journal_removal.exists());
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read recovered canonical plugin binary"),
         previous_binary
     );
@@ -3443,8 +3405,8 @@ fn ios_plugin_release_recovers_prepared_owners_after_a_sigkill_before_build() {
     let release_argument = release.to_str().expect("UTF-8 prepared-owner gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PREPARED_READY", ready_argument),
@@ -3509,7 +3471,7 @@ fn ios_plugin_release_recovers_prepared_owners_after_a_sigkill_before_build() {
     assert!(!prepared_journal.exists());
     assert!(prepared_journal_removal.is_file());
 
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_CARGO_STATUS", "1")],
@@ -3550,8 +3512,8 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_prepared_journal() {
     let release_argument = release.to_str().expect("UTF-8 prepared journal gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             release_output
                 .to_str()
@@ -3610,7 +3572,7 @@ fn ios_plugin_release_does_not_overwrite_a_replaced_prepared_journal() {
 
     fs::remove_file(&journal).expect("remove prepared journal replacement sentinel");
     fs::rename(&preserved, &journal).expect("restore prepared-owner journal");
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_CARGO_STATUS", "1")],
@@ -3637,8 +3599,8 @@ fn ios_plugin_release_fails_closed_when_a_prepared_owner_changes_identity() {
     let release_argument = release.to_str().expect("UTF-8 prepared identity gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PREPARED_READY", ready_argument),
@@ -3678,7 +3640,7 @@ fn ios_plugin_release_fails_closed_when_a_prepared_owner_changes_identity() {
         .expect("wait for killed prepared-owner identity test release");
     assert!(killed.status.code().is_none());
 
-    let rejected = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let rejected = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(rejected.status.code(), Some(3));
     assert!(rejected.stdout.is_empty());
     assert!(
@@ -3708,11 +3670,11 @@ fn ios_plugin_release_rolls_back_a_partial_commit_before_reporting_cancellation(
 
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("cancelled commit output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let previous_archive = fs::read(&archive).expect("read pre-cancellation plugin archive");
-    let previous_binary = fs::read(frame_processor_release_binary(&fixture))
+    let previous_binary = fs::read(videotoolbox_release_binary(&fixture))
         .expect("read pre-cancellation canonical plugin binary");
     let ready = fixture.directory.path().join("cancelled-commit.ready");
     let release = fixture.directory.path().join("cancelled-commit.release");
@@ -3723,8 +3685,8 @@ fn ios_plugin_release_rolls_back_a_partial_commit_before_reporting_cancellation(
     let release_argument = release.to_str().expect("UTF-8 cancelled commit gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PAYLOAD", "cancelled generation"),
@@ -3749,7 +3711,7 @@ fn ios_plugin_release_rolls_back_a_partial_commit_before_reporting_cancellation(
         );
     }
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read partially committed canonical plugin binary"),
         b"cancelled generation\n"
     );
@@ -3766,7 +3728,7 @@ fn ios_plugin_release_rolls_back_a_partial_commit_before_reporting_cancellation(
     assert!(cancelled.stdout.is_empty());
     assert!(String::from_utf8_lossy(&cancelled.stderr).contains("cancelled"));
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read cancellation-restored canonical plugin binary"),
         previous_binary
     );
@@ -3786,7 +3748,7 @@ fn ios_plugin_release_finishes_a_durable_commit_before_reporting_cancellation() 
 
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("durable commit output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
     let ready = fixture.directory.path().join("durable-commit.ready");
     let release = fixture.directory.path().join("durable-commit.release");
@@ -3797,8 +3759,8 @@ fn ios_plugin_release_finishes_a_durable_commit_before_reporting_cancellation() 
     let release_argument = release.to_str().expect("UTF-8 durable commit gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PAYLOAD", "durably committed generation"),
@@ -3834,7 +3796,7 @@ fn ios_plugin_release_finishes_a_durable_commit_before_reporting_cancellation() 
     assert!(cancelled.stdout.is_empty());
     assert!(String::from_utf8_lossy(&cancelled.stderr).contains("cancelled"));
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read durably committed canonical plugin binary"),
         b"durably committed generation\n"
     );
@@ -3850,7 +3812,7 @@ fn ios_plugin_release_stops_recovery_when_committed_content_changes_in_place() {
 
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("content drift output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
     let ready = fixture.directory.path().join("content-drift.ready");
     let release = fixture.directory.path().join("content-drift.release");
@@ -3859,8 +3821,8 @@ fn ios_plugin_release_stops_recovery_when_committed_content_changes_in_place() {
     let release_argument = release.to_str().expect("UTF-8 content drift gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[output_argument, "ios-arm64", "ios-simulator-arm64"],
         &[
             ("VESPER_TEST_PLUGIN_PAYLOAD", "committed content generation"),
@@ -3893,13 +3855,13 @@ fn ios_plugin_release_stops_recovery_when_committed_content_changes_in_place() {
         .wait_with_output()
         .expect("wait for killed durable iOS plugin release");
     assert!(killed.status.code().is_none());
-    let binary = frame_processor_release_binary(&fixture);
+    let binary = videotoolbox_release_binary(&fixture);
     let committed = fs::read(&binary).expect("read committed plugin binary before drift");
     assert_eq!(committed, b"committed content generation\n");
     fs::write(&binary, vec![b'x'; committed.len()])
         .expect("replace committed plugin content without changing its length");
 
-    let rejected = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let rejected = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(rejected.status.code(), Some(3));
     assert!(rejected.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&rejected.stderr);
@@ -3920,14 +3882,14 @@ fn ios_plugin_release_stops_recovery_when_committed_content_changes_in_place() {
 fn ios_plugin_release_preserves_its_journal_when_rollback_cleanup_fails() {
     let fixture = ios_plugin_fixture();
     let release_output = fixture.directory.path().join("rollback cleanup output");
-    let initial = stage_frame_processor_release(&fixture, &release_output, &[]);
+    let initial = stage_videotoolbox_release(&fixture, &release_output, &[]);
     assert_eq!(initial.status.code(), Some(0));
-    let archive = release_output.join("VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip");
+    let archive = release_output.join("VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip");
     let previous_archive = fs::read(&archive).expect("read previous plugin archive");
-    let previous_binary = fs::read(frame_processor_release_binary(&fixture))
+    let previous_binary = fs::read(videotoolbox_release_binary(&fixture))
         .expect("read previous canonical plugin binary");
 
-    let failed = stage_frame_processor_release(
+    let failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[
@@ -3956,7 +3918,7 @@ fn ios_plugin_release_preserves_its_journal_when_rollback_cleanup_fails() {
         "cleanup failure must retain exactly one quarantined owner"
     );
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read rollback-restored canonical plugin binary"),
         previous_binary
     );
@@ -3965,7 +3927,7 @@ fn ios_plugin_release_preserves_its_journal_when_rollback_cleanup_fails() {
         previous_archive
     );
 
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
@@ -3990,8 +3952,8 @@ fn ios_plugin_release_does_not_delete_a_replaced_owner_quarantine() {
     let release_argument = release.to_str().expect("UTF-8 owner cleanup gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             release_output
                 .to_str()
@@ -4056,14 +4018,14 @@ fn ios_plugin_release_does_not_delete_a_replaced_owner_quarantine() {
     fs::remove_file(&sentinel).expect("remove owner quarantine replacement sentinel");
     fs::remove_dir(&quarantine).expect("remove replacement owner quarantine");
     fs::rename(&preserved, &quarantine).expect("restore opened owner quarantine");
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
     );
     assert_eq!(recovered_then_failed.status.code(), Some(5));
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read committed canonical plugin binary"),
         b"owner cleanup generation\n"
     );
@@ -4085,8 +4047,8 @@ fn ios_plugin_release_does_not_unlink_a_replaced_journal_quarantine() {
     let release_argument = release.to_str().expect("UTF-8 journal cleanup gate");
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "stage-frame-processor-plugin-release",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "stage-decoder-videotoolbox-plugin-release",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             release_output
                 .to_str()
@@ -4143,14 +4105,14 @@ fn ios_plugin_release_does_not_unlink_a_replaced_journal_quarantine() {
 
     fs::remove_file(&quarantine).expect("remove replacement journal quarantine sentinel");
     fs::rename(&preserved, &quarantine).expect("restore opened journal quarantine");
-    let recovered_then_failed = stage_frame_processor_release(
+    let recovered_then_failed = stage_videotoolbox_release(
         &fixture,
         &release_output,
         &[("VESPER_TEST_PLUGIN_XCODEBUILD_STATUS", "1")],
     );
     assert_eq!(recovered_then_failed.status.code(), Some(5));
     assert_eq!(
-        fs::read(frame_processor_release_binary(&fixture))
+        fs::read(videotoolbox_release_binary(&fixture))
             .expect("read committed canonical plugin binary"),
         b"journal cleanup generation\n"
     );
@@ -4900,7 +4862,7 @@ fn ios_plugin_builder_atomically_publishes_the_simulator_layout() {
     let legacy_device = output.join("iphoneos");
     fs::create_dir_all(&legacy_device).expect("create legacy iOS plugin output");
     fs::write(
-        legacy_device.join("libvesper_frame_processor_diagnostic.dylib"),
+        legacy_device.join("libvesper_decoder_videotoolbox.dylib"),
         b"legacy plugin\n",
     )
     .expect("write legacy iOS plugin library");
@@ -4923,7 +4885,7 @@ fn ios_plugin_builder_atomically_publishes_the_simulator_layout() {
     assert!(result.stderr.is_empty());
     assert!(String::from_utf8_lossy(&result.stdout).contains("Built iOS"));
     assert!(!output.join("iphoneos").exists());
-    let dylib = "libvesper_frame_processor_diagnostic.dylib";
+    let dylib = "libvesper_decoder_videotoolbox.dylib";
     assert_eq!(
         fs::read(output.join("iphonesimulator").join(dylib))
             .expect("read flat Simulator plugin library"),
@@ -4952,9 +4914,7 @@ fn ios_plugin_builder_atomically_publishes_the_simulator_layout() {
     let log = fs::read_to_string(&fixture.log).expect("read iOS plugin tool log");
     assert!(log.contains("--target aarch64-apple-ios-sim"));
     assert!(log.contains("--release"));
-    assert!(
-        log.contains("install_name_tool:-id @rpath/libvesper_frame_processor_diagnostic.dylib")
-    );
+    assert!(log.contains("install_name_tool:-id @rpath/libvesper_decoder_videotoolbox.dylib"));
     assert!(log.contains(" -verify_arch arm64"));
 }
 
@@ -4963,7 +4923,7 @@ fn ios_plugin_builder_atomically_publishes_the_simulator_layout() {
 fn ios_plugin_builder_preserves_the_previous_output_when_cargo_fails() {
     let fixture = ios_plugin_fixture();
     let output = fixture.directory.path().join("previous plugin output");
-    seed_owned_frame_processor_output(&output);
+    seed_owned_videotoolbox_output(&output);
 
     let result = run_ios_plugin_fixture(
         &fixture,
@@ -4978,7 +4938,7 @@ fn ios_plugin_builder_preserves_the_previous_output_when_cargo_fails() {
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("Cargo build"));
     assert_eq!(
-        fs::read(output.join("iphoneos/libvesper_frame_processor_diagnostic.dylib"))
+        fs::read(output.join("iphoneos/libvesper_decoder_videotoolbox.dylib"))
             .expect("read preserved iOS plugin library"),
         b"previous plugin\n"
     );
@@ -5106,8 +5066,12 @@ fn ios_ffmpeg_plugin_builder_preserves_raw_profile_and_provenance_semantics() {
         .lines()
         .filter(|line| line.contains("headerpad_max_install_names"))
         .collect::<Vec<_>>();
-    assert_eq!(headerpad_lines.len(), 1);
-    assert!(headerpad_lines[0].starts_with("rustflags:"));
+    assert_eq!(headerpad_lines.len(), 2);
+    assert!(
+        headerpad_lines
+            .iter()
+            .all(|line| line.starts_with("rustflags:"))
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -5336,8 +5300,8 @@ fn ios_plugin_builder_rejects_a_concurrent_build_before_starting_cargo() {
     ];
     let mut first_command = ios_plugin_fixture_command(
         &fixture,
-        "frame-processor-plugin",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "decoder-videotoolbox-plugin",
+        "libvesper_decoder_videotoolbox.dylib",
         &first_arguments,
         &first_environment,
     );
@@ -5397,7 +5361,7 @@ fn ios_plugin_builder_cancellation_preserves_the_previous_output() {
 
     let fixture = ios_plugin_fixture();
     let output = fixture.directory.path().join("cancelled plugin output");
-    seed_owned_frame_processor_output(&output);
+    seed_owned_videotoolbox_output(&output);
     let ready = fixture.directory.path().join("cancel-cargo.ready");
     let release = fixture.directory.path().join("cancel-cargo.release");
     let arguments = [
@@ -5417,8 +5381,8 @@ fn ios_plugin_builder_cancellation_preserves_the_previous_output() {
     ];
     let mut command = ios_plugin_fixture_command(
         &fixture,
-        "frame-processor-plugin",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "decoder-videotoolbox-plugin",
+        "libvesper_decoder_videotoolbox.dylib",
         &arguments,
         &environment,
     );
@@ -5450,7 +5414,7 @@ fn ios_plugin_builder_cancellation_preserves_the_previous_output() {
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("cancelled"));
     assert_eq!(
-        fs::read(output.join("iphoneos/libvesper_frame_processor_diagnostic.dylib"))
+        fs::read(output.join("iphoneos/libvesper_decoder_videotoolbox.dylib"))
             .expect("read preserved plugin library"),
         b"previous plugin\n"
     );
@@ -5890,8 +5854,6 @@ fn write_invalid_optional_ios_release_assets(release: &std::path::Path) {
         "VesperPlayerRemuxFfmpegPlugin.xcframework.zip",
         "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
         "VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip",
-        "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
-        "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-9.0.2-source.tar.xz",
     ] {
@@ -5910,12 +5872,8 @@ const FLUTTER_CORE_PACKAGES: [&str; 6] = [
 ];
 const FLUTTER_SOURCE_NORMALIZER_PACKAGE: &str = "vesper_player_source_normalizer_ffmpeg";
 const FLUTTER_REMUX_PACKAGE: &str = "vesper_player_remux_ffmpeg";
-const FLUTTER_PERFORMANCE_DIAGNOSTICS_PACKAGE: &str = "vesper_player_performance_diagnostics";
-const FLUTTER_OPTIONAL_PACKAGES: [&str; 3] = [
-    FLUTTER_SOURCE_NORMALIZER_PACKAGE,
-    FLUTTER_REMUX_PACKAGE,
-    FLUTTER_PERFORMANCE_DIAGNOSTICS_PACKAGE,
-];
+const FLUTTER_OPTIONAL_PACKAGES: [&str; 2] =
+    [FLUTTER_SOURCE_NORMALIZER_PACKAGE, FLUTTER_REMUX_PACKAGE];
 
 fn flutter_fixture(include_example: bool) -> tempfile::TempDir {
     let parent = tempfile::tempdir().expect("temporary Flutter fixture parent");
@@ -5975,15 +5933,13 @@ fn prepare_flutter_pub_fixture(root: &std::path::Path) {
 }
 
 fn prepare_optional_ios_pub_fixture(root: &std::path::Path) {
-    const ARTIFACTS: [&str; 8] = [
+    const ARTIFACTS: [&str; 6] = [
         "VesperFFmpegAVCodec",
         "VesperFFmpegAVFormat",
         "VesperFFmpegAVUtil",
         "VesperPlayerRemuxFfmpegPlugin",
         "VesperPlayerSourceNormalizerFfmpegPlugin",
         "VesperPlayerDecoderVideoToolboxPlugin",
-        "VesperPlayerFrameProcessorDiagnosticPlugin",
-        "VesperPlayerPerformanceDiagnosticsPlugin",
     ];
     let package = root.join("lib/ios/VesperPlayerOptionalPlugins");
     fs::create_dir_all(package.join("Sources/FixtureProduct"))
@@ -6111,15 +6067,13 @@ fn sync_ios_bridge_fixture(root: &std::path::Path, tools: &std::path::Path) {
 }
 
 #[cfg(unix)]
-const IOS_APP_STORE_FRAMEWORKS: [&str; 8] = [
+const IOS_APP_STORE_FRAMEWORKS: [&str; 6] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[cfg(unix)]
@@ -6185,17 +6139,6 @@ fn ios_app_store_plugin_descriptor(
                 interface_major: 1,
                 interface_minor: 0,
                 stability: player_cli::PluginStability::Experimental,
-            }],
-        ),
-        "VesperPlayerPerformanceDiagnosticsPlugin" => (
-            "io.github.umbrella22.vesper.performance-diagnostics",
-            vec![player_cli::PluginCapabilityDescriptor {
-                interface_id: "2d8e5be8-b1de-5e83-8fe0-6118aabc5118".to_owned(),
-                instance_id: "io.github.umbrella22.vesper.performance-diagnostics.benchmark"
-                    .to_owned(),
-                interface_major: 1,
-                interface_minor: 0,
-                stability: player_cli::PluginStability::Stable,
             }],
         ),
         _ => return None,
@@ -6449,15 +6392,13 @@ fn ios_app_store_command(
 }
 
 #[cfg(target_os = "macos")]
-const IOS_RELEASE_OPTIONAL_FRAMEWORKS: [&str; 8] = [
+const IOS_RELEASE_OPTIONAL_FRAMEWORKS: [&str; 6] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[cfg(target_os = "macos")]
@@ -6519,8 +6460,6 @@ fn ios_stage_release_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
         "remux-ffmpeg",
         "source-normalizer-ffmpeg",
         "decoder-videotoolbox",
-        "frame-processor-diagnostic",
-        "performance-diagnostics",
     ] {
         let destination = root.join("plugins").join(plugin);
         fs::create_dir_all(&destination).expect("create iOS release plugin fixture directory");
@@ -6655,9 +6594,7 @@ case "$package" in
   player-remux-ffmpeg) dylib=libvesper_remux_ffmpeg.dylib ;;
   player-source-normalizer-ffmpeg) dylib=libvesper_source_normalizer_ffmpeg.dylib ;;
   player-decoder-videotoolbox) dylib=libvesper_decoder_videotoolbox.dylib ;;
-  player-frame-processor-diagnostic) dylib=libvesper_frame_processor_diagnostic.dylib ;;
-  player-performance-diagnostics) dylib=libvesper_performance_diagnostics.dylib ;;
-  *) exit 91 ;;
+    *) exit 91 ;;
 esac
 artifact="$CARGO_TARGET_DIR/$target/$profile/$dylib"
 /bin/mkdir -p "$(/usr/bin/dirname "$artifact")"
@@ -6951,7 +6888,7 @@ exit "${ANDROID_SAMPLE_GRADLE_STATUS:-0}"
 }
 
 #[cfg(unix)]
-fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 11] {
+fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 10] {
     [
         root.join("lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs"),
         root.join("lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs"),
@@ -6965,7 +6902,6 @@ fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 11] {
         root.join(
             "lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs",
         ),
-        root.join("lib/android/vesper-player-kit-performance-diagnostics/src/main/jniLibs"),
         root.join("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs"),
         root.join(
             "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime",
@@ -6978,7 +6914,7 @@ fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 11] {
 }
 
 #[cfg(unix)]
-fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 11] {
+fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 10] {
     let outputs = android_optional_output_paths(root);
     for output in &outputs {
         fs::create_dir_all(output.parent().expect("optional Android output parent"))
@@ -7018,9 +6954,7 @@ case "$crate" in
   player-jni-android) library=libvesper_player_android.so ;;
   player-decoder-mediacodec) library=libvesper_decoder_mediacodec.so ;;
   player-source-normalizer-ffmpeg) library=libvesper_source_normalizer_ffmpeg.so ;;
-  player-frame-processor-diagnostic) library=libvesper_frame_processor_diagnostic.so ;;
-  player-performance-diagnostics) library=libvesper_performance_diagnostics.so ;;
-  player-relay-ffmpeg-android) library=libvesper_player_relay_ffmpeg.so ;;
+    player-relay-ffmpeg-android) library=libvesper_player_relay_ffmpeg.so ;;
   player-remux-ffmpeg) library=libvesper_remux_ffmpeg.so ;;
   *) exit 97 ;;
 esac
@@ -7062,7 +6996,7 @@ fn prepare_android_optional_toolchain(root: &std::path::Path, tools: &std::path:
 }
 
 #[cfg(unix)]
-fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10] {
+fn prepare_android_stage_release_fixture(root: &std::path::Path) {
     let _ = prepare_android_optional_project_fixture(root);
     fs::create_dir_all(root.join("scripts")).expect("create Android release script directory");
     fs::copy(
@@ -7074,8 +7008,6 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
         "decoder-mediacodec",
         "source-normalizer-ffmpeg",
         "remux-ffmpeg",
-        "frame-processor-diagnostic",
-        "performance-diagnostics",
     ] {
         let source = workspace_root()
             .join("plugins")
@@ -7096,25 +7028,8 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
             "vesper_source_normalizer_ffmpeg",
         ),
         ("remux-ffmpeg", "vesper_remux_ffmpeg"),
-        (
-            "frame-processor-diagnostic",
-            "vesper_frame_processor_diagnostic",
-        ),
-        ("performance-diagnostics", "vesper_performance_diagnostics"),
     ];
 
-    let artifacts = [
-        "VesperPlayerKit-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitCompose-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitComposeUi-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar".to_owned(),
-        "VesperPlayerKitPerformanceDiagnostics-android-arm64-v8a.aar".to_owned(),
-    ];
     let aar_root = root.join("lib/android");
     let core = [
         (
@@ -7210,18 +7125,12 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
             "decoder-mediacodec" => "vesper-player-kit-decoder-mediacodec-release.aar",
             "source-normalizer-ffmpeg" => "vesper-player-kit-source-normalizer-ffmpeg-release.aar",
             "remux-ffmpeg" => "vesper-player-kit-remux-ffmpeg-release.aar",
-            "frame-processor-diagnostic" => {
-                "vesper-player-kit-frame-processor-diagnostic-release.aar"
-            }
-            "performance-diagnostics" => "vesper-player-kit-performance-diagnostics-release.aar",
             _ => unreachable!("known Android plugin fixture"),
         };
         let module = match plugin {
             "decoder-mediacodec" => "vesper-player-kit-decoder-mediacodec",
             "source-normalizer-ffmpeg" => "vesper-player-kit-source-normalizer-ffmpeg",
             "remux-ffmpeg" => "vesper-player-kit-remux-ffmpeg",
-            "frame-processor-diagnostic" => "vesper-player-kit-frame-processor-diagnostic",
-            "performance-diagnostics" => "vesper-player-kit-performance-diagnostics",
             _ => unreachable!("known Android plugin fixture"),
         };
         let mut entries = vec![
@@ -7251,7 +7160,6 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
         }
         write_test_zip(&optional_root(module, aar_name), &entries);
     }
-    artifacts
 }
 
 #[cfg(unix)]
@@ -7333,42 +7241,32 @@ schema_version = 1
 id = "dev.vesper.plugin-fixture"
 name = "Vesper Plugin Fixture"
 version = "0.4.0"
-description = "Safe Rust Plugin fixture"
+description = "native plugin ABI plugin fixture"
 license = "Apache-2.0"
 publisher = "dev.vesper"
 
 [compatibility]
-host_sdk = ">=0.4.0, <0.5.0"
-abi_major = 1
+host_sdk = "*"
+abi_major = 2
 abi_minor_min = 0
 abi_minor_max = 0
 
 [[capabilities]]
-interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7"
+interface_id = "001ee10d-4c34-52c4-bd30-6251637f47a6"
 instance_id = "dev.vesper.plugin-fixture.post-download"
-interface_major = 1
+interface_major = 2
 interface_minor = 0
 stability = "stable"
 
-[[capabilities]]
-interface_id = "c7a69475-79b2-5b5e-a477-08844a5da5d1"
-instance_id = "dev.vesper.plugin-fixture.event-hook"
-interface_major = 1
-interface_minor = 0
-stability = "stable"
-
-[[capabilities]]
-interface_id = "2d8e5be8-b1de-5e83-8fe0-6118aabc5118"
-instance_id = "dev.vesper.plugin-fixture.benchmark"
-interface_major = 1
-interface_minor = 0
-stability = "stable"
 "#
     .to_owned()
 }
 
 fn native_fixture_artifact() -> Option<PathBuf> {
-    let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug");
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("target"))
+        .join("debug");
     #[cfg(target_os = "macos")]
     let name = "libvesper_plugin_fixture.dylib";
     #[cfg(target_os = "linux")]
@@ -7936,11 +7834,6 @@ fn android_worker_commands_route_through_the_rust_cli() {
         (
             "decoder-mediacodec-plugin",
             "decoder output",
-            vec!["release"],
-        ),
-        (
-            "frame-processor-plugin",
-            "frame processor output",
             vec!["release"],
         ),
     ];
@@ -8620,7 +8513,7 @@ fn ios_native_frame_rust_pipeline_owns_state_and_clears_shell_environment() {
         .lines()
         .filter(|line| line.starts_with("plugin command="))
         .collect::<Vec<_>>();
-    assert_eq!(plugin_lines.len(), 3);
+    assert_eq!(plugin_lines.len(), 2);
     for line in plugin_lines {
         assert!(line.contains(&format!("root={}", resolved_root.display())));
         assert!(line.contains("profile=debug"));
@@ -8654,7 +8547,7 @@ fn ios_native_frame_rust_pipeline_owns_state_and_clears_shell_environment() {
         native_frame_evidence(&fixture.evidence, "source"),
         fixture.source
     );
-    for key in ["config", "source_plugin", "decoder_plugin", "frame_plugin"] {
+    for key in ["config", "source_plugin", "decoder_plugin", "shader"] {
         let path = native_frame_evidence(&fixture.evidence, key);
         assert!(
             !path.exists(),
@@ -8720,7 +8613,7 @@ fn ios_native_frame_rejects_symlinked_cached_smoke_media() {
     let fixture = ios_native_frame_fixture();
     let generated = fixture
         .root
-        .join("target/ios-native-frame-smoke-h264-aac.mp4");
+        .join("target/ios-native-frame-smoke-h264-bt709-aac.mp4");
     fs::create_dir_all(generated.parent().expect("generated media parent"))
         .expect("create generated media parent");
     symlink(&fixture.source, &generated).expect("create cached smoke media symlink");
@@ -8784,7 +8677,7 @@ fn ios_native_frame_missing_runtime_is_compatibility() {
     fs::remove_file(
         fixture
             .root
-            .join("third_party/ffmpeg/apple/ios-simulator/lib/arm64/libavutil.60.dylib"),
+            .join("third_party/ffmpeg/apple/ios-simulator/lib/arm64/libavutil.dylib"),
     )
     .expect("remove fixture FFmpeg runtime");
 
@@ -8827,8 +8720,8 @@ fn ios_native_frame_rejects_runtime_dylib_symlink_outside_runtime() {
     let runtime = fixture
         .root
         .join("third_party/ffmpeg/apple/ios-simulator/lib/arm64");
-    let dylib = runtime.join("libavutil.60.dylib");
-    let outside = fixture._directory.path().join("outside-libavutil.60.dylib");
+    let dylib = runtime.join("libavutil.dylib");
+    let outside = fixture._directory.path().join("outside-libavutil.dylib");
     fs::write(&outside, b"outside runtime\n").expect("write outside runtime dylib");
     fs::remove_file(&dylib).expect("remove contained runtime dylib");
     symlink(&outside, &dylib).expect("link runtime dylib outside its root");
@@ -8862,12 +8755,11 @@ fn ios_native_frame_rejects_xcode_product_directory_entry_overflow() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn ios_native_frame_adds_exact_loader_rpath_when_only_parent_is_present() {
+fn ios_native_frame_rewrites_ffmpeg_dependencies_to_sibling_frameworks() {
     let fixture = ios_native_frame_fixture();
     let result = ios_native_frame_command(&fixture)
-        .env("VESPER_TEST_OTOOL_RPATH", "parent")
         .output()
-        .expect("run native-frame verifier with a parent-only loader rpath");
+        .expect("run native-frame verifier with FFmpeg framework dependencies");
 
     assert_eq!(
         result.status.code(),
@@ -8876,13 +8768,9 @@ fn ios_native_frame_adds_exact_loader_rpath_when_only_parent_is_present() {
         String::from_utf8_lossy(&result.stderr)
     );
     let actions = fs::read_to_string(&fixture.actions).expect("read native-frame action log");
-    assert_eq!(
-        actions
-            .lines()
-            .filter(|line| line.contains("install_name_tool -add_rpath @loader_path "))
-            .count(),
-        4
-    );
+    assert!(actions.lines().any(|line| line.contains(
+        "-change @rpath/libavutil.60.dylib @loader_path/../VesperFFmpegAVUtil.framework/VesperFFmpegAVUtil"
+    )));
 }
 
 #[cfg(target_os = "macos")]
@@ -9083,6 +8971,10 @@ fn vesper_wrapper_routes_ios_native_frame_to_the_rust_cli() {
         .env("PATH", path)
         .env("VESPER_CLI", env!("CARGO_BIN_EXE_vesper"))
         .env("VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE", &fixture.source)
+        .env(
+            "VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB",
+            fixture.root.join("smoke.metallib"),
+        )
         .env(
             "VESPER_IOS_NATIVE_FRAME_DESTINATION",
             "platform=iOS Simulator,id=00000000-0000-0000-0000-000000000001",
@@ -9408,6 +9300,10 @@ fn ios_stage_release_stages_core_and_optional_outputs_transactionally() {
         b"stale optional source\n",
     )
     .expect("write stale optional source");
+    let retired = "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework";
+    let retired_archive = output.join(format!("{retired}.zip"));
+    fs::write(&retired_archive, b"retired optional archive\n").expect("write retired archive");
+    fs::create_dir_all(package_artifacts.join(retired)).expect("create retired package artifact");
     fs::write(output.join("unrelated.txt"), b"preserve me\n")
         .expect("write unrelated release file");
 
@@ -9470,6 +9366,8 @@ fn ios_stage_release_stages_core_and_optional_outputs_transactionally() {
         b"preserve me\n"
     );
     assert!(!root.join("unsafe ambient target").exists());
+    assert!(!retired_archive.exists());
+    assert!(!package_artifacts.join(retired).exists());
 
     let log =
         fs::read_to_string(root.join("stage-release.log")).expect("read iOS release staging log");
@@ -9810,10 +9708,6 @@ fn ios_optional_release_holds_one_plugin_guard_through_final_asset_copy() {
                     "VESPER_TEST_RUST_TARGET_LIBDIR",
                     root.join("fake iOS Rust target libdir"),
                 )
-                .env(
-                    "VESPER_TEST_PLUGIN_DYLIB",
-                    "libvesper_frame_processor_diagnostic.dylib",
-                )
                 .args(["ios", "--root"])
                 .arg(&root)
                 .arg(command_name)
@@ -9824,13 +9718,13 @@ fn ios_optional_release_holds_one_plugin_guard_through_final_asset_copy() {
         };
     let competing_build_output = root.join("competing plugin build output");
     let competing_build = run_competing(
-        "frame-processor-plugin",
+        "decoder-videotoolbox-plugin",
         &competing_build_output,
         &["debug", "ios-arm64"],
     );
     let competing_release_output = root.join("competing plugin release output");
     let competing_release = run_competing(
-        "stage-frame-processor-plugin-release",
+        "stage-decoder-videotoolbox-plugin-release",
         &competing_release_output,
         &["ios-arm64", "ios-simulator-arm64"],
     );
@@ -9861,7 +9755,7 @@ fn ios_optional_release_holds_one_plugin_guard_through_final_asset_copy() {
         String::from_utf8_lossy(&aggregate.stderr)
     );
 
-    let framework = "VesperPlayerFrameProcessorDiagnosticPlugin";
+    let framework = "VesperPlayerDecoderVideoToolboxPlugin";
     let relative_binary =
         format!("{framework}.xcframework/ios-arm64/{framework}.framework/{framework}");
     let package_binary = package_artifacts.join(&relative_binary);
@@ -9876,7 +9770,7 @@ fn ios_optional_release_holds_one_plugin_guard_through_final_asset_copy() {
         .read_to_end(&mut archived_bytes)
         .expect("read staged plugin binary");
     assert_eq!(package_bytes, archived_bytes);
-    assert!(String::from_utf8_lossy(&package_bytes).contains("player-frame-processor-diagnostic"));
+    assert!(String::from_utf8_lossy(&package_bytes).contains("player-decoder-videotoolbox"));
 }
 
 #[cfg(target_os = "macos")]
@@ -9925,8 +9819,8 @@ fn ios_ffmpeg_runtime_release_holds_plugin_guard_through_release_exit() {
     let competing_output = fixture.root.join("competing plugin output");
     let competing = ios_plugin_fixture_command(
         &fixture,
-        "frame-processor-plugin",
-        "libvesper_frame_processor_diagnostic.dylib",
+        "decoder-videotoolbox-plugin",
+        "libvesper_decoder_videotoolbox.dylib",
         &[
             competing_output
                 .to_str()
@@ -10175,37 +10069,32 @@ while :; do /bin/sleep 1; done
         .spawn()
         .expect("start nested iOS FFI release staging");
     let parent_pid = i32::try_from(process.id()).expect("nested iOS release parent pid");
+    let read_pid =
+        |path: &std::path::Path| -> Option<i32> { fs::read_to_string(path).ok()?.parse().ok() };
     let ready_deadline = Instant::now() + Duration::from_secs(15);
-    while (!cargo_pid_path.is_file() || !descendant_pid_path.is_file())
-        && Instant::now() < ready_deadline
-    {
-        if process
-            .try_wait()
-            .expect("poll nested iOS FFI release staging")
-            .is_some()
+    let (cargo_pid, descendant_pid) = loop {
+        if let (Some(cargo_pid), Some(descendant_pid)) =
+            (read_pid(&cargo_pid_path), read_pid(&descendant_pid_path))
         {
-            break;
+            break (cargo_pid, descendant_pid);
+        }
+        if Instant::now() >= ready_deadline
+            || process
+                .try_wait()
+                .expect("poll nested iOS FFI release staging")
+                .is_some()
+        {
+            let _ = kill(Pid::from_raw(parent_pid), Signal::SIGINT);
+            let result = process
+                .wait_with_output()
+                .expect("wait after nested iOS FFI readiness failure");
+            panic!(
+                "nested iOS FFI build did not start; stderr: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
-    if !cargo_pid_path.is_file() || !descendant_pid_path.is_file() {
-        let _ = kill(Pid::from_raw(parent_pid), Signal::SIGINT);
-        let result = process
-            .wait_with_output()
-            .expect("wait after nested iOS FFI readiness failure");
-        panic!(
-            "nested iOS FFI build did not start; stderr: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-    }
-    let cargo_pid: i32 = fs::read_to_string(&cargo_pid_path)
-        .expect("read nested iOS FFI Cargo pid")
-        .parse()
-        .expect("parse nested iOS FFI Cargo pid");
-    let descendant_pid: i32 = fs::read_to_string(&descendant_pid_path)
-        .expect("read nested iOS FFI descendant pid")
-        .parse()
-        .expect("parse nested iOS FFI descendant pid");
+    };
 
     kill(Pid::from_raw(parent_pid), Signal::SIGINT).expect("cancel nested iOS FFI release staging");
     let result = process
@@ -11042,7 +10931,16 @@ fn ios_app_store_layout_rejects_invalid_framework_topology() {
     assert!(String::from_utf8_lossy(&legacy_output.stderr).contains("legacy umbrella"));
     fs::remove_dir_all(legacy).expect("remove legacy FFmpeg umbrella");
 
-    let missing_framework = frameworks.join("VesperPlayerFrameProcessorDiagnosticPlugin.framework");
+    let retired = frameworks.join("VesperPlayerFrameProcessorDiagnosticPlugin.framework");
+    fs::create_dir_all(&retired).expect("create retired plugin framework");
+    let retired_output = ios_app_store_command(&root, &app, &tools)
+        .output()
+        .expect("verify retired plugin framework");
+    assert_eq!(retired_output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&retired_output.stderr).contains("retired FrameProcessor"));
+    fs::remove_dir_all(retired).expect("remove retired plugin framework");
+
+    let missing_framework = frameworks.join("VesperPlayerDecoderVideoToolboxPlugin.framework");
     fs::remove_dir_all(&missing_framework).expect("remove required optional framework");
     let missing_output = ios_app_store_command(&root, &app, &tools)
         .output()
@@ -14224,8 +14122,7 @@ test -f "$VESPER_ANDROID_REMUX_JNI_LIBS/arm64-v8a/libvesper_remux_ffmpeg.so" || 
 test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/profile-hash.txt" || exit 87
 test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/remux-profile.txt" || exit 88
 test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/arm64-v8a-vesper-ffmpeg-build-metadata.txt" || exit 89
-test -f "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS/arm64-v8a/libvesper_frame_processor_diagnostic.so" || exit 90
-test -f "$VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS/arm64-v8a/libvesper_performance_diagnostics.so" || exit 91
+test "${VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS+set}" != set || exit 90
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a"
 printf 'relay\n' > "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a/libvesper_player_relay_ffmpeg.so"
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_ASSETS/vesper-relay-ffmpeg"
@@ -14241,8 +14138,6 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
   printf 'source_assets=%s\n' "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS"
   printf 'remux_jni=%s\n' "$VESPER_ANDROID_REMUX_JNI_LIBS"
   printf 'remux_assets=%s\n' "$VESPER_ANDROID_REMUX_ASSETS"
-  printf 'frame_jni=%s\n' "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS"
-  printf 'performance_diagnostics_jni=%s\n' "$VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS"
   printf 'runtime_jni=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS"
   printf 'runtime_assets=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS"
   printf 'relay_jni=%s\n' "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS"
@@ -14267,6 +14162,7 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
         .env("VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS", "0")
         .env_remove("CI")
         .env_remove("GRADLE_USER_HOME")
+        .env_remove("VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS")
         .args([
             "android",
             "aar",
@@ -14286,9 +14182,15 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     );
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
-    for output in &outputs {
+    let retired_output = &outputs[5];
+    for output in outputs.iter().filter(|output| *output != retired_output) {
         assert!(!output.join("stale.txt").exists());
     }
+    assert_eq!(
+        fs::read_to_string(retired_output.join("stale.txt"))
+            .expect("read untouched legacy diagnostic output"),
+        "stale\n"
+    );
     assert_eq!(
         fs::read_to_string(outputs[0].join("arm64-v8a/libvesper_decoder_mediacodec.so"))
             .expect("read staged decoder output"),
@@ -14313,32 +14215,22 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
         profile_hash
     );
     assert_eq!(
-        fs::read_to_string(outputs[5].join("arm64-v8a/libvesper_frame_processor_diagnostic.so"))
-            .expect("read staged frame processor output"),
-        "player-frame-processor-diagnostic\n"
-    );
-    assert_eq!(
-        fs::read_to_string(outputs[6].join("arm64-v8a/libvesper_performance_diagnostics.so"))
-            .expect("read staged performance diagnostics output"),
-        "player-performance-diagnostics\n"
-    );
-    assert_eq!(
-        fs::read_to_string(outputs[7].join("arm64-v8a/libavcodec.so"))
+        fs::read_to_string(outputs[6].join("arm64-v8a/libavcodec.so"))
             .expect("read staged FFmpeg runtime output"),
         "fixture ffmpeg runtime avcodec\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[8].join("profile-hash.txt"))
+        fs::read_to_string(outputs[7].join("profile-hash.txt"))
             .expect("read staged FFmpeg runtime metadata"),
         profile_hash
     );
     assert_eq!(
-        fs::read_to_string(outputs[9].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
+        fs::read_to_string(outputs[8].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
             .expect("read staged relay output"),
         "relay\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[10].join("profile-hash.txt"))
+        fs::read_to_string(outputs[9].join("profile-hash.txt"))
             .expect("read staged relay metadata"),
         profile_hash
     );
@@ -14369,12 +14261,7 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     let remux = log
         .find("cargo-ndk crate=player-remux-ffmpeg")
         .expect("remux plugin log");
-    let frame = log
-        .find("cargo-ndk crate=player-frame-processor-diagnostic")
-        .expect("frame processor plugin log");
-    let performance_diagnostics = log
-        .find("cargo-ndk crate=player-performance-diagnostics")
-        .expect("performance diagnostics plugin log");
+    assert!(!log.contains("frame-processor-diagnostic"), "log:\n{log}");
     let relay = log
         .find("cargo-ndk crate=player-relay-ffmpeg-android")
         .expect("external playback relay log");
@@ -14383,14 +14270,11 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
         ffmpeg_native < decoder
             && decoder < source
             && source < remux
-            && remux < frame
-            && frame < performance_diagnostics
-            && performance_diagnostics < relay
+            && remux < relay
             && relay < gradle
     );
     assert!(log.contains("remux_jni=") && log.contains("remux_assets="));
     assert!(log.contains("runtime_jni=") && log.contains("runtime_assets="));
-    assert!(log.contains("performance_diagnostics_jni="));
     assert!(log.contains("relay_jni=") && log.contains("relay_assets="));
     assert!(log.contains("arg=:vesper-player-kit:assembleFixture\n"));
     assert!(log.contains("arg=:vesper-player-kit-external-playback:assembleFixture\n"));
@@ -14408,11 +14292,18 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
 fn android_stage_release_verifies_the_complete_optional_archive_set() {
     let (_directory, root) = android_cli_fixture();
     let output_directory = root.join("dist/release/android");
-    let _artifacts = prepare_android_stage_release_fixture(&root);
-    let frame_processor_manifest =
-        fs::read_to_string(root.join("plugins/frame-processor-diagnostic/vesper-plugin.toml"))
-            .expect("read Android FrameProcessor project manifest fixture");
-    assert!(frame_processor_manifest.contains("[[artifacts]]"));
+    prepare_android_stage_release_fixture(&root);
+    let retired_aar = root.join(concat!(
+        "lib/android/vesper-player-kit-frame-processor-diagnostic/build/outputs/aar/",
+        "vesper-player-kit-frame-processor-diagnostic-release.aar"
+    ));
+    write_test_zip(
+        &retired_aar,
+        &[(
+            "jni/arm64-v8a/libvesper_frame_processor_diagnostic.so",
+            b"stale diagnostic plugin\n",
+        )],
+    );
     let tools = root.join("Android stage release tools");
     let path = prepare_android_optional_toolchain(&root, &tools);
     write_android_cached_gradle(
@@ -14487,8 +14378,6 @@ exit "${ANDROID_STAGE_RELEASE_GRADLE_STATUS:-0}"
             "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar",
             "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar",
             "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar",
-            "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
-            "VesperPlayerKitPerformanceDiagnostics-android-arm64-v8a.aar",
             "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar",
             "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar",
         ]
@@ -14503,7 +14392,7 @@ fn android_stage_release_preserves_previous_outputs_when_gradle_fails() {
     fs::create_dir_all(&output_directory).expect("create previous Android release output");
     fs::write(output_directory.join("previous.txt"), b"previous release\n")
         .expect("write previous Android release marker");
-    let _artifacts = prepare_android_stage_release_fixture(&root);
+    prepare_android_stage_release_fixture(&root);
     let tools = root.join("Android stage release rollback tools");
     let path = prepare_android_optional_toolchain(&root, &tools);
     write_android_cached_gradle(
@@ -15661,9 +15550,7 @@ fn flutter_android_verification_uses_matching_local_gradle_and_exact_tasks() {
         "gradle_user_home={}\n",
         custom_gradle_home.display()
     )));
-    assert!(
-        optional_log.ends_with("arg=:vesper_player_performance_diagnostics:compileDebugKotlin\n")
-    );
+    assert!(optional_log.ends_with("arg=:vesper_player_remux_ffmpeg:compileDebugKotlin\n"));
 }
 
 #[cfg(unix)]
@@ -16015,18 +15902,11 @@ else
 fi
 "#,
     );
-    for (route, target, override_name) in [
-        (
-            "verify-remux",
-            "vesper_remux_ffmpeg",
-            "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
-        ),
-        (
-            "verify-decoder-diagnostics",
-            "vesper_decoder_fixture",
-            "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
-        ),
-    ] {
+    for (route, target, override_name) in [(
+        "verify-remux",
+        "vesper_remux_ffmpeg",
+        "VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH",
+    )] {
         let extension = if cfg!(target_os = "macos") {
             "dylib"
         } else {
@@ -16161,24 +16041,6 @@ fn desktop_remux_verification_preserves_override_and_ci_skip_semantics() {
         String::from_utf8_lossy(&download.stderr).contains(
             "Desktop remux fixture is missing in CI, skipping example remux verification"
         )
-    );
-
-    let decoder = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .env("CARGO", &fake_cargo)
-        .env("VESPER_DECODER_FIXTURE_PLUGIN_PATH", &plugin)
-        .args(["desktop", "verify-decoder-diagnostics", "loader", "--root"])
-        .arg(root)
-        .output()
-        .expect("run decoder diagnostics loader verification");
-    assert_eq!(decoder.status.code(), Some(0));
-    assert!(decoder.stderr.is_empty());
-    assert_eq!(
-        decoder.stdout,
-        format!(
-            "Using decoder fixture plugin: {}\nFixture decoder codecs: fixture-video,H264,HEVC\n",
-            plugin.display()
-        )
-        .as_bytes()
     );
 
     let d3d11 = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -16323,10 +16185,8 @@ fn desktop_videotoolbox_verification_preserves_loader_and_basic_player_contracts
     let root = directory.path();
     fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write desktop manifest");
     let decoder = root.join("VideoToolbox 插件.dylib");
-    let frame_processor = root.join("FrameProcessor 插件.dylib");
     let source = root.join("B-frame source.mp4");
     fs::write(&decoder, b"decoder").expect("write decoder override");
-    fs::write(&frame_processor, b"frame processor").expect("write frame processor override");
     fs::write(&source, b"source").expect("write source override");
 
     let tools = root.join("tools");
@@ -16383,8 +16243,6 @@ printf '%s\n' \
   'initialized desktop player' \
   'selected sdkManagedNativeFrame route' \
   'supports_external_video_surface=true' \
-  'frame processor plugins: 1/1 supported' \
-  'macOS frame processor debug summary deadline_misses=0 dropped_outputs=0' \
   'basic-player smoke script observed playback' \
   'basic-player smoke script showed overlay' \
   'basic-player smoke script paused playback' \
@@ -16400,10 +16258,6 @@ printf '%s\n' \
         .env_remove("CARGO_TARGET_DIR")
         .env("FAKE_CARGO_LOG", &cargo_log)
         .env("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH", &decoder)
-        .env(
-            "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-            &frame_processor,
-        )
         .env("VESPER_DECODER_VIDEOTOOLBOX_SOURCE", &source)
         .env("VESPER_BASIC_PLAYER_SMOKE_TIMEOUT_SECONDS", "5")
         .args([
@@ -16423,10 +16277,6 @@ printf '%s\n' \
     );
     assert!(basic.stderr.is_empty());
     let stdout = String::from_utf8(basic.stdout).expect("UTF-8 basic-player stdout");
-    assert!(stdout.contains(&format!(
-        "Using diagnostic frame processor plugin: {}\n",
-        frame_processor.display()
-    )));
     let log_path = stdout
         .lines()
         .find_map(|line| line.strip_prefix("Running basic-player VideoToolbox smoke; log: "))
@@ -16450,10 +16300,8 @@ fn desktop_videotoolbox_ctrl_c_reaps_the_basic_player_process_group() {
     let root = directory.path();
     fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write desktop manifest");
     let decoder = root.join("decoder.dylib");
-    let frame_processor = root.join("frame-processor.dylib");
     let source = root.join("source.mp4");
     fs::write(&decoder, b"decoder").expect("write decoder override");
-    fs::write(&frame_processor, b"frame processor").expect("write frame processor override");
     fs::write(&source, b"source").expect("write source override");
 
     let tools = root.join("tools");
@@ -16480,10 +16328,6 @@ while :; do sleep 1; done
         .env("CARGO", tools.join("cargo"))
         .env_remove("CARGO_TARGET_DIR")
         .env("VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH", &decoder)
-        .env(
-            "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-            &frame_processor,
-        )
         .env("VESPER_DECODER_VIDEOTOOLBOX_SOURCE", &source)
         .env("VESPER_BASIC_PLAYER_SMOKE_TIMEOUT_SECONDS", "30")
         .env("VT_BASIC_PID_FILE", &basic_pid_path)
@@ -16558,111 +16402,53 @@ while :; do sleep 1; done
 }
 
 #[test]
-fn plugin_new_creates_native_and_wasm_projects_without_path_dependencies() {
+fn plugin_new_creates_native_rust_and_cpp_projects() {
     let parent = tempfile::tempdir().expect("temporary scaffold parent");
-    let native = parent.path().join("Native 插件");
-    let native_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "new"])
-        .arg(&native)
-        .args([
-            "--plugin-id",
-            "dev.vesper.native-example",
-            "--publisher",
-            "dev.vesper",
-            "--license",
-            "Apache-2.0",
-            "--transport",
-            "native",
-        ])
-        .args([
-            "--capability",
-            "post-download",
-            "--capability",
-            "event-hook",
-            "--capability",
-            "benchmark",
-            "--capability",
-            "decoder",
-            "--capability",
-            "frame-processor",
-            "--capability",
-            "audio-processor",
-            "--capability",
-            "source-normalizer-packet",
-            "--capability",
-            "source-normalizer-resource",
-        ])
-        .output()
-        .expect("create native scaffold");
-    assert_eq!(
-        native_output.status.code(),
-        Some(0),
-        "stderr: {}",
-        String::from_utf8_lossy(&native_output.stderr)
-    );
-    assert!(native_output.stderr.is_empty());
-    let native_report: serde_json::Value =
-        serde_json::from_slice(&native_output.stdout).expect("native scaffold JSON");
-    assert_eq!(native_report["transport"], "native");
-    assert_eq!(
-        native_report["capabilities"].as_array().map(Vec::len),
-        Some(8)
-    );
-    let native_cargo = fs::read_to_string(native.join("Cargo.toml")).expect("native Cargo.toml");
-    let native_source = fs::read_to_string(native.join("src/lib.rs")).expect("native source");
-    assert!(!native_cargo.contains("path ="));
-    assert!(!native_source.contains("unsafe {"));
-    assert!(!native_source.contains("extern \"C\""));
-    assert!(native_source.contains("impl player_plugin::AudioProcessorPluginFactory"));
-    assert!(native_source.contains("with_audio_processor"));
-
-    let wasm = parent.path().join("WASM plugin");
-    let wasm_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "new"])
-        .arg(&wasm)
-        .args([
-            "--plugin-id",
-            "dev.vesper.wasm-example",
-            "--publisher",
-            "dev.vesper",
-            "--license",
-            "Apache-2.0",
-            "--transport",
-            "wasm",
-            "--capability",
-            "event-hook",
-            "--capability",
-            "benchmark",
-        ])
-        .output()
-        .expect("create WASM scaffold");
-    assert_eq!(
-        wasm_output.status.code(),
-        Some(0),
-        "stderr: {}",
-        String::from_utf8_lossy(&wasm_output.stderr)
-    );
-    let wasm_cargo = fs::read_to_string(wasm.join("Cargo.toml")).expect("WASM Cargo.toml");
-    let wasm_source = fs::read_to_string(wasm.join("src/lib.rs")).expect("WASM source");
-    assert!(!wasm_cargo.contains("path ="));
-    assert!(wasm_cargo.contains(&format!(
-        "player-plugin-wasm = {{ package = \"vesper-player-plugin-wasm\", version = \"={}\" }}",
-        env!("CARGO_PKG_VERSION")
-    )));
-    assert!(wasm_source.contains("#![deny(unsafe_code)]"));
-    assert!(!wasm_source.contains("allow(unsafe_code)"));
-    assert!(!wasm_source.contains("unsafe {"));
-    assert!(!wasm_source.contains("unsafe fn"));
-    assert!(!wasm_source.contains("unsafe extern"));
-    assert!(!wasm_source.contains("extern \"C\""));
-    assert_eq!(
-        fs::read(wasm.join("wit/plugin.wit")).expect("scaffold WIT"),
-        player_plugin_wasm_host::VESPER_PLUGIN_WIT.as_bytes()
-    );
+    for (language, build_file, source_file, export) in [
+        (
+            "rust",
+            "Cargo.toml",
+            "src/lib.rs",
+            "#[player_plugin::author::export]",
+        ),
+        (
+            "cpp",
+            "CMakeLists.txt",
+            "gain.cpp",
+            "vesper_native_plugin_entry",
+        ),
+    ] {
+        let directory = parent.path().join(language);
+        let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
+            .args(["plugin", "new"])
+            .arg(&directory)
+            .args([
+                "--plugin-id",
+                "dev.vesper.native-example",
+                "--language",
+                language,
+            ])
+            .output()
+            .expect("create native scaffold");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("scaffold report");
+        assert_eq!(report["abiMajor"], 2);
+        assert_eq!(report["language"], language);
+        let build = fs::read_to_string(directory.join(build_file)).expect("build manifest");
+        let source = fs::read_to_string(directory.join(source_file)).expect("native source");
+        assert!(!build.contains("path ="));
+        assert!(source.contains(export));
+        assert!(!directory.join("vesper-plugin.toml").exists());
+    }
 }
 
 #[test]
-fn plugin_new_refuses_overwrite_and_unsupported_wasm_capability() {
+fn plugin_new_refuses_overwrite_and_rejects_retired_transport() {
     let parent = tempfile::tempdir().expect("temporary scaffold parent");
     let existing = parent.path().join("existing");
     fs::create_dir(&existing).expect("create existing directory");
@@ -16670,18 +16456,7 @@ fn plugin_new_refuses_overwrite_and_unsupported_wasm_capability() {
     let overwrite = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["plugin", "new"])
         .arg(&existing)
-        .args([
-            "--plugin-id",
-            "dev.vesper.example",
-            "--publisher",
-            "dev.vesper",
-            "--license",
-            "Apache-2.0",
-            "--transport",
-            "native",
-            "--capability",
-            "event-hook",
-        ])
+        .args(["--plugin-id", "dev.vesper.example"])
         .output()
         .expect("refuse scaffold overwrite");
     assert_eq!(overwrite.status.code(), Some(3));
@@ -16695,21 +16470,10 @@ fn plugin_new_refuses_overwrite_and_unsupported_wasm_capability() {
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["plugin", "new"])
         .arg(&unsupported)
-        .args([
-            "--plugin-id",
-            "dev.vesper.example",
-            "--publisher",
-            "dev.vesper",
-            "--license",
-            "Apache-2.0",
-            "--transport",
-            "wasm",
-            "--capability",
-            "decoder",
-        ])
+        .args(["--plugin-id", "dev.vesper.example", "--transport", "wasm"])
         .output()
-        .expect("reject WASM decoder scaffold");
-    assert_eq!(output.status.code(), Some(4));
+        .expect("reject retired plugin transport");
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(!unsupported.exists());
 }
@@ -16721,16 +16485,16 @@ fn plugin_build_stages_the_single_cargo_cdylib_atomically() {
     let manifest_path = directory.path().join("vesper-plugin.toml");
     let cargo_manifest = directory.path().join("Cargo.toml");
     let fake_cargo = directory.path().join("fake cargo.sh");
-    let cargo_artifact = directory.path().join("Cargo 输出.wasm");
-    let staged_artifact = directory.path().join("dist/fixture.wasm");
-    fs::write(&manifest_path, wasm_build_manifest("dist/fixture.wasm"))
+    let cargo_artifact = directory.path().join("Cargo 输出.dylib");
+    let staged_artifact = directory.path().join("dist/fixture.dylib");
+    fs::write(&manifest_path, native_build_manifest("dist/fixture.dylib"))
         .expect("write build manifest");
     fs::write(
         &cargo_manifest,
         "[package]\nname='fixture'\nversion='0.1.0'\n",
     )
     .expect("write Cargo manifest");
-    fs::write(&cargo_artifact, b"new wasm component").expect("write Cargo artifact");
+    fs::write(&cargo_artifact, b"new shared library").expect("write Cargo artifact");
     fs::create_dir(directory.path().join("dist")).expect("create existing dist");
     fs::write(&staged_artifact, b"stale artifact").expect("write stale artifact");
     write_executable_script(
@@ -16759,12 +16523,12 @@ printf '{"reason":"build-finished","success":true}\n'
     assert!(output.stderr.is_empty());
     assert_eq!(
         fs::read(&staged_artifact).expect("read staged artifact"),
-        b"new wasm component"
+        b"new shared library"
     );
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("build report JSON");
-    assert_eq!(report["transport"], "wasm");
-    assert_eq!(report["target"], "wasm32-wasip2");
+    assert_eq!(report["transport"], "native");
+    assert_eq!(report["target"], "aarch64-apple-darwin");
     assert_eq!(report["profile"], "dev");
     assert_eq!(report["cargoTargetName"], "fixture");
     assert_eq!(report["bytes"], 18);
@@ -16782,16 +16546,16 @@ fn plugin_build_supports_separate_descriptor_and_cargo_directories() {
     let cargo_manifest = cargo_directory.join("Cargo.toml");
     let fake_cargo = directory.path().join("fake cargo.sh");
     let cargo_log = directory.path().join("cargo invocation.log");
-    let cargo_artifact = directory.path().join("Cargo output.wasm");
-    let staged_artifact = descriptor_directory.join("dist/fixture.wasm");
-    fs::write(&manifest_path, wasm_build_manifest("dist/fixture.wasm"))
+    let cargo_artifact = directory.path().join("Cargo output.dylib");
+    let staged_artifact = descriptor_directory.join("dist/fixture.dylib");
+    fs::write(&manifest_path, native_build_manifest("dist/fixture.dylib"))
         .expect("write build manifest");
     fs::write(
         &cargo_manifest,
         "[package]\nname='fixture'\nversion='0.1.0'\n",
     )
     .expect("write Cargo manifest");
-    fs::write(&cargo_artifact, b"split wasm component").expect("write Cargo artifact");
+    fs::write(&cargo_artifact, b"split shared library").expect("write Cargo artifact");
     write_executable_script(
         &fake_cargo,
         r#"#!/bin/sh
@@ -16821,7 +16585,7 @@ printf '{"reason":"build-finished","success":true}\n'
     assert!(output.stderr.is_empty());
     assert_eq!(
         fs::read(&staged_artifact).expect("read staged artifact"),
-        b"split wasm component"
+        b"split shared library"
     );
     let invocation = fs::read_to_string(&cargo_log).expect("read Cargo invocation log");
     let invocation_lines = invocation.lines().collect::<Vec<_>>();
@@ -16846,8 +16610,8 @@ fn plugin_build_failure_and_artifact_ambiguity_use_stable_exit_codes() {
     let manifest_path = directory.path().join("vesper-plugin.toml");
     let cargo_manifest = directory.path().join("Cargo.toml");
     let fake_cargo = directory.path().join("fake-cargo.sh");
-    let staged_artifact = directory.path().join("dist/fixture.wasm");
-    fs::write(&manifest_path, wasm_build_manifest("dist/fixture.wasm"))
+    let staged_artifact = directory.path().join("dist/fixture.dylib");
+    fs::write(&manifest_path, native_build_manifest("dist/fixture.dylib"))
         .expect("write build manifest");
     fs::write(
         &cargo_manifest,
@@ -16874,8 +16638,8 @@ fn plugin_build_failure_and_artifact_ambiguity_use_stable_exit_codes() {
         b"keep old artifact"
     );
 
-    let first = directory.path().join("first.wasm");
-    let second = directory.path().join("second.wasm");
+    let first = directory.path().join("first.dylib");
+    let second = directory.path().join("second.dylib");
     fs::write(&first, b"first").expect("write first artifact");
     fs::write(&second, b"second").expect("write second artifact");
     write_executable_script(
@@ -16918,7 +16682,7 @@ fn plugin_build_ctrl_c_reaps_the_cargo_process_group() {
     let fake_cargo = directory.path().join("fake-cargo.sh");
     let cargo_pid_path = directory.path().join("cargo.pid");
     let descendant_pid_path = directory.path().join("descendant.pid");
-    fs::write(&manifest_path, wasm_build_manifest("dist/fixture.wasm"))
+    fs::write(&manifest_path, native_build_manifest("dist/fixture.dylib"))
         .expect("write build manifest");
     fs::write(
         directory.path().join("Cargo.toml"),
@@ -17068,10 +16832,7 @@ capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instan
     assert_eq!(report["schemaVersion"], 1);
     assert_eq!(report["pluginId"], "dev.vesper.fixture");
     assert_eq!(report["pluginVersion"], "1.2.3");
-    assert_eq!(
-        report["migrationVersion"],
-        "vesper-plugin-runtime-rewrite-v1"
-    );
+    assert_eq!(report["migrationVersion"], "vesper-native-plugin");
     assert_eq!(report["descriptorSha256"].as_str().map(str::len), Some(64));
     assert_eq!(
         report["requires"][0]["service"],
@@ -17081,14 +16842,14 @@ capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instan
     assert_eq!(report["artifacts"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         report["artifacts"][0]["migration_version"],
-        "vesper-plugin-runtime-rewrite-v1"
+        "vesper-native-plugin"
     );
     assert!(report.get("workerOutput").is_none());
 }
 
 #[test]
 fn incompatible_manifest_inspect_and_check_report_migration_context() {
-    let source = manifest("dev.vesper.fixture").replace("abi_major = 1", "abi_major = 2");
+    let source = manifest("dev.vesper.fixture").replace("abi_major = 2", "abi_major = 1");
     let path = temporary_manifest(&source);
     let missing_artifact = path.with_extension("missing.dylib");
 
@@ -17111,10 +16872,7 @@ fn incompatible_manifest_inspect_and_check_report_migration_context() {
         assert_eq!(report["outcome"], "compatibilityFailure");
         assert_eq!(report["compatible"], false);
         assert_eq!(report["pluginId"], "dev.vesper.fixture");
-        assert_eq!(
-            report["migrationVersion"],
-            "vesper-plugin-runtime-rewrite-v1"
-        );
+        assert_eq!(report["migrationVersion"], "vesper-native-plugin");
         let compatibility = report["checks"]
             .as_array()
             .and_then(|checks| {
@@ -17127,7 +16885,7 @@ fn incompatible_manifest_inspect_and_check_report_migration_context() {
             .as_str()
             .expect("compatibility message");
         assert!(message.contains("dev.vesper.fixture"));
-        assert!(message.contains("vesper-plugin-runtime-rewrite-v1"));
+        assert!(message.contains("vesper-native-plugin"));
         assert!(report.get("workerOutput").is_none());
         assert!(
             String::from_utf8(output.stderr)
@@ -17195,7 +16953,7 @@ fn native_fixture_inspect_and_check_use_a_fresh_worker() {
             serde_json::from_slice(&output.stdout).expect("native fixture report JSON");
         assert_eq!(report["outcome"], "passed");
         assert_eq!(report["runtimePluginId"], "dev.vesper.plugin-fixture");
-        assert_eq!(report["interfaces"].as_array().map(Vec::len), Some(3));
+        assert_eq!(report["interfaces"].as_array().map(Vec::len), Some(1));
         assert!(report["workerOutput"]["stdoutBytes"].is_number());
     }
     let _ = fs::remove_file(manifest_path);
@@ -17411,167 +17169,6 @@ fn output_option_atomically_replaces_an_existing_file() {
     let _ = fs::remove_file(output_path);
 }
 
-#[test]
-fn key_package_verify_install_list_and_uninstall_form_a_trusted_workflow() {
-    let directory = tempfile::tempdir().expect("temporary plugin project");
-    let manifest_path = directory.path().join("vesper-plugin.toml");
-    let artifact_path = directory.path().join("fixture plugin.dylib");
-    let signing_key_path = directory.path().join("publisher-key.json");
-    let trust_store_path = directory.path().join("trust-store.json");
-    let package_path = directory.path().join("fixture.vesper-plugin");
-    fs::write(&manifest_path, package_manifest()).expect("write package manifest");
-    fs::write(&artifact_path, b"fixture native artifact").expect("write artifact");
-    fs::write(directory.path().join("LICENSE"), b"Apache-2.0\n").expect("write license");
-    fs::write(directory.path().join("NOTICE"), b"Fixture notice\n").expect("write notice");
-
-    let key_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "key", "generate", "--publisher"])
-        .arg("dev.vesper.publisher")
-        .arg("--signing-key-output")
-        .arg(&signing_key_path)
-        .arg("--trust-store-output")
-        .arg(&trust_store_path)
-        .output()
-        .expect("generate plugin signing key");
-    assert_eq!(key_output.status.code(), Some(0));
-    assert!(key_output.stderr.is_empty());
-    assert!(signing_key_path.is_file());
-    assert!(trust_store_path.is_file());
-    let key_report: serde_json::Value =
-        serde_json::from_slice(&key_output.stdout).expect("key report JSON");
-    assert_eq!(key_report["publisher"], "dev.vesper.publisher");
-    assert_eq!(key_report["keyId"].as_str().map(str::len), Some(64));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&signing_key_path)
-                .expect("signing key metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-
-    let package_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "package"])
-        .arg(&manifest_path)
-        .arg("--signing-key")
-        .arg(&signing_key_path)
-        .arg("--output")
-        .arg(&package_path)
-        .output()
-        .expect("build signed plugin package");
-    assert_eq!(package_output.status.code(), Some(0));
-    assert!(package_output.stderr.is_empty());
-    assert!(package_path.is_file());
-    let package_report: serde_json::Value =
-        serde_json::from_slice(&package_output.stdout).expect("package report JSON");
-    assert_eq!(package_report["plugin_id"], "dev.vesper.fixture");
-    assert_eq!(package_report["artifact_count"], 1);
-
-    let verify_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "verify"])
-        .arg(&package_path)
-        .arg("--trust-store")
-        .arg(&trust_store_path)
-        .output()
-        .expect("verify signed plugin package");
-    assert_eq!(verify_output.status.code(), Some(0));
-    assert!(verify_output.stderr.is_empty());
-    let verification: serde_json::Value =
-        serde_json::from_slice(&verify_output.stdout).expect("verification JSON");
-    assert_eq!(verification["plugin_id"], "dev.vesper.fixture");
-    assert_eq!(
-        verification["package_sha256"],
-        package_report["package_sha256"]
-    );
-
-    let install_root = directory.path().join("installed-plugins");
-    let install_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "install"])
-        .arg(&package_path)
-        .arg("--trust-store")
-        .arg(&trust_store_path)
-        .arg("--root")
-        .arg(&install_root)
-        .output()
-        .expect("install signed plugin package");
-    assert_eq!(install_output.status.code(), Some(0));
-    assert!(install_output.stderr.is_empty());
-    let install_report: serde_json::Value =
-        serde_json::from_slice(&install_output.stdout).expect("install report JSON");
-    assert_eq!(install_report["plugin_id"], "dev.vesper.fixture");
-    assert_eq!(install_report["version"], "1.2.3");
-    assert_eq!(install_report["already_installed"], false);
-    assert!(
-        install_report["install_path"]
-            .as_str()
-            .map(PathBuf::from)
-            .is_some_and(|path| path.is_dir())
-    );
-
-    let list_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "list", "--root"])
-        .arg(&install_root)
-        .output()
-        .expect("list installed plugins");
-    assert_eq!(list_output.status.code(), Some(0));
-    assert!(list_output.stderr.is_empty());
-    let installed: serde_json::Value =
-        serde_json::from_slice(&list_output.stdout).expect("installed plugin list JSON");
-    assert_eq!(installed.as_array().map(Vec::len), Some(1));
-    assert_eq!(installed[0]["plugin_id"], "dev.vesper.fixture");
-    assert_eq!(
-        installed[0]["package_sha256"],
-        package_report["package_sha256"]
-    );
-
-    let uninstall_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args([
-            "plugin",
-            "uninstall",
-            "--plugin-id",
-            "dev.vesper.fixture",
-            "--version",
-            "1.2.3",
-            "--root",
-        ])
-        .arg(&install_root)
-        .output()
-        .expect("uninstall plugin");
-    assert_eq!(uninstall_output.status.code(), Some(0));
-    assert!(uninstall_output.stderr.is_empty());
-    let uninstall_report: serde_json::Value =
-        serde_json::from_slice(&uninstall_output.stdout).expect("uninstall report JSON");
-    assert_eq!(uninstall_report["removed"], true);
-
-    let empty_list_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "list", "--root"])
-        .arg(&install_root)
-        .output()
-        .expect("list plugins after uninstall");
-    assert_eq!(empty_list_output.status.code(), Some(0));
-    assert!(empty_list_output.stderr.is_empty());
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&empty_list_output.stdout)
-            .expect("empty installed plugin list JSON"),
-        serde_json::json!([])
-    );
-
-    let descriptor_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "descriptor"])
-        .arg(&manifest_path)
-        .output()
-        .expect("emit descriptor from package project");
-    assert_eq!(descriptor_output.status.code(), Some(0));
-    let descriptor: serde_json::Value =
-        serde_json::from_slice(&descriptor_output.stdout).expect("descriptor JSON");
-    assert!(descriptor.get("artifacts").is_none());
-    assert!(descriptor.get("package_files").is_none());
-}
-
 #[cfg(unix)]
 #[test]
 fn json_path_preflight_rejects_non_utf8_before_mutating_state() {
@@ -17590,84 +17187,29 @@ fn json_path_preflight_rejects_non_utf8_before_mutating_state() {
         );
     };
 
-    let invalid_package_output = invalid_path(b"package-\xff.vesper-plugin");
+    let invalid_scaffold_directory = invalid_path(b"scaffold-\xff");
     assert_preflight(
         Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "package"])
-            .arg(directory.path().join("missing.toml"))
-            .arg("--signing-key")
-            .arg(directory.path().join("missing-key.json"))
-            .arg("--output")
-            .arg(&invalid_package_output)
+            .args(["plugin", "new", "--plugin-id", "dev.vesper.fixture"])
+            .arg(&invalid_scaffold_directory)
             .output()
-            .expect("preflight package output"),
+            .expect("preflight scaffold output"),
     );
-    assert!(!invalid_package_output.exists());
+    assert!(!invalid_scaffold_directory.exists());
 
-    let invalid_package_input = invalid_path(b"package-input-\xff.vesper-plugin");
+    let manifest_path = directory.path().join("vesper-plugin.toml");
+    fs::write(&manifest_path, native_build_manifest("dist/fixture.dylib")).expect("write manifest");
+    let invalid_cargo_manifest = invalid_path(b"Cargo-\xff.toml");
     assert_preflight(
         Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "verify"])
-            .arg(&invalid_package_input)
-            .arg("--trust-store")
-            .arg(directory.path().join("missing-trust.json"))
+            .args(["plugin", "build"])
+            .arg(&manifest_path)
+            .arg("--cargo-manifest")
+            .arg(&invalid_cargo_manifest)
             .output()
-            .expect("preflight verify input"),
+            .expect("preflight Cargo manifest"),
     );
-
-    let invalid_install_root = invalid_path(b"install-\xff");
-    assert_preflight(
-        Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "install"])
-            .arg(directory.path().join("missing.vesper-plugin"))
-            .arg("--trust-store")
-            .arg(directory.path().join("missing-trust.json"))
-            .arg("--root")
-            .arg(&invalid_install_root)
-            .output()
-            .expect("preflight install root"),
-    );
-    assert!(!invalid_install_root.exists());
-
-    assert_preflight(
-        Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "list", "--root"])
-            .arg(invalid_path(b"list-\xff"))
-            .output()
-            .expect("preflight list root"),
-    );
-
-    let signing_key_path = directory.path().join("publisher-key.json");
-    let invalid_trust_store_path = invalid_path(b"trust-\xff.json");
-    assert_preflight(
-        Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "key", "generate", "--publisher"])
-            .arg("dev.vesper.publisher")
-            .arg("--signing-key-output")
-            .arg(&signing_key_path)
-            .arg("--trust-store-output")
-            .arg(&invalid_trust_store_path)
-            .output()
-            .expect("preflight trust store output"),
-    );
-    assert!(!signing_key_path.exists());
-    assert!(!invalid_trust_store_path.exists());
-
-    let invalid_signing_key_path = invalid_path(b"key-\xff.json");
-    let trust_store_path = directory.path().join("trust-store.json");
-    assert_preflight(
-        Command::new(env!("CARGO_BIN_EXE_vesper"))
-            .args(["plugin", "key", "generate", "--publisher"])
-            .arg("dev.vesper.publisher")
-            .arg("--signing-key-output")
-            .arg(&invalid_signing_key_path)
-            .arg("--trust-store-output")
-            .arg(&trust_store_path)
-            .output()
-            .expect("preflight signing key output"),
-    );
-    assert!(!invalid_signing_key_path.exists());
-    assert!(!trust_store_path.exists());
+    assert!(!directory.path().join("dist").exists());
 }
 
 #[test]
@@ -17683,7 +17225,6 @@ fn mobile_release_downloads_every_published_swift_package_binary() {
         "VesperFFmpegAVUtil.xcframework.zip",
         "VesperPlayerRemuxFfmpegPlugin.xcframework.zip",
         "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
-        "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
     ] {
         assert!(
             workflow.contains(&format!("--pattern {asset}")),
@@ -17713,33 +17254,14 @@ fn gradle_build_tasks_reference_the_published_cli_package_name() {
 }
 
 #[test]
-fn sample_hosts_build_and_register_the_performance_diagnostics_plugin() {
-    for relative in [
-        "examples/android-compose-host/app/build.gradle.kts",
-        "examples/flutter-host/android/app/build.gradle.kts",
-    ] {
-        let source = fs::read_to_string(workspace_root().join(relative))
-            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
-        for required in [
-            "buildPlayerPerformanceDiagnosticsAndroidPlugin",
-            "performance-diagnostics-plugin",
-            "plugins/performance-diagnostics/vesper-plugin.toml",
-            "io.github.umbrella22.vesper.performance-diagnostics",
-            "vesper_performance_diagnostics",
-            ":vesper-player-kit-performance-diagnostics",
-        ] {
-            assert!(
-                source.contains(required),
-                "{relative} does not wire performance diagnostics token {required}",
-            );
-        }
+fn ios_and_android_release_help_omit_retired_diagnostics_commands() {
+    for platform in ["ios", "android"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
+            .args([platform, "--help"])
+            .output()
+            .expect("show platform help");
+        assert!(output.status.success());
+        let help = String::from_utf8(output.stdout).expect("UTF-8 platform help");
+        assert!(!help.contains("performance-diagnostics-plugin"));
     }
-
-    let ios_project =
-        fs::read_to_string(workspace_root().join("examples/ios-swift-host/project.yml"))
-            .expect("read iOS Swift host project");
-    assert!(
-        ios_project.contains("VesperPlayerOptionalPlugins/Artifacts/VesperPlayerPerformanceDiagnosticsPlugin.xcframework"),
-        "iOS Swift host does not embed the performance diagnostics framework",
-    );
 }

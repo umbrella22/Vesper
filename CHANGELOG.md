@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-11-23
+
+<!-- release-notes:en -->
+
+### Breaking changes
+
+- Native plugins now use `vesper_native_plugin_entry` and the typed interfaces
+  in `vesper_plugin.h`. Rebuild and repackage existing native plugins with the
+  current author API. See the [native plugin migration guide](lib/doc/native-plugin-migration.md).
+- Replace the retired FrameProcessor and EventHook plugin interfaces with
+  `VideoFilter` and host-language playback and benchmark callbacks.
+- Remove the separate performance diagnostics distribution modules for Android,
+  iOS, and Flutter. The host kits retain their playback and benchmark callbacks.
+
+### Changed
+
+- Use the shared native media pipeline for the experimental SDK-managed route.
+  Media3 and AVPlayer continue to execute production mobile playback.
+
+### Fixed
+
+- Base Android relative seeks on the current playback timeline. Report seek
+  adjustment, failure, retry, and live-window recovery through playback events.
+- Preserve frame leases through delayed GPU completion during seeking and decoder
+  teardown. Use the platform presentation fallback for unsupported filter inputs.
+- Report an unsupported native-frame configuration on Android and fall back to
+  Media3 when native-frame playback is preferred.
+- Update `url` to 2.5.9 to address RUSTSEC-2026-0592.
+
+<!-- release-notes:zh-CN -->
+
+### 破坏性变更
+
+- 原生插件改用 `vesper_native_plugin_entry` 和 `vesper_plugin.h` 中的类型化接口。
+  现有原生插件需要使用当前 author API 重新构建和打包。参见[原生插件迁移指南](lib/doc/native-plugin-migration.md)。
+- 旧 FrameProcessor 和 EventHook 插件接口由 `VideoFilter` 以及宿主语言的播放与 benchmark 回调替代。
+- 移除 Android、iOS 和 Flutter 的独立性能诊断分发模块。Host kit 继续提供播放与 benchmark 回调。
+
+### 变更
+
+- 实验性的 SDK-managed 路线使用共享原生媒体管线。移动端生产播放继续由 Media3 和 AVPlayer 执行。
+
+### 修复
+
+- Android 相对 seek 以当前播放时间线为基准，并通过播放事件报告 seek 调整、失败、重试和直播窗口恢复。
+- 在 seek 和解码器释放期间持有帧租约，直至延迟的 GPU 命令完成。不支持滤镜处理的帧走平台呈现回退。
+- Android 报告不支持的 native-frame 配置，并在优先使用 native-frame 的模式下回退到 Media3。
+- 将 `url` 更新至 2.5.9，修复 RUSTSEC-2026-0592。
+
 ## 0.10.0 - 2026-11-21
 
 <!-- release-notes:en -->

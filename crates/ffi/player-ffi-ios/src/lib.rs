@@ -19,15 +19,10 @@ use player_platform_mobile::{
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource_with_diagnostics,
 };
-use player_plugin::{PipelineEvent, PluginReference, ProcessorProgress};
-use player_plugin_abi::{
-    VESPER_INTERFACE_MAJOR, VESPER_INTERFACE_MINOR, VESPER_PLUGIN_ABI_MAJOR,
-    VESPER_PLUGIN_ABI_MINOR,
-};
-use player_plugin_loader::BenchmarkSinkPluginSession;
+use player_plugin::ProcessorProgress;
+use player_plugin_abi::{VESPER_PLUGIN_ABI_MAJOR, VESPER_PLUGIN_ABI_MINOR};
 use player_runtime::{
-    DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PipelineEventDispatcher,
-    PipelineEventHookRegistration, PipelineEventHookReportBatch, PlayerError, PreloadBudget,
+    DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PlayerError, PreloadBudget,
     SourceNormalizerMode,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
@@ -38,6 +33,7 @@ use player_runtime::{
 
 mod conversions;
 mod handles;
+mod native_frame_audio;
 mod native_frame_pipeline;
 mod plugin_registry;
 mod rtsp;
@@ -63,6 +59,44 @@ fn parse_mobile_native_plugin_artifacts_json(
     player_platform_mobile::parse_mobile_native_plugin_artifacts_json(json, |handle| {
         plugin_registry::clone_plugin_registry(handle)
     })
+}
+
+/// Opens a fixed-block processor from a single verified bundle registry reference.
+///
+/// # Safety
+/// `binding` must point to `length` readable UTF-8 bytes for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_audio_open(
+    binding: *const c_char,
+    length: usize,
+    sample_rate: u32,
+    channels: u16,
+    epoch: u64,
+) -> u64 {
+    // SAFETY: the caller lends the byte range for the full call.
+    unsafe { native_frame_audio::open(binding, length, sample_rate, channels, epoch) }
+}
+
+/// Processes one writable, interleaved PCM block in place.
+///
+/// # Safety
+/// `samples` must point to `sample_count` initialized floats that are writable
+/// and exclusively borrowed until this call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_audio_process(
+    handle: u64,
+    samples: *mut f32,
+    sample_count: usize,
+    pts_us: i64,
+) -> bool {
+    // SAFETY: the caller exclusively lends the sample range for the full call.
+    unsafe { native_frame_audio::process(handle, samples, sample_count, pts_us) }
+}
+
+/// Retires the audio processor handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_ios_native_frame_audio_close(handle: u64) {
+    native_frame_audio::close(handle);
 }
 
 /// Creates an iOS playback-sequence session.
@@ -317,15 +351,12 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             );
             return PlayerFfiCallStatus::Error;
         }
-        // SAFETY: `out_json` was validated non-null above; the slot is
-        // writable per the FFI contract and is owned by the caller for the
-        // duration of this call.
-        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        // SAFETY: the non-null slot is writable per the FFI contract.
         unsafe { clear_c_string_output(out_json) };
 
         let interface_version = serde_json::json!({
-            "major": VESPER_INTERFACE_MAJOR,
-            "minor": VESPER_INTERFACE_MINOR,
+            "major": 1,
+            "minor": 0,
         });
         let summary = serde_json::json!({
             "rootAbi": {
@@ -334,19 +365,16 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             },
             "typedInterfaces": {
                 "postDownloadProcessor": interface_version,
-                "pipelineEventHook": interface_version,
-                "benchmarkSink": interface_version,
-                "nativeDecoder": interface_version,
-                "frameProcessor": interface_version,
+                "videoDecoder": interface_version,
+                "videoFilter": interface_version,
+                "audioProcessor": interface_version,
                 "sourceNormalizerPacket": interface_version,
                 "sourceNormalizerResource": interface_version,
             },
-            "abiSemantics": "stable-root-typed-interfaces",
+            "abiSemantics": "native-typed-interfaces",
             "capabilityMatching": "explicit-plugin-reference",
         });
-        // SAFETY: `out_json` was validated non-null above; the slot is
-        // writable per the FFI contract.
-        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        // SAFETY: the non-null slot is writable per the FFI contract.
         unsafe { write_c_string_output(out_json, summary.to_string()) };
         PlayerFfiCallStatus::Ok
     })
@@ -854,7 +882,6 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             config.run_post_processors_on_completion,
             registry.as_ref(),
             config.post_download_plugin_references,
-            config.event_hook_plugin_references,
         ) {
             Ok(session) => session,
             Err(error) => {
@@ -2730,738 +2757,6 @@ pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
 
 /// # Safety
 ///
-/// The reference JSON and output pointers must remain valid for the duration of
-/// this call. `plugin_registry_handle` must identify a live embedded registry.
-/// The caller owns returned error strings and the session handle according to
-/// the matching FFI free/dispose functions.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_session_create_with_references_json(
-    plugin_registry_handle: u64,
-    references_json: *const c_char,
-    out_handle: *mut u64,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        if out_handle.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_handle was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-        // SAFETY: `out_handle` was validated non-null above and is writable
-        // for the duration of this call.
-        unsafe { ptr::write(out_handle, 0) };
-        let Some(references_json) =
-            (match read_optional_c_string(references_json, "references_json") {
-                Ok(value) => value,
-                Err(error) => {
-                    write_error(out_error, error);
-                    return PlayerFfiCallStatus::Error;
-                }
-            })
-        else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "references_json was null",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        };
-        let references = match serde_json::from_str::<Vec<PluginReference>>(&references_json) {
-            Ok(references) => references,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        &format!("invalid benchmark plugin references JSON: {error}"),
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let registry = match plugin_registry::clone_plugin_registry(plugin_registry_handle) {
-            Ok(registry) => registry,
-            Err(message) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &message),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let session = match BenchmarkSinkPluginSession::from_registry(registry.as_ref(), references)
-        {
-            Ok(session) => session,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let Ok(mut sessions) = lock_registry(benchmark_sessions()) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "benchmark session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        };
-        let handle = sessions.insert(IosBenchmarkSinkSession::new(Mutex::new(session)));
-        // SAFETY: `out_handle` was validated non-null above and is writable for this call.
-        unsafe {
-            ptr::write(out_handle, handle);
-        }
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// # Safety
-///
-/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
-/// the parameter is documented as optional or point to valid objects allocated by the
-/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
-/// handle access according to the host binding contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
-    ffi_void(|| {
-        // Remove the entry under the registry lock, but drop the returned
-        // `Arc` (and therefore the inner `BenchmarkSinkPluginSession`, whose
-        // `Drop` invokes plugin FFI `destroy`) *after* releasing the registry
-        // lock. Dropping it under the lock would serialize every benchmark
-        // session process-wide and block create/dispose for the plugin call.
-        let session = {
-            if let Ok(mut sessions) = lock_registry(benchmark_sessions()) {
-                sessions.remove(handle)
-            } else {
-                None
-            }
-        };
-        drop(session);
-    });
-}
-
-/// # Safety
-///
-/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
-/// the parameter is documented as optional or point to valid objects allocated by the
-/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
-/// handle access according to the host binding contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
-    handle: u64,
-    batch_json: *const c_char,
-    out_report_json: *mut *mut c_char,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        if batch_json.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "batch_json was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-        if out_report_json.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-
-        // SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
-        let batch_json = match unsafe { CStr::from_ptr(batch_json) }.to_str() {
-            Ok(value) => value,
-            Err(_) => {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidUtf8,
-                        "batch_json was not valid UTF-8",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-
-        // Clone the Arc under the registry lock, then drop the registry lock
-        // before invoking the plugin FFI call. `on_event_batch_report_json`
-        // crosses into a dlopen-loaded plugin; holding the global registry
-        // mutex across that call would serialize every benchmark session
-        // process-wide and block create/dispose operations.
-        let session = {
-            let Ok(sessions) = lock_registry(benchmark_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "benchmark session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid benchmark session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let session = match session.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        let report_json = match session.on_event_batch_report_json(batch_json) {
-            Ok(value) => value,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-
-        // SAFETY: `out_report_json` was validated non-null at the function
-        // entry point; the slot is writable per the FFI contract.
-        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
-        unsafe { write_c_string_output(out_report_json, report_json) };
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// # Safety
-///
-/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
-/// the parameter is documented as optional or point to valid objects allocated by the
-/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
-/// handle access according to the host binding contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
-    handle: u64,
-    out_report_json: *mut *mut c_char,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        if out_report_json.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-
-        // Clone the Arc under the registry lock, then drop the registry lock
-        // before invoking the plugin FFI call. `flush_json` crosses into a
-        // dlopen-loaded plugin; holding the global registry mutex across that
-        // call would serialize every benchmark session process-wide.
-        let session = {
-            let Ok(sessions) = lock_registry(benchmark_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "benchmark session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid benchmark session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let session = match session.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        let report_json = match session.flush_json() {
-            Ok(value) => value,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-
-        // SAFETY: `out_report_json` was validated non-null at the function
-        // entry point; the slot is writable per the FFI contract.
-        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
-        unsafe { write_c_string_output(out_report_json, report_json) };
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// # Safety
-///
-/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
-/// the parameter is documented as optional or point to valid objects allocated by the
-/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
-/// handle access according to the host binding contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_char) {
-    ffi_void(|| {
-        let mut value = value;
-        free_c_string(&mut value);
-    });
-}
-
-/// Creates an iOS playback EventHook session from a checked embedded registry
-/// and explicit capability references. The returned handle uses the same
-/// slot+generation semantics as the other iOS FFI sessions and must be disposed with
-/// `player_ffi_ios_playback_event_hook_session_dispose`.
-///
-/// # Safety
-///
-/// `references_json` must be valid for the duration of this call.
-/// `plugin_registry_handle` must identify a live embedded registry. Output
-/// pointers must point to writable caller-owned storage.
-#[allow(
-    clippy::result_large_err,
-    reason = "plugin resolution errors retain the shared loader error contract until this FFI entry point serializes them"
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_create(
-    plugin_registry_handle: u64,
-    references_json: *const c_char,
-    out_handle: *mut u64,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        if out_handle.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_handle was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-        // SAFETY: `out_handle` was validated non-null above and is writable for this call.
-        unsafe { ptr::write(out_handle, 0) };
-
-        let references_json = match read_optional_c_string(references_json, "references_json") {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::NullPointer, "references_json was null"),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-            Err(error) => {
-                write_error(out_error, error);
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let references = match serde_json::from_str::<Vec<PluginReference>>(&references_json) {
-            Ok(value) => value,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        &format!("invalid playback event-hook references JSON: {error}"),
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        if references.len() > player_runtime::MAX_PIPELINE_EVENT_HOOKS {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "playback event-hook references exceed the 256-hook limit",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-        let registry = match plugin_registry::clone_plugin_registry(plugin_registry_handle) {
-            Ok(registry) => registry,
-            Err(message) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &message),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let registrations = match references
-            .iter()
-            .map(|reference| {
-                registry
-                    .resolve_pipeline_event_hook(reference)
-                    .map(|resolved| {
-                        PipelineEventHookRegistration::new(
-                            resolved.reference().clone(),
-                            resolved.capability(),
-                        )
-                    })
-            })
-            .collect::<Result<Result<Vec<_>, _>, _>>()
-        {
-            Ok(Ok(registrations)) => registrations,
-            Ok(Err(error)) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-
-        let session = std::sync::Arc::new(Mutex::new(PipelineEventDispatcher::new(registrations)));
-        let Ok(mut sessions) = lock_registry(playback_event_hook_sessions()) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "playback event-hook session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        };
-        let handle = sessions.insert(session);
-        // SAFETY: `out_handle` was validated non-null above and remains writable for this call.
-        unsafe { ptr::write(out_handle, handle) };
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// Enqueues one validated playback EventHook event. Dispatch is non-blocking and uses the shared
-/// bounded queue; overflow is reported through the drained report batch counters.
-///
-/// # Safety
-///
-/// `event_json` must point to a valid null-terminated UTF-8 JSON string for the duration of this
-/// call. `out_error` must point to writable caller-owned storage.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_submit_json(
-    handle: u64,
-    event_json: *const c_char,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        let event_json = match read_optional_c_string(event_json, "event_json") {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::NullPointer, "event_json was null"),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-            Err(error) => {
-                write_error(out_error, error);
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let event = match serde_json::from_str::<PipelineEvent>(&event_json) {
-            Ok(value) => value,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        &format!("invalid playback event JSON: {error}"),
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            }
-        };
-        let session = {
-            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "playback event-hook session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid playback event-hook session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let dispatcher = session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        dispatcher.enqueue(event);
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// Flushes queued playback EventHook events before a lifecycle transition.
-///
-/// # Safety
-///
-/// `out_error` must point to writable caller-owned storage.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_flush(
-    handle: u64,
-    timeout_ms: u64,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        let session = {
-            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "playback event-hook session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid playback event-hook session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let dispatcher = session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if dispatcher.flush(Duration::from_millis(timeout_ms)) {
-            PlayerFfiCallStatus::Ok
-        } else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::Timeout,
-                    "playback event-hook flush timed out or the worker failed",
-                ),
-            );
-            PlayerFfiCallStatus::Error
-        }
-    })
-}
-
-/// Drains structured playback EventHook reports into a Rust-owned JSON string.
-///
-/// # Safety
-///
-/// `out_report_json` must point to writable caller-owned storage. The returned string must be
-/// released with `player_ffi_ios_playback_event_hook_report_string_free`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_drain_json(
-    handle: u64,
-    out_report_json: *mut *mut c_char,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        if out_report_json.is_null() {
-            write_error(
-                out_error,
-                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
-            );
-            return PlayerFfiCallStatus::Error;
-        }
-        // SAFETY: `out_report_json` was validated non-null above and is writable for this call.
-        unsafe { clear_c_string_output(out_report_json) };
-        let session = {
-            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "playback event-hook session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid playback event-hook session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let dispatcher = session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Keep the wire shape aligned with the Android host and benchmark report APIs.
-        let report_json = pipeline_event_hook_reports_json(dispatcher.drain_reports());
-        // SAFETY: `out_report_json` was validated non-null above and is writable for this call.
-        unsafe { write_c_string_output(out_report_json, report_json) };
-        PlayerFfiCallStatus::Ok
-    })
-}
-
-/// Closes the playback EventHook worker. Closing is idempotent; the handle remains valid until
-/// `player_ffi_ios_playback_event_hook_session_dispose` is called.
-///
-/// # Safety
-///
-/// `out_error` must point to writable caller-owned storage.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_close(
-    handle: u64,
-    out_error: *mut PlayerFfiError,
-) -> PlayerFfiCallStatus {
-    ffi_call(out_error, || {
-        let session = {
-            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "playback event-hook session registry lock failed",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            let Some(session) = sessions.get(handle).cloned() else {
-                write_error(
-                    out_error,
-                    owned_api_error(
-                        PlayerFfiErrorCode::InvalidArgument,
-                        "invalid playback event-hook session handle",
-                    ),
-                );
-                return PlayerFfiCallStatus::Error;
-            };
-            session
-        };
-        let dispatcher = session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if dispatcher.close() {
-            PlayerFfiCallStatus::Ok
-        } else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::BackendFailure,
-                    "playback event-hook worker could not be closed",
-                ),
-            );
-            PlayerFfiCallStatus::Error
-        }
-    })
-}
-
-/// Disposes a playback EventHook session. The registry entry is removed before the dispatcher
-/// is dropped so plugin cleanup never runs while the global registry mutex is held.
-///
-/// # Safety
-///
-/// `handle` must be a handle returned by the matching create function, or zero/stale for a no-op.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_dispose(handle: u64) {
-    ffi_void(|| {
-        let session = {
-            if let Ok(mut sessions) = lock_registry(playback_event_hook_sessions()) {
-                sessions.remove(handle)
-            } else {
-                None
-            }
-        };
-        drop(session);
-    });
-}
-
-/// Frees a report JSON string returned by the playback EventHook session.
-///
-/// # Safety
-///
-/// `value` must be null or a pointer returned by the matching drain function.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_report_string_free(value: *mut c_char) {
-    ffi_void(|| {
-        let mut value = value;
-        free_c_string(&mut value);
-    });
-}
-
-fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> String {
-    let reports = batch
-        .reports
-        .into_iter()
-        .map(|report| {
-            let result = match report.result {
-                Ok(outcome) => serde_json::json!({
-                    "status": if outcome.accepted { "accepted" } else { "rejected" },
-                    "outcome": outcome,
-                }),
-                Err(error) => serde_json::json!({
-                    "status": "error",
-                    "error": error.report_projection(),
-                }),
-            };
-            serde_json::json!({
-                "pluginId": report.reference.plugin_id(),
-                "capabilityInstanceId": report.reference.capability_instance_id(),
-                "transport": report.reference.transport(),
-                "runId": report.run_id,
-                "sessionId": report.session_id,
-                "eventName": report.event_name,
-                "result": result,
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "reports": reports,
-        "droppedEvents": batch.dropped_events,
-        "droppedReports": batch.dropped_reports,
-        "dispatcherError": batch.dispatcher_error,
-    })
-    .to_string()
-}
-
-/// # Safety
-///
 /// String and array pointers must be valid for the duration of the call. The returned JSON string
 /// is allocated by Rust and must be released with `player_ffi_mobile_plugin_diagnostics_string_free`.
 #[unsafe(no_mangle)]
@@ -3922,7 +3217,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
     native_frame_mode: u32,
     decoder_plugin_artifacts_json: *const c_char,
     frame_plugin_artifacts_json: *const c_char,
-    max_in_flight_frames: u32,
+    _max_in_flight_frames: u32,
     out_handle: *mut u64,
     out_json: *mut *mut c_char,
     out_error: *mut PlayerFfiError,
@@ -4039,7 +3334,6 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
             frame_processor_plugin_artifacts: frame_plugin_artifacts,
             frame_processor_plugin_library_paths: Vec::new(),
             native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
-            max_in_flight_frames: (max_in_flight_frames > 0).then_some(max_in_flight_frames),
         }) {
             Ok(session) => session,
             Err(error) => {
@@ -4243,6 +3537,153 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
         }
         PlayerFfiCallStatus::Ok
     })
+}
+
+#[cfg(target_os = "ios")]
+unsafe extern "C" {
+    fn vesper_reference_metal_host_create(
+        device: *const std::ffi::c_void,
+        queue: *const std::ffi::c_void,
+        cache: *mut std::ffi::c_void,
+        parameters: *const u8,
+        parameters_len: usize,
+    ) -> *mut std::ffi::c_void;
+    fn vesper_reference_metal_host_destroy(host: *mut std::ffi::c_void);
+    fn vesper_reference_metal_host_encode(
+        host: *mut std::ffi::c_void,
+        command: *const std::ffi::c_void,
+        pixel_buffer: *mut std::ffi::c_void,
+        luma: *const std::ffi::c_void,
+        chroma: *const std::ffi::c_void,
+        out_texture: *mut *const std::ffi::c_void,
+    ) -> u32;
+}
+
+/// Creates a reference filter for a host's Metal device and command queue.
+///
+/// # Safety
+///
+/// Device and queue must be live Metal objects on the same device. A nonzero
+/// parameter length requires that many readable bytes for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_metal_filter_create(
+    device: *const std::ffi::c_void,
+    queue: *const std::ffi::c_void,
+    parameters: *const u8,
+    parameters_len: usize,
+) -> *mut std::ffi::c_void {
+    #[cfg(target_os = "ios")]
+    // SAFETY: the caller supplies Metal objects and a readable parameter buffer.
+    unsafe {
+        vesper_reference_metal_host_create(
+            device,
+            queue,
+            ptr::null_mut(),
+            parameters,
+            parameters_len,
+        )
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (device, queue, parameters, parameters_len);
+        ptr::null_mut()
+    }
+}
+
+/// Destroys a reference Metal filter on its presentation thread.
+///
+/// # Safety
+///
+/// A non-null host must come from the matching create function and may be
+/// destroyed only once. No new encode call may run during destruction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_metal_filter_destroy(host: *mut std::ffi::c_void) {
+    #[cfg(target_os = "ios")]
+    // SAFETY: the caller transfers the live host reference back once.
+    unsafe {
+        vesper_reference_metal_host_destroy(host);
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = host;
+}
+
+/// Encodes the reference filter on the caller's Metal command buffer.
+///
+/// # Safety
+///
+/// The host, command buffer and pixel buffer must be live and associated with
+/// the same presenter. A non-null output pointer must be writable. The result
+/// texture is borrowed for this command buffer. Encode calls are serialized
+/// on the host's presentation thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_metal_filter_encode(
+    host: *mut std::ffi::c_void,
+    command: *const std::ffi::c_void,
+    pixel_buffer: *mut std::ffi::c_void,
+    out_texture: *mut *const std::ffi::c_void,
+) -> u32 {
+    #[cfg(target_os = "ios")]
+    // SAFETY: the caller upholds the Metal object, serialization and output contracts.
+    unsafe {
+        vesper_reference_metal_host_encode(
+            host,
+            command,
+            pixel_buffer,
+            ptr::null(),
+            ptr::null(),
+            out_texture,
+        )
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (host, command, pixel_buffer);
+        if !out_texture.is_null() {
+            // SAFETY: a non-null output pointer is writable by contract.
+            unsafe { out_texture.write(ptr::null()) };
+        }
+        player_plugin_abi::VESPER_ERR_UNSUPPORTED
+    }
+}
+
+/// Transfers the decoder lease of a pending frame to its presenter. A null
+/// result indicates a stale or legacy frame, or a lease already transferred.
+#[unsafe(no_mangle)]
+pub extern "C" fn player_ffi_ios_native_frame_pipeline_take_presentation_lease(
+    handle: u64,
+    frame_handle: u64,
+) -> *mut std::ffi::c_void {
+    std::panic::catch_unwind(|| {
+        let session = lock_registry(native_frame_pipeline_sessions())
+            .ok()?
+            .get(handle)
+            .cloned()?;
+        let lease = session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take_presentation_lease(frame_handle)?;
+        Some(Box::into_raw(Box::new(lease)).cast())
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(ptr::null_mut())
+}
+
+/// # Safety
+///
+/// A non-null `lease` must come from the take function and may be finished
+/// exactly once, after every consumer has finished reading the frame.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_finish_presentation_lease(
+    lease: *mut std::ffi::c_void,
+    presented: bool,
+) {
+    if lease.is_null() {
+        return;
+    }
+    // SAFETY: Swift transfers back the uniquely owned pointer from the take function.
+    let lease =
+        unsafe { Box::from_raw(lease.cast::<player_plugin_loader::native::NativeVideoFrame>()) };
+    lease.complete(presented);
 }
 
 /// # Safety

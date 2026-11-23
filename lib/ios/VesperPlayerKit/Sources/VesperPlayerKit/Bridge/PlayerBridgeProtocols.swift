@@ -67,7 +67,6 @@ protocol PlayerBridge: AnyObject {
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
     func setAudioSessionInterrupted(_ interrupted: Bool)
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent]
-    func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch
     func benchmarkSummary() -> VesperBenchmarkSummary
     func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool
     func startPerformanceDiagnostics(
@@ -124,12 +123,73 @@ extension PlayerBridge {
         try? setAbrPolicy(policy, expectedCatalogRevision: nil)
     }
 
-    func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
-        VesperPipelineEventHookReportBatch()
-    }
-
     func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
         true
+    }
+
+    func startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe
+    ) async throws -> String {
+        guard (0...2_048).contains(configuration.maxRawEvents) else {
+            throw VesperPerformanceDiagnosticsError(
+                code: .invalidConfiguration,
+                message: "maxRawEvents must be between 0 and 2048."
+            )
+        }
+        guard probe == .iosDisplayLink || probe == .flutterFrameTiming else {
+            throw VesperPerformanceDiagnosticsError(
+                code: .probeUnavailable,
+                message: "The requested iOS performance probe is unavailable."
+            )
+        }
+        throw VesperPerformanceDiagnosticsError(
+            code: .artifactUnavailable,
+            message: "The Vesper performance diagnostics plugin has been retired."
+        )
+    }
+
+    func updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState
+    ) throws {
+        throw inactivePerformanceDiagnostics()
+    }
+
+    func recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Bool?
+    ) throws {
+        throw inactivePerformanceDiagnostics()
+    }
+
+    func submitPerformanceFrameSamples(
+        runId: String,
+        samples: [VesperPerformanceFrameSample]
+    ) throws {
+        throw inactivePerformanceDiagnostics()
+    }
+
+    func performanceDiagnosticsSnapshot(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        throw inactivePerformanceDiagnostics()
+    }
+
+    func stopPerformanceDiagnostics(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        throw inactivePerformanceDiagnostics()
+    }
+
+    private func inactivePerformanceDiagnostics() -> VesperPerformanceDiagnosticsError {
+        VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "The performance diagnostics session is no longer active."
+        )
     }
 
     func sampleTimeline() -> TimelineUiState? {

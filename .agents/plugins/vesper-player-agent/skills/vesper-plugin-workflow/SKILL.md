@@ -22,12 +22,11 @@ Use the native ABI adapter pattern:
 
 1. `player-plugin-abi` owns the raw C-compatible root and typed tables;
    `player-plugin` is the safe Rust author SDK and macro re-export.
-2. The plugin exports `vesper_plugin_entry` with one `VesperPluginRoot`.
+2. The plugin exports `vesper_native_plugin_entry` returning a `VesperPluginRoot`.
 3. The loader validates the root and queries typed interfaces by stable
    interface ID; `plugin_kind` is diagnostic classification only and never
    selects an ABI table.
-4. The loader constructs a checked wrapper, such as
-   `CheckedXxxApi::try_from`.
+4. `player_plugin_loader::native` exposes the checked capability.
 5. The hot path holds a checked wrapper or trait object, not repeated `Option`
    function pointer checks.
 
@@ -38,14 +37,9 @@ mutate a catalog or plan, and never use a live owner as catalog metadata.
 Do not scatter "missing required function" checks across runtime calls. Validate
 once at load/open time, then rely on the checked wrapper.
 
-Authoring is limited to Rust Native and Rust WASM. The safe Rust SDK is the
-only public author interface; there is no C or C++ author SDK. Internal C ABI,
-iOS bridge FFI, and FFmpeg C dependencies remain host integration details.
-
-WASM components use the Wasmtime Component Model and `wasm32-wasip2`. WASM
-supports only `PipelineEventHook` and `BenchmarkSink`, with bounded structured
-events and diagnostics. The host grants no filesystem, network, environment,
-process, clock, random, DRM, PCM, native-frame, or media-byte access.
+Rust plugins use `player_plugin::author` and `#[player_plugin::export]`.
+C99 and C++17 plugins use the generated `include/vesper_plugin.h`.
+Playback events and benchmark observations use host-language callbacks.
 
 ## Extension Point Judgment
 
@@ -55,7 +49,6 @@ Prefer host-safe and runtime-safe extension points for new feature requests:
 - event listener
 - subtitle discovery or sidecar loading
 - post-download processor
-- pipeline event hook
 - Native AudioProcessor for an explicit SDK-managed PCM route
 
 Be cautious with low-level demux, decode, and render plugin boundaries. The repo
@@ -76,17 +69,14 @@ public boundary.
 - Opaque native handles need explicit platform invariants and `SAFETY` comments.
 - Do not accept integer handles as trusted pointers without a validation story
   such as `QueryInterface`, retain/release pairing, or equivalent ownership.
-- Keep the root and typed interface headers stable and versioned. Minor
-  versions are append-only; incompatible signatures or ownership require a new
-  major interface version.
+- Keep the root ABI major and `struct_size` validation. Extend tables by
+  appending fields and preserve existing callback signatures and ownership.
 - Plugin-driven loops that skip packets, poll callbacks, retry reads, or drain
   events must have bounded iterations or timeout-backed diagnostics.
 - Loader-side plugin calls should treat panic or ABI violation as a poisoned
   plugin instance unless the ABI explicitly proves reuse is safe.
-- `PluginInvocationPolicy` is checked before lookup: standard policy allows
-  Native for `RealtimeMedia`, permits bounded Native/WASM `Observer` and
-  `Offline`, and rejects WASM realtime media with a typed error. There is no
-  silent transport fallback.
+- Plugin activation requires a native artifact implementing the declared
+  capability. The SDK reports unsupported transports as typed failures.
 
 ## Diagnostics
 
@@ -110,11 +100,10 @@ or `dlopen` details in structured diagnostics.
 Pick commands based on touched crates:
 
 ```sh
-cargo check -p player-plugin-abi -p player-plugin -p player-plugin-loader
-cargo test -p player-plugin-abi -p player-plugin -p player-plugin-loader
-cargo test -p player-plugin -p player-plugin-loader -p player-plugin-package
-./scripts/vesper desktop verify-decoder-diagnostics debug all
-./scripts/vesper desktop verify-decoder-videotoolbox debug loader
+cargo check -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader
+cargo test -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader
+./scripts/vesper plugin header-verify
+./scripts/vesper desktop verify-decoder-videotoolbox loader
 ```
 
 For remux plugins, also run the matching FFmpeg packaging and no-remux baseline

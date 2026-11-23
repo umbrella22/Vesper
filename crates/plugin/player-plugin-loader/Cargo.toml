@@ -1,6 +1,6 @@
 [package]
 name = "vesper-player-plugin-loader"
-description = "Checked native and WASM loader wrappers for the Vesper plugin platform."
+description = "Checked native loader wrappers for the Vesper plugin platform."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -10,24 +10,18 @@ repository.workspace = true
 rust-version.workspace = true
 documentation = "https://docs.rs/vesper-player-plugin-loader"
 readme = "README.md"
-keywords = ["vesper", "media", "plugin", "loader", "wasm"]
+keywords = ["vesper", "media", "plugin", "loader"]
 categories = ["multimedia", "development-tools"]
 publish = ["crates-io"]
 
 [lib]
 name = "player_plugin_loader"
 
-[features]
-installed-catalog = ["dep:player-plugin-package"]
-wasm = ["dep:player-plugin-wasm-host"]
-
 [dependencies]
 hex.workspace = true
 libloading.workspace = true
-player-plugin = { package = "vesper-player-plugin", version = "0.10.0", path = "../player-plugin" }
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.10.0", path = "../player-plugin-abi" }
-player-plugin-package = { package = "vesper-player-plugin-package", version = "0.10.0", path = "../player-plugin-package", optional = true }
-player-plugin-wasm-host = { package = "vesper-player-plugin-wasm-host", version = "0.10.0", path = "../player-plugin-wasm-host", optional = true }
+player-plugin = { package = "vesper-player-plugin", version = "0.11.0", path = "../player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.11.0", path = "../player-plugin-abi" }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
@@ -39,6 +33,3 @@ zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-wat.workspace = true
-wit-component.workspace = true
-wit-parser.workspace = true

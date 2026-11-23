@@ -17,16 +17,14 @@ artifact stage is not published-consumer evidence.
 
 ```sh
 cargo check --workspace
-cargo test -p player-plugin-abi -p player-plugin -p player-plugin-loader
-cargo test -p player-plugin-package -p player-plugin-wasm-host -p player-cli
+cargo test -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader -p vesper-player-cli
+./scripts/vesper plugin header-verify
 ./scripts/vesper ffi generate
 ./scripts/vesper ffi verify
 ```
 
 For native plugins, also run the relevant `plugin inspect`/`plugin check` path
-and a real dynamic-library smoke when the artifact exists. For WASM, use
-`wasm32-wasip2` components and verify that no unsupported WASI imports are
-present.
+and a real dynamic-library smoke when the artifact exists.
 
 For the rewritten runtime, include focused coverage for
 `PluginCatalogImporter`/`PluginCatalogIndex` atomic import and digest checks,
@@ -36,8 +34,7 @@ For the rewritten runtime, include focused coverage for
 behavior. Add `AudioProcessor` loader/fixture tests for finite-positive rate
 validation, `PreservePitch`/`FollowRate` capability checks, queue
 backpressure, flush/close, and preservation of PCM PTS/discontinuity markers.
-Run WASM host tests with `PluginInvocationWorkload::Observer` or `Offline` and
-assert that `RealtimeMedia` is rejected before artifact lookup.
+Verify that retired entry exports and incompatible ABI roots are rejected.
 
 Online dependency resolution may refresh caches once. On the first
 network-related failure, preserve the original error and rerun the identical

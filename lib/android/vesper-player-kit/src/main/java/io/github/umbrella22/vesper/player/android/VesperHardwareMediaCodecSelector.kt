@@ -51,8 +51,9 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
         }.getOrDefault(false)
     }
 
-    fun preferredHardwareDecoderName(mimeType: String?): String? {
-        if (mimeType.isNullOrBlank() || !MimeTypes.isVideo(mimeType)) {
+    // Called synchronously by JNI once the source normalizer identifies the selected track.
+    fun preferredHardwareDecoderName(mimeType: String, width: Int, height: Int): String? {
+        if (!MimeTypes.isVideo(mimeType) || width <= 0 || height <= 0) {
             return null
         }
         return runCatching {
@@ -60,9 +61,11 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
                 mimeType,
                 requiresSecureDecoder = false,
                 requiresTunnelingDecoder = false,
-            ).firstOrNull()?.name
+            ).firstOrNull { decoder ->
+                decoder.capabilities?.videoCapabilities?.isSizeSupported(width, height) == true
+            }?.name
         }.onFailure { error ->
-            Log.w(TAG, "failed to select hardware decoder for $mimeType failure=${diagnosticPlaybackFailure(error)}")
+            Log.w(TAG, "failed to select hardware decoder for $mimeType at ${width}x$height failure=${diagnosticPlaybackFailure(error)}")
         }.getOrNull()
     }
 

@@ -32,7 +32,6 @@ optional_frameworks=(
   VesperFFmpegAVUtil
   VesperPlayerRemuxFfmpegPlugin
   VesperPlayerSourceNormalizerFfmpegPlugin
-  VesperPlayerPerformanceDiagnosticsPlugin
 )
 for framework in "${optional_frameworks[@]}"; do
   artifact="$optional_artifacts/$framework.xcframework"
@@ -73,10 +72,6 @@ let package = Package(
                 "VesperFFmpegAVUtil",
             ]
         ),
-        .library(
-            name: "VesperPlayerPerformanceDiagnostics",
-            targets: ["VesperPlayerPerformanceDiagnosticsPlugin"]
-        ),
     ],
     targets: [
         .binaryTarget(
@@ -87,7 +82,8 @@ let package = Package(
             name: "VesperPlayerKitBridgeShim",
             dependencies: ["VesperPlayerFFI"],
             path: "Sources/VesperPlayerKitBridgeShim",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("c++")]
         ),
         .target(
             name: "VesperPlayerKit",
@@ -120,10 +116,6 @@ let package = Package(
             name: "VesperPlayerSourceNormalizerFfmpegPlugin",
             path: "Artifacts/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework"
         ),
-        .binaryTarget(
-            name: "VesperPlayerPerformanceDiagnosticsPlugin",
-            path: "Artifacts/VesperPlayerPerformanceDiagnosticsPlugin.xcframework"
-        ),
     ]
 )
 SWIFT
@@ -134,7 +126,6 @@ jq -e '
     "VesperPlayerFFI",
     "VesperPlayerKit",
     "VesperPlayerKitUI",
-    "VesperPlayerPerformanceDiagnostics",
     "VesperPlayerRemuxFfmpeg",
     "VesperPlayerSourceNormalizerFfmpeg"
   ]
@@ -144,7 +135,6 @@ manifests=(
   "$repository_root/lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift"
   "$repository_root/lib/flutter/vesper_player_source_normalizer_ffmpeg/ios/vesper_player_source_normalizer_ffmpeg/Package.swift"
   "$repository_root/lib/flutter/vesper_player_remux_ffmpeg/ios/vesper_player_remux_ffmpeg/Package.swift"
-  "$repository_root/lib/flutter/vesper_player_performance_diagnostics/ios/vesper_player_performance_diagnostics/Package.swift"
 )
 for manifest in "${manifests[@]}"; do
   ruby - "$manifest" "$local_package" <<'RUBY'

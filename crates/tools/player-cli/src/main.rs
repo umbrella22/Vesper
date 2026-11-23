@@ -53,11 +53,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use cli_error::{CliError, CliResult};
 use player_cli::{
     EmbeddedRegistryFragment, EmbeddedRegistryTarget, PluginArtifactTransport, PluginDescriptor,
-    PluginProjectManifest, PluginSigningKey, PluginTrustStore, build_signed_plugin_package,
-    install_verified_plugin_package, list_installed_plugins, uninstall_plugin,
-    verify_signed_plugin_package,
+    PluginProjectManifest,
 };
-use player_plugin_wasm_host::MAX_WASM_PLUGIN_COMPONENT_BYTES;
 
 use plugin_build::{
     PluginArtifactSelector, PluginBuildError, PluginBuildProfile, PluginBuildRequest,
@@ -65,9 +62,9 @@ use plugin_build::{
 };
 use plugin_inspection::{
     PluginInspectionOperation, PluginInspectionOutcome, PluginInspectionReport, inspect_manifest,
-    inspect_project_catalog, inspect_wasm_plugin,
+    inspect_project_catalog,
 };
-use plugin_scaffold::{PluginScaffoldCapability, PluginScaffoldRequest, create_plugin_scaffold};
+use plugin_scaffold::{PluginScaffoldLanguage, PluginScaffoldRequest, create_plugin_scaffold};
 use worker_protocol::{
     PLUGIN_WORKER_START_GATE, PluginWorkerRequest, PluginWorkerResponse, read_worker_request,
     write_worker_response,
@@ -81,8 +78,6 @@ type PathHook<'a> = &'a mut dyn FnMut(&Path);
 type TempDirIoHook<'a> = &'a mut dyn FnMut(tempfile::TempDir) -> io::Result<()>;
 
 const MAX_PLUGIN_MANIFEST_BYTES: usize = 1024 * 1024;
-const MAX_PLUGIN_KEY_FILE_BYTES: usize = 64 * 1024;
-const MAX_PLUGIN_TRUST_STORE_BYTES: usize = 1024 * 1024;
 
 #[cfg(test)]
 fn source_checkout_root() -> Option<PathBuf> {
@@ -157,12 +152,6 @@ enum IosCommand {
     /// Builds the FFmpeg-backed source normalizer plugin libraries.
     #[command(name = "source-normalizer-plugin")]
     SourceNormalizerPlugin(IosPluginBuildArgs),
-    /// Builds the diagnostic frame processor plugin libraries.
-    #[command(name = "frame-processor-plugin")]
-    FrameProcessorPlugin(IosPluginBuildArgs),
-    /// Builds the performance diagnostics BenchmarkSink plugin libraries.
-    #[command(name = "performance-diagnostics-plugin")]
-    PerformanceDiagnosticsPlugin(IosPluginBuildArgs),
     /// Builds the internal VideoToolbox decoder plugin libraries.
     #[command(name = "decoder-videotoolbox-plugin", hide = true)]
     DecoderVideoToolboxPlugin(IosPluginBuildArgs),
@@ -172,12 +161,6 @@ enum IosCommand {
     /// Builds and stages the FFmpeg-backed source normalizer XCFramework release.
     #[command(name = "stage-source-normalizer-plugin-release")]
     StageSourceNormalizerPluginRelease(IosPluginReleaseArgs),
-    /// Builds and stages the diagnostic frame processor XCFramework release.
-    #[command(name = "stage-frame-processor-plugin-release")]
-    StageFrameProcessorPluginRelease(IosPluginReleaseArgs),
-    /// Builds and stages the performance diagnostics XCFramework release.
-    #[command(name = "stage-performance-diagnostics-plugin-release")]
-    StagePerformanceDiagnosticsPluginRelease(IosPluginReleaseArgs),
     /// Builds and stages the internal VideoToolbox decoder XCFramework release.
     #[command(name = "stage-decoder-videotoolbox-plugin-release", hide = true)]
     StageDecoderVideoToolboxPluginRelease(IosPluginReleaseArgs),
@@ -480,12 +463,6 @@ enum AndroidCommand {
     /// Builds the Android MediaCodec decoder plugin.
     #[command(name = "decoder-mediacodec-plugin")]
     DecoderMediacodecPlugin(AndroidWorkerArgs),
-    /// Builds the Android diagnostic FrameProcessor plugin.
-    #[command(name = "frame-processor-plugin")]
-    FrameProcessorPlugin(AndroidWorkerArgs),
-    /// Builds the Android performance diagnostics BenchmarkSink plugin.
-    #[command(name = "performance-diagnostics-plugin")]
-    PerformanceDiagnosticsPlugin(AndroidWorkerArgs),
     /// Stages Android host-kit release artifacts.
     #[command(name = "stage-release")]
     StageRelease(AndroidStageReleaseArgs),
@@ -798,9 +775,6 @@ enum DesktopCommand {
     /// Verifies the FFmpeg-backed post-download remux plugin.
     #[command(name = "verify-remux")]
     VerifyRemux(DesktopVerifyRemuxArgs),
-    /// Verifies the decoder fixture plugin and macOS runtime diagnostics.
-    #[command(name = "verify-decoder-diagnostics")]
-    VerifyDecoderDiagnostics(DesktopVerifyRemuxArgs),
     /// Verifies the Windows D3D11 decoder plugin.
     #[command(name = "verify-decoder-d3d11")]
     VerifyDecoderD3d11(DesktopVerifyRemuxArgs),
@@ -1082,9 +1056,13 @@ struct PluginArgs {
 
 #[derive(Debug, Subcommand)]
 enum PluginCommand {
-    /// Creates a safe Rust Native or WASM plugin project.
+    /// Generates the public C plugin ABI header.
+    HeaderGenerate,
+    /// Checks the plugin header and compiles it as C99 and C++17.
+    HeaderVerify,
+    /// Creates a native gain plugin project.
     New(PluginNewArgs),
-    /// Builds and stages one manifest-declared Rust plugin artifact.
+    /// Builds and stages one manifest-declared plugin artifact.
     Build(PluginBuildArgs),
     /// Inspects manifest metadata or one concrete plugin artifact.
     Inspect(PluginInspectArgs),
@@ -1096,18 +1074,6 @@ enum PluginCommand {
     Descriptor(PluginDescriptorArgs),
     /// Emits one validated mobile registry fragment as JSON.
     RegistryFragment(PluginRegistryFragmentArgs),
-    /// Builds a deterministic signed Vesper plugin package.
-    Package(PluginPackageArgs),
-    /// Verifies package integrity and publisher trust without loading code.
-    Verify(PluginVerifyArgs),
-    /// Verifies and atomically installs a signed plugin package.
-    Install(PluginInstallArgs),
-    /// Removes one installed plugin version.
-    Uninstall(PluginUninstallArgs),
-    /// Lists verified plugin versions installed under a root.
-    List(PluginListArgs),
-    /// Manages publisher signing keys.
-    Key(PluginKeyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -1148,18 +1114,12 @@ struct PluginNewArgs {
     /// Valid reverse-DNS plugin identity.
     #[arg(long)]
     plugin_id: String,
-    /// Valid reverse-DNS publisher identity.
-    #[arg(long)]
-    publisher: String,
     /// SPDX license expression for the plugin project.
-    #[arg(long)]
+    #[arg(long, default_value = "Apache-2.0")]
     license: String,
-    /// Rust plugin transport.
-    #[arg(long, value_enum)]
-    transport: PluginTransportArg,
-    /// Capability to scaffold; pass the option more than once for multiple capabilities.
-    #[arg(long, value_enum, required = true)]
-    capability: Vec<PluginScaffoldCapability>,
+    /// Language and native build system for the scaffold.
+    #[arg(long, value_enum, default_value = "rust")]
+    language: PluginScaffoldLanguage,
     /// Human-readable plugin name.
     #[arg(long)]
     name: Option<String>,
@@ -1168,14 +1128,12 @@ struct PluginNewArgs {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum PluginTransportArg {
     Native,
-    Wasm,
 }
 
 impl From<PluginTransportArg> for PluginArtifactTransport {
     fn from(value: PluginTransportArg) -> Self {
         match value {
             PluginTransportArg::Native => Self::Native,
-            PluginTransportArg::Wasm => Self::Wasm,
         }
     }
 }
@@ -1187,7 +1145,7 @@ struct PluginInspectArgs {
     /// Validates and reports manifest metadata without accessing an artifact.
     #[arg(long, conflicts_with_all = ["artifact", "transport"])]
     manifest_only: bool,
-    /// Native library or WASM component to inspect.
+    /// Native library to inspect.
     #[arg(
         long,
         required_unless_present = "manifest_only",
@@ -1216,7 +1174,7 @@ struct PluginInspectArgs {
 struct PluginCheckArgs {
     /// Path to vesper-plugin.toml.
     manifest: PathBuf,
-    /// Native library or WASM component to check.
+    /// Native library to check.
     #[arg(long)]
     artifact: PathBuf,
     /// Artifact transport; selection is never automatic.
@@ -1243,81 +1201,6 @@ struct PluginWorkerArgs {
     request: PathBuf,
     #[arg(long, hide = true)]
     response: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginPackageArgs {
-    /// Path to vesper-plugin.toml.
-    manifest: PathBuf,
-    /// Publisher signing key generated by vesper.
-    #[arg(long)]
-    signing_key: PathBuf,
-    /// Destination with the .vesper-plugin extension.
-    #[arg(long)]
-    output: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginVerifyArgs {
-    /// Signed .vesper-plugin package.
-    package: PathBuf,
-    /// Host-configured publisher trust store.
-    #[arg(long)]
-    trust_store: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginInstallArgs {
-    /// Signed .vesper-plugin package.
-    package: PathBuf,
-    /// Host-configured publisher trust store.
-    #[arg(long)]
-    trust_store: PathBuf,
-    /// Root directory for verified plugin installations.
-    #[arg(long)]
-    root: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginUninstallArgs {
-    /// Reverse-DNS plugin identity.
-    #[arg(long)]
-    plugin_id: String,
-    /// Exact semantic version to remove.
-    #[arg(long)]
-    version: String,
-    /// Root directory for verified plugin installations.
-    #[arg(long)]
-    root: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginListArgs {
-    /// Root directory for verified plugin installations.
-    #[arg(long)]
-    root: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PluginKeyArgs {
-    #[command(subcommand)]
-    command: PluginKeyCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum PluginKeyCommand {
-    /// Generates a signing key and adds its public key to a trust store.
-    Generate(PluginKeyGenerateArgs),
-}
-
-#[derive(Debug, Args)]
-struct PluginKeyGenerateArgs {
-    #[arg(long)]
-    publisher: String,
-    #[arg(long)]
-    signing_key_output: PathBuf,
-    #[arg(long)]
-    trust_store_output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1380,6 +1263,8 @@ fn run(cli: Cli) -> CliResult<()> {
         Command::Ios(arguments) => run_ios(arguments),
         Command::Ffmpeg(arguments) => run_ffmpeg(arguments),
         Command::Plugin(plugin) => match plugin.command {
+            PluginCommand::HeaderGenerate => run_plugin_header("generate"),
+            PluginCommand::HeaderVerify => run_plugin_header("verify"),
             PluginCommand::New(arguments) => new_plugin(arguments),
             PluginCommand::Build(arguments) => build_plugin(arguments),
             PluginCommand::Inspect(arguments) => inspect_plugin(arguments),
@@ -1387,14 +1272,6 @@ fn run(cli: Cli) -> CliResult<()> {
             PluginCommand::Catalog(arguments) => report_plugin_catalog(arguments),
             PluginCommand::Descriptor(arguments) => emit_descriptor(arguments),
             PluginCommand::RegistryFragment(arguments) => emit_registry_fragment(arguments),
-            PluginCommand::Package(arguments) => package_plugin(arguments),
-            PluginCommand::Verify(arguments) => verify_plugin(arguments),
-            PluginCommand::Install(arguments) => install_plugin(arguments),
-            PluginCommand::Uninstall(arguments) => uninstall_installed_plugin(arguments),
-            PluginCommand::List(arguments) => list_plugins(arguments),
-            PluginCommand::Key(arguments) => match arguments.command {
-                PluginKeyCommand::Generate(arguments) => generate_plugin_key(arguments),
-            },
         },
         Command::Contract(arguments) => run_contract(arguments),
         Command::Ffi(arguments) => run_ffi(arguments),
@@ -1514,18 +1391,6 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
             arguments,
             &mut output,
         ),
-        IosCommand::FrameProcessorPlugin(arguments) => run_ios_plugin_build(
-            requested_root.as_deref(),
-            ios_plugin::IosPluginId::FrameProcessorDiagnostic,
-            arguments,
-            &mut output,
-        ),
-        IosCommand::PerformanceDiagnosticsPlugin(arguments) => run_ios_plugin_build(
-            requested_root.as_deref(),
-            ios_plugin::IosPluginId::PerformanceDiagnostics,
-            arguments,
-            &mut output,
-        ),
         IosCommand::DecoderVideoToolboxPlugin(arguments) => run_ios_plugin_build(
             requested_root.as_deref(),
             ios_plugin::IosPluginId::DecoderVideoToolbox,
@@ -1541,18 +1406,6 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
         IosCommand::StageSourceNormalizerPluginRelease(arguments) => run_ios_plugin_release(
             requested_root.as_deref(),
             ios_plugin::IosPluginId::SourceNormalizerFfmpeg,
-            arguments,
-            &mut output,
-        ),
-        IosCommand::StageFrameProcessorPluginRelease(arguments) => run_ios_plugin_release(
-            requested_root.as_deref(),
-            ios_plugin::IosPluginId::FrameProcessorDiagnostic,
-            arguments,
-            &mut output,
-        ),
-        IosCommand::StagePerformanceDiagnosticsPluginRelease(arguments) => run_ios_plugin_release(
-            requested_root.as_deref(),
-            ios_plugin::IosPluginId::PerformanceDiagnostics,
             arguments,
             &mut output,
         ),
@@ -1879,28 +1732,6 @@ fn run_android(arguments: AndroidArgs) -> CliResult<()> {
             )
             .map_err(map_android_error)
         }
-        AndroidCommand::FrameProcessorPlugin(arguments) => {
-            let stdout = io::stdout();
-            let mut output = stdout.lock();
-            android::build_runtime_free_plugin(
-                &root,
-                "frame-processor-diagnostic",
-                &arguments.arguments,
-                &mut output,
-            )
-            .map_err(map_android_error)
-        }
-        AndroidCommand::PerformanceDiagnosticsPlugin(arguments) => {
-            let stdout = io::stdout();
-            let mut output = stdout.lock();
-            android::build_runtime_free_plugin(
-                &root,
-                "performance-diagnostics",
-                &arguments.arguments,
-                &mut output,
-            )
-            .map_err(map_android_error)
-        }
         AndroidCommand::StageRelease(arguments) => {
             let stdout = io::stdout();
             let mut output = stdout.lock();
@@ -2042,24 +1873,6 @@ fn run_desktop(arguments: DesktopArgs) -> CliResult<()> {
             let stdout = io::stdout();
             let mut output = stdout.lock();
             desktop::verify_remux(&root, &arguments.tokens, &mut output).map_err(
-                |error| match error.kind() {
-                    desktop::DesktopErrorKind::Storage => {
-                        CliError::manifest_or_package(error.to_string())
-                    }
-                    desktop::DesktopErrorKind::Compatibility => {
-                        CliError::compatibility(error.to_string())
-                    }
-                    desktop::DesktopErrorKind::Conformance => {
-                        CliError::conformance(error.to_string())
-                    }
-                    desktop::DesktopErrorKind::Worker => CliError::worker(error.to_string()),
-                },
-            )
-        }
-        DesktopCommand::VerifyDecoderDiagnostics(arguments) => {
-            let stdout = io::stdout();
-            let mut output = stdout.lock();
-            desktop::verify_decoder_diagnostics(&root, &arguments.tokens, &mut output).map_err(
                 |error| match error.kind() {
                     desktop::DesktopErrorKind::Storage => {
                         CliError::manifest_or_package(error.to_string())
@@ -2233,6 +2046,31 @@ fn map_flutter_error(error: flutter::FlutterError) -> CliError {
         flutter::FlutterErrorKind::Conformance => CliError::conformance(error.to_string()),
         flutter::FlutterErrorKind::Worker => CliError::worker(error.to_string()),
     }
+}
+
+fn run_plugin_header(mode: &str) -> CliResult<()> {
+    let root = contract::resolve_repository_root(None)
+        .map_err(|error| CliError::manifest_or_package(error.to_string()))?;
+    let mut command = std::process::Command::new("bash");
+    command.arg(root.join("scripts/plugin-header.sh")).arg(mode);
+    let output = external_process::run_interruptible_capture_with_timeout(
+        &mut command,
+        "plugin header generation and compilation",
+        256 * 1024,
+        256 * 1024,
+        std::time::Duration::from_secs(60),
+    )
+    .map_err(|error| CliError::worker(error.to_string()))?;
+    if !output.status.success() {
+        return Err(CliError::conformance(format!(
+            "plugin header tool exited with {}\n{}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )));
+    }
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    Ok(())
 }
 
 fn run_ffi(arguments: FfiArgs) -> CliResult<()> {
@@ -2468,18 +2306,10 @@ fn new_plugin(arguments: PluginNewArgs) -> CliResult<()> {
         directory: arguments.directory,
         plugin_id: arguments.plugin_id,
         plugin_name: arguments.name,
-        publisher: arguments.publisher,
         license: arguments.license,
-        transport: arguments.transport.into(),
-        capabilities: arguments.capability,
+        language: arguments.language,
     });
-    let report = result.map_err(|error| {
-        if error.is_compatibility() {
-            CliError::compatibility(error.to_string())
-        } else {
-            CliError::manifest_or_package(error.to_string())
-        }
-    })?;
+    let report = result.map_err(|error| CliError::manifest_or_package(error.to_string()))?;
     emit_json_result(&report)
 }
 
@@ -2547,16 +2377,7 @@ fn inspect_or_check_artifact(
             supervise_native_worker(request, native_worker_timeout)?
         }
         PluginArtifactTransport::Wasm => {
-            let bytes = read_bounded_regular_file(
-                artifact,
-                MAX_WASM_PLUGIN_COMPONENT_BYTES,
-                "WASM plugin component",
-            )?;
-            inspect_wasm_plugin(&descriptor, &bytes, operation).map_err(|error| {
-                CliError::worker(format!(
-                    "failed to initialize the WASM plugin host: {error}"
-                ))
-            })?
+            return Err(CliError::compatibility("WASM plugins have been retired"));
         }
     };
     emit_inspection_report(report)
@@ -2641,96 +2462,6 @@ fn emit_registry_fragment(arguments: PluginRegistryFragmentArgs) -> CliResult<()
     emit_bytes(fragment.canonical_json(), arguments.output.as_deref())
 }
 
-fn package_plugin(arguments: PluginPackageArgs) -> CliResult<()> {
-    validate_path_for_json_report(&arguments.output, "plugin package output path")?;
-    let project = read_project_manifest(&arguments.manifest)?;
-    let key_bytes = read_bounded_regular_file(
-        &arguments.signing_key,
-        MAX_PLUGIN_KEY_FILE_BYTES,
-        "plugin signing key",
-    )?;
-    let signing_key = PluginSigningKey::from_json(&key_bytes).map_err(|error| error.to_string())?;
-    let base_directory = arguments
-        .manifest
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let report =
-        build_signed_plugin_package(&project, base_directory, &signing_key, &arguments.output)
-            .map_err(|error| error.to_string())?;
-    emit_json_result(&report)
-}
-
-fn verify_plugin(arguments: PluginVerifyArgs) -> CliResult<()> {
-    validate_path_for_json_report(&arguments.package, "plugin package path")?;
-    let trust_store = read_trust_store(&arguments.trust_store)?;
-    let verified = verify_signed_plugin_package(&arguments.package, &trust_store)
-        .map_err(|error| error.to_string())?;
-    emit_json_result(verified.verification())
-}
-
-fn install_plugin(arguments: PluginInstallArgs) -> CliResult<()> {
-    validate_path_for_json_report(&arguments.root, "plugin install root")?;
-    let trust_store = read_trust_store(&arguments.trust_store)?;
-    let verified = verify_signed_plugin_package(&arguments.package, &trust_store)
-        .map_err(|error| error.to_string())?;
-    let report = install_verified_plugin_package(&verified, &arguments.root)
-        .map_err(|error| error.to_string())?;
-    emit_json_result(&report)
-}
-
-fn uninstall_installed_plugin(arguments: PluginUninstallArgs) -> CliResult<()> {
-    let removed = uninstall_plugin(&arguments.root, &arguments.plugin_id, &arguments.version)
-        .map_err(|error| error.to_string())?;
-    emit_json_result(&serde_json::json!({
-        "plugin_id": arguments.plugin_id,
-        "version": arguments.version,
-        "removed": removed,
-    }))
-}
-
-fn list_plugins(arguments: PluginListArgs) -> CliResult<()> {
-    validate_path_for_json_report(&arguments.root, "plugin install root")?;
-    let plugins = list_installed_plugins(&arguments.root).map_err(|error| error.to_string())?;
-    emit_json_result(&plugins)
-}
-
-fn generate_plugin_key(arguments: PluginKeyGenerateArgs) -> CliResult<()> {
-    validate_path_for_json_report(&arguments.signing_key_output, "signing key output path")?;
-    validate_path_for_json_report(&arguments.trust_store_output, "trust store output path")?;
-    if arguments.signing_key_output == arguments.trust_store_output {
-        return Err(CliError::manifest_or_package(
-            "signing key and trust store outputs must be different paths",
-        ));
-    }
-    let key = PluginSigningKey::generate(arguments.publisher).map_err(|error| error.to_string())?;
-    let mut trust_store = if arguments.trust_store_output.exists() {
-        let bytes = read_bounded_regular_file(
-            &arguments.trust_store_output,
-            MAX_PLUGIN_TRUST_STORE_BYTES,
-            "plugin trust store",
-        )?;
-        PluginTrustStore::from_json(&bytes).map_err(|error| error.to_string())?
-    } else {
-        PluginTrustStore::empty()
-    };
-    trust_store
-        .insert(key.public_key())
-        .map_err(|error| error.to_string())?;
-    let mut key_bytes = key.to_json().map_err(|error| error.to_string())?;
-    key_bytes.push(b'\n');
-    write_new_sensitive_file(&arguments.signing_key_output, &key_bytes)?;
-    let mut trust_bytes = trust_store.to_json().map_err(|error| error.to_string())?;
-    trust_bytes.push(b'\n');
-    emit_bytes(&trust_bytes, Some(&arguments.trust_store_output))?;
-    emit_json_result(&serde_json::json!({
-        "publisher": key.publisher(),
-        "keyId": key.key_id(),
-        "signingKey": arguments.signing_key_output,
-        "trustStore": arguments.trust_store_output,
-    }))
-}
-
 fn validate_path_for_json_report(path: &Path, label: &str) -> CliResult<()> {
     path.to_str().map(|_| ()).ok_or_else(|| {
         CliError::manifest_or_package(format!(
@@ -2795,53 +2526,11 @@ fn emit_bytes(bytes: &[u8], output: Option<&Path>) -> CliResult<()> {
     Ok(())
 }
 
-fn write_new_sensitive_file(path: &Path, bytes: &[u8]) -> CliResult<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    if !parent.is_dir() {
-        return Err(CliError::manifest_or_package(format!(
-            "signing key output directory '{}' is not a directory",
-            parent.display()
-        )));
-    }
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| format!("failed to create signing key staging file: {error}"))?;
-    temporary
-        .write_all(bytes)
-        .and_then(|()| temporary.as_file().sync_all())
-        .map_err(|error| format!("failed to write signing key staging file: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temporary
-            .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("failed to restrict signing key permissions: {error}"))?;
-    }
-    temporary.persist_noclobber(path).map_err(|error| {
-        format!(
-            "refusing to replace signing key '{}': {}",
-            path.display(),
-            error.error
-        )
-    })?;
-    Ok(())
-}
-
 fn read_project_manifest(path: &Path) -> CliResult<PluginProjectManifest> {
     let bytes = read_bounded_regular_file(path, MAX_PLUGIN_MANIFEST_BYTES, "plugin manifest")?;
     let source = String::from_utf8(bytes)
         .map_err(|error| format!("plugin manifest '{}' is not UTF-8: {error}", path.display()))?;
     PluginProjectManifest::from_toml(&source)
-        .map_err(|error| CliError::manifest_or_package(error.to_string()))
-}
-
-fn read_trust_store(path: &Path) -> CliResult<PluginTrustStore> {
-    let bytes =
-        read_bounded_regular_file(path, MAX_PLUGIN_TRUST_STORE_BYTES, "plugin trust store")?;
-    PluginTrustStore::from_json(&bytes)
         .map_err(|error| CliError::manifest_or_package(error.to_string()))
 }
 

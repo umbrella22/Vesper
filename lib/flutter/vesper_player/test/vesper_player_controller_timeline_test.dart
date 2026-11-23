@@ -364,8 +364,6 @@ final class _TimelineTestPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async {
     return VesperPlatformCreateResult(
       playerId: _TimelineTestPlatform.playerId,

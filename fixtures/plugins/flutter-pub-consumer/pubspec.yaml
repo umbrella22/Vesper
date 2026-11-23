@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  vesper_player: 0.10.0
+  vesper_player: 0.11.0
 
 dev_dependencies:
   flutter_test:

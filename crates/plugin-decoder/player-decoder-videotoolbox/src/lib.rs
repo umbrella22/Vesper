@@ -5,22 +5,28 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use player_plugin::{
-    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
-    DecoderSessionConfig, NativeDecoderPluginFactory, NativeDecoderSession,
-    NativeFrameColorMetadata, NativeFramePipelineProfile, Plugin, PluginBuildError,
+    DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderFrameFormat,
+    DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements, NativeFrameColorMetadata,
+    NativeFramePipelineProfile,
+};
+#[cfg(test)]
+use player_plugin::{
+    DecoderError, DecoderSessionConfig, NativeDecoderPluginFactory, NativeDecoderSession,
     normalize_decoder_codec_identifier,
 };
 
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-videotoolbox";
-const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-videotoolbox.native";
 const PLUGIN_NAME: &str = "player-decoder-videotoolbox";
 const VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED: bool =
     cfg!(any(target_os = "macos", target_os = "ios"));
 
+#[cfg(test)]
 #[derive(Debug, Default)]
-struct VideoToolboxDecoderFactory;
+struct VideoToolboxDecoderFactory {
+    borrow_length_prefixed_samples: bool,
+}
 
+#[cfg(test)]
 impl NativeDecoderPluginFactory for VideoToolboxDecoderFactory {
     fn name(&self) -> &str {
         PLUGIN_NAME
@@ -57,7 +63,7 @@ impl NativeDecoderPluginFactory for VideoToolboxDecoderFactory {
                 capability: "cpu-video-frame-output".to_owned(),
             });
         }
-        platform::open_session(config.clone(), codec)
+        platform::open_session(config.clone(), codec, self.borrow_length_prefixed_samples)
     }
 }
 
@@ -129,19 +135,13 @@ fn legacy_color_space_label(color: &NativeFrameColorMetadata) -> Option<String> 
     }
 }
 
-#[player_plugin::export]
-fn videotoolbox_decoder_plugin() -> Result<Plugin, PluginBuildError> {
-    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
-        .with_native_decoder(INSTANCE_ID, VideoToolboxDecoderFactory)?
-        .build()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoCodecKind {
     H264,
     Hevc,
 }
 
+#[cfg(test)]
 fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
     match normalize_decoder_codec_identifier(codec).as_str() {
         "h264" | "avc" | "avc1" | "avc3" => Some(VideoCodecKind::H264),
@@ -152,6 +152,10 @@ fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod platform {
+    mod plugin_export;
+    pub use plugin_export::vesper_native_plugin_entry;
+
+    use std::borrow::Cow;
     use std::collections::VecDeque;
     use std::ffi::c_void;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -261,10 +265,14 @@ mod platform {
 
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
+        #[cfg(target_os = "macos")]
+        static kCFBooleanTrue: CFTypeRef;
         static kCFTypeDictionaryKeyCallBacks: CFDictionaryKeyCallBacks;
         static kCFTypeDictionaryValueCallBacks: CFDictionaryValueCallBacks;
         fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
         fn CFRelease(cf: CFTypeRef);
+        fn CFGetTypeID(cf: CFTypeRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
         fn CFNumberCreate(
             allocator: CFAllocatorRef,
             the_type: i32,
@@ -282,6 +290,17 @@ mod platform {
 
     #[link(name = "CoreVideo", kind = "framework")]
     unsafe extern "C" {
+        static kCVImageBufferColorPrimariesKey: CFStringRef;
+        static kCVImageBufferTransferFunctionKey: CFStringRef;
+        static kCVImageBufferYCbCrMatrixKey: CFStringRef;
+        fn CVBufferGetAttachment(
+            buffer: CVPixelBufferRef,
+            key: CFStringRef,
+            mode: *mut u32,
+        ) -> CFTypeRef;
+        fn CVColorPrimariesGetIntegerCodePointForString(value: CFStringRef) -> i32;
+        fn CVTransferFunctionGetIntegerCodePointForString(value: CFStringRef) -> i32;
+        fn CVYCbCrMatrixGetIntegerCodePointForString(value: CFStringRef) -> i32;
         static kCVPixelBufferPixelFormatTypeKey: CFStringRef;
         static kCVPixelBufferIOSurfacePropertiesKey: CFStringRef;
         fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
@@ -344,6 +363,9 @@ mod platform {
 
     #[link(name = "VideoToolbox", kind = "framework")]
     unsafe extern "C" {
+        #[cfg(target_os = "macos")]
+        static kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: CFStringRef;
+
         fn VTDecompressionSessionCreate(
             allocator: CFAllocatorRef,
             video_format_description: CMFormatDescriptionRef,
@@ -372,11 +394,19 @@ mod platform {
         fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
     }
 
+    #[cfg(test)]
     pub(super) fn open_session(
         config: DecoderSessionConfig,
         codec: VideoCodecKind,
+        borrow_length_prefixed_samples: bool,
     ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
-        Ok(Box::new(VideoToolboxDecoderSession::new(config, codec)?))
+        Ok(Box::new(VideoToolboxDecoderSession::new(
+            config,
+            codec,
+            borrow_length_prefixed_samples,
+            requested_output_format(),
+            false,
+        )?))
     }
 
     struct VideoToolboxDecoderSession {
@@ -387,7 +417,9 @@ mod platform {
         color: Option<NativeFrameColorMetadata>,
         hdr: Option<NativeFrameHdrMetadata>,
         requested_output_format: DecoderFrameFormat,
+        require_hardware: bool,
         bitstream_format: Option<DecoderBitstreamFormat>,
+        borrow_length_prefixed_samples: bool,
         nal_length_size: usize,
         parameter_sets: Vec<Vec<u8>>,
         format_description: CMFormatDescriptionRef,
@@ -404,13 +436,18 @@ mod platform {
     unsafe impl Send for VideoToolboxDecoderSession {}
 
     impl VideoToolboxDecoderSession {
-        fn new(config: DecoderSessionConfig, codec: VideoCodecKind) -> Result<Self, DecoderError> {
+        fn new(
+            config: DecoderSessionConfig,
+            codec: VideoCodecKind,
+            borrow_length_prefixed_samples: bool,
+            requested_output_format: DecoderFrameFormat,
+            require_hardware: bool,
+        ) -> Result<Self, DecoderError> {
             let mut parsed = if config.extradata.is_empty() {
                 None
             } else {
                 Some(parse_extradata(codec, &config.extradata)?)
             };
-            let requested_output_format = requested_output_format();
             let mut session = Self {
                 codec,
                 codec_name: config.codec,
@@ -419,7 +456,9 @@ mod platform {
                 color: config.color,
                 hdr: config.hdr,
                 requested_output_format,
+                require_hardware,
                 bitstream_format: config.bitstream_format,
+                borrow_length_prefixed_samples,
                 nal_length_size: parsed.as_ref().map_or(4, |parsed| parsed.nal_length_size),
                 parameter_sets: parsed
                     .take()
@@ -521,12 +560,7 @@ mod platform {
         fn receive_native_frame(
             &mut self,
         ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
-            let mut frames = pending_frames(&self.callback_state);
-            let Some(frame) = dequeue_pending_native_frame(
-                &mut frames,
-                self.reorder_depth,
-                self.end_of_stream_sent,
-            ) else {
+            let Some(frame) = self.take_ready_frame() else {
                 return if self.end_of_stream_sent {
                     Ok(DecoderReceiveNativeFrameOutput::Eof)
                 } else {
@@ -559,6 +593,7 @@ mod platform {
                     coded_height: None,
                     visible_rect: None,
                     handle_kind: DecoderNativeHandleKind::CvPixelBuffer,
+                    d3d11_subresource_index: None,
                     pipeline_profile: Some(NativeFramePipelineProfile::VideoToolboxCvPixelBuffer),
                     color_space: color.as_ref().and_then(legacy_color_space_label),
                     hdr_metadata: self.hdr.as_ref().map(|hdr| hdr.kind.clone()),
@@ -575,6 +610,11 @@ mod platform {
                 handle: frame.pixel_buffer as usize,
                 lease_token: None,
             }))
+        }
+
+        fn take_ready_frame(&mut self) -> Option<PendingNativeFrame> {
+            let mut frames = pending_frames(&self.callback_state);
+            dequeue_pending_native_frame(&mut frames, self.reorder_depth, self.end_of_stream_sent)
         }
 
         fn flush(&mut self) -> Result<(), DecoderError> {
@@ -657,6 +697,17 @@ mod platform {
                         return Err(error);
                     }
                 };
+            let decoder_specification = match decoder_specification(self.require_hardware) {
+                Ok(specification) => specification,
+                Err(error) => {
+                    // SAFETY: both retained descriptors still belong to this call.
+                    unsafe {
+                        CFRelease(pixel_buffer_attributes);
+                        CFRelease(format_description as CFTypeRef);
+                    }
+                    return Err(error);
+                }
+            };
             let callback_state_ref_con = Arc::into_raw(self.callback_state.clone());
             let callback = VTDecompressionOutputCallbackRecord {
                 decompression_output_callback: Some(decompression_output_callback),
@@ -668,15 +719,19 @@ mod platform {
                 VTDecompressionSessionCreate(
                     ptr::null(),
                     format_description,
-                    ptr::null(),
+                    decoder_specification,
                     pixel_buffer_attributes,
                     &callback,
                     &mut decompression_session,
                 )
             };
-            // SAFETY: pixel_buffer_attributes was created by CoreFoundation for
-            // this session creation call.
-            unsafe { CFRelease(pixel_buffer_attributes as CFTypeRef) };
+            // SAFETY: both dictionaries were allocated for this session creation call.
+            unsafe {
+                CFRelease(pixel_buffer_attributes);
+                if !decoder_specification.is_null() {
+                    CFRelease(decoder_specification);
+                }
+            }
             if status != NO_ERR {
                 // SAFETY: the raw callback state was not transferred to a live
                 // VideoToolbox session because creation failed.
@@ -695,16 +750,24 @@ mod platform {
             Ok(())
         }
 
-        fn normalized_sample_data(&self, data: &[u8]) -> Result<Vec<u8>, DecoderError> {
+        fn normalized_sample_data<'a>(
+            &self,
+            data: &'a [u8],
+        ) -> Result<Cow<'a, [u8]>, DecoderError> {
             match &self.bitstream_format {
                 Some(DecoderBitstreamFormat::AnnexB) => {
-                    annexb_to_length_prefixed(data, self.nal_length_size)
+                    annexb_to_length_prefixed(data, self.nal_length_size).map(Cow::Owned)
                 }
-                Some(DecoderBitstreamFormat::Avcc) | Some(DecoderBitstreamFormat::Hvcc) => {
-                    Ok(data.to_vec())
+                Some(DecoderBitstreamFormat::Avcc | DecoderBitstreamFormat::Hvcc) => {
+                    if self.borrow_length_prefixed_samples {
+                        // CoreMedia takes its own copy in create_sample_buffer.
+                        Ok(Cow::Borrowed(data))
+                    } else {
+                        Ok(Cow::Owned(data.to_vec()))
+                    }
                 }
                 Some(DecoderBitstreamFormat::Unknown(_)) | None => {
-                    normalize_sample_data(data, self.nal_length_size)
+                    normalize_sample_data(data, self.nal_length_size).map(Cow::Owned)
                 }
             }
         }
@@ -717,6 +780,37 @@ mod platform {
                 unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn decoder_specification(require_hardware: bool) -> Result<CFDictionaryRef, DecoderError> {
+        if !require_hardware {
+            return Ok(ptr::null());
+        }
+        // SAFETY: the CFString and CFBoolean are framework constants. The
+        // dictionary retains the entries before their stack arrays go away.
+        let specification = unsafe {
+            CFDictionaryCreate(
+                ptr::null(),
+                &kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
+                &kCFBooleanTrue,
+                1,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            )
+        };
+        if specification.is_null() {
+            Err(DecoderError::internal(
+                "failed to allocate hardware decoder specification",
+            ))
+        } else {
+            Ok(specification)
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    fn decoder_specification(_require_hardware: bool) -> Result<CFDictionaryRef, DecoderError> {
+        Ok(ptr::null())
     }
 
     impl NativeDecoderSession for VideoToolboxDecoderSession {
@@ -1222,6 +1316,7 @@ mod platform {
         Ok(sample_buffer)
     }
 
+    #[cfg(test)]
     fn requested_output_format() -> DecoderFrameFormat {
         DecoderFrameFormat::Nv12
     }
@@ -1648,6 +1743,9 @@ mod platform {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use platform::vesper_native_plugin_entry;
+
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod platform {
     use player_plugin::{DecoderError, DecoderSessionConfig, NativeDecoderSession};
@@ -1657,6 +1755,7 @@ mod platform {
     pub(super) fn open_session(
         _config: DecoderSessionConfig,
         _codec: VideoCodecKind,
+        _borrow_length_prefixed_samples: bool,
     ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
         Err(DecoderError::UnsupportedCapability {
             capability: "apple-videotoolbox-platform".to_owned(),
@@ -1672,9 +1771,10 @@ mod tests {
     };
     use player_plugin::{DecoderMediaKind, DecoderSessionConfig, NativeDecoderPluginFactory};
 
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[test]
-    fn exports_plugin_entry() {
-        assert!(!super::vesper_plugin_entry().is_null());
+    fn exports_native_plugin_entry() {
+        assert!(!super::vesper_native_plugin_entry().is_null());
     }
 
     #[test]
@@ -1712,7 +1812,7 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[test]
     fn factory_opens_profile_qualified_h264_and_rejects_cpu_output() {
-        let factory = VideoToolboxDecoderFactory;
+        let factory = VideoToolboxDecoderFactory::default();
         let mut session = factory
             .open_native_session(&DecoderSessionConfig {
                 codec: "video/avc1.640028".to_owned(),

@@ -1858,8 +1858,7 @@ mod tests {
         prepare_download_task,
     };
     use player_model::MediaSource;
-    use player_plugin::{PluginReference, PluginTransport};
-    use player_plugin_loader::LoadedNativePlugin;
+    use player_plugin_loader::native::NativePlugin;
     use player_runtime::{DownloadTaskId, DownloadTaskStatus};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1993,22 +1992,15 @@ mod tests {
 
         let workspace = TestWorkspace::new("desktop-remux");
         let manifest_path = create_local_hls_fixture(workspace.path());
-        let plugin =
-            LoadedNativePlugin::load_development(resolve_vesper_remux_ffmpeg_plugin_path())
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "failed to load player-remux-ffmpeg plugin for desktop remux test: {error}"
-                    )
-                });
-        let reference = PluginReference::new(
-            "io.github.umbrella22.vesper.remux-ffmpeg",
-            None,
-            PluginTransport::Native,
-        )
-        .expect("valid remux plugin reference");
+        // SAFETY: this integration test loads the first-party FFmpeg module built by the caller.
+        let plugin = unsafe { NativePlugin::load(resolve_vesper_remux_ffmpeg_plugin_path()) }
+            .expect("load the first-party remux module");
+        assert_eq!(plugin.id(), "io.github.umbrella22.vesper.remux-ffmpeg");
         let processor = plugin
-            .resolve_post_download(&reference)
-            .expect("player-remux-ffmpeg plugin should export a post-download processor");
+            .post_download_processor()
+            .expect("load native plugin ABI post-download processor");
+        assert!(processor.supports_assembly());
+        drop(plugin);
 
         let mut controller = DesktopDownloadController::with_post_processor(processor);
         let asset_id = format!("desktop-remux-{}", unique_suffix());

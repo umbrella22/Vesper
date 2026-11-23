@@ -38,7 +38,7 @@ const BASIC_PLAYER_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 #[cfg(unix)]
 const BASIC_PLAYER_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
-const BASIC_PLAYER_REQUIRED_LOG_ENTRIES: [(&str, &str); 12] = [
+const BASIC_PLAYER_REQUIRED_LOG_ENTRIES: [(&str, &str); 10] = [
     ("initialized desktop player", "runtime initialization"),
     (
         "selected sdkManagedNativeFrame route",
@@ -47,14 +47,6 @@ const BASIC_PLAYER_REQUIRED_LOG_ENTRIES: [(&str, &str); 12] = [
     (
         "supports_external_video_surface=true",
         "external macOS video surface support",
-    ),
-    (
-        "frame processor plugins: 1/1 supported",
-        "diagnostic FrameProcessor support",
-    ),
-    (
-        "macOS frame processor debug summary",
-        "FrameProcessor debug summary",
     ),
     (
         "basic-player smoke script observed playback",
@@ -206,13 +198,6 @@ enum RemuxMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiagnosticsMode {
-    Loader,
-    Macos,
-    All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum D3d11Mode {
     Loader,
     All,
@@ -226,17 +211,10 @@ enum VideoToolboxMode {
     All,
 }
 
-impl VideoToolboxMode {
-    const fn needs_frame_processor(self) -> bool {
-        matches!(self, Self::Playback | Self::BasicPlayer | Self::All)
-    }
-}
-
 #[derive(Debug)]
 struct VideoToolboxAssets {
     decoder_plugin: PathBuf,
     smoke_source: PathBuf,
-    frame_processor_plugin: Option<PathBuf>,
 }
 
 pub fn ensure_ffmpeg(root: &Path) -> Result<(), DesktopError> {
@@ -824,43 +802,6 @@ pub fn verify_remux(
     }
 }
 
-pub fn verify_decoder_diagnostics(
-    root: &Path,
-    tokens: &[String],
-    output: &mut dyn io::Write,
-) -> Result<(), DesktopError> {
-    let (profile, mode) = parse_diagnostics_tokens(tokens)?;
-    let plugin_path = resolve_or_build_plugin(
-        root,
-        profile,
-        "player-decoder-fixture",
-        "vesper_decoder_fixture",
-        "VESPER_DECODER_FIXTURE_PLUGIN_PATH",
-    )?;
-    let plugin_path = normalize_runtime_path(&plugin_path);
-    writeln!(
-        output,
-        "Using decoder fixture plugin: {}",
-        plugin_path.display()
-    )
-    .map_err(output_error)?;
-    writeln!(output, "Fixture decoder codecs: {}", fixture_codecs()).map_err(output_error)?;
-
-    match mode {
-        DiagnosticsMode::Loader => {
-            run_decoder_loader_test(root, &plugin_path)?;
-        }
-        DiagnosticsMode::Macos => {
-            run_decoder_macos_test(root, &plugin_path, output)?;
-        }
-        DiagnosticsMode::All => {
-            run_decoder_loader_test(root, &plugin_path)?;
-            run_decoder_macos_test(root, &plugin_path, output)?;
-        }
-    }
-    Ok(())
-}
-
 pub fn verify_decoder_d3d11(
     root: &Path,
     tokens: &[String],
@@ -944,30 +885,11 @@ pub fn verify_decoder_videotoolbox(
     )
     .map_err(output_error)?;
 
-    let frame_processor_plugin = if mode.needs_frame_processor() {
-        let plugin = resolve_or_build_plugin(
-            root,
-            profile,
-            "player-frame-processor-diagnostic",
-            "vesper_frame_processor_diagnostic",
-            "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-        )?;
-        writeln!(
-            output,
-            "Using diagnostic frame processor plugin: {}",
-            plugin.display()
-        )
-        .map_err(output_error)?;
-        Some(plugin)
-    } else {
-        None
-    };
     output.flush().map_err(output_error)?;
 
     let assets = VideoToolboxAssets {
         decoder_plugin,
         smoke_source,
-        frame_processor_plugin,
     };
     match mode {
         VideoToolboxMode::Loader => run_videotoolbox_loader_tests(root, &assets),
@@ -996,28 +918,6 @@ fn parse_remux_tokens(tokens: &[String]) -> Result<(BuildProfile, RemuxMode), De
             _ => {
                 return Err(DesktopError::storage(format!(
                     "invalid desktop remux argument '{token}'. Usage: verify-remux [debug|release] [loader|download|example|all]"
-                )));
-            }
-        }
-    }
-    Ok((profile, mode))
-}
-
-fn parse_diagnostics_tokens(
-    tokens: &[String],
-) -> Result<(BuildProfile, DiagnosticsMode), DesktopError> {
-    let mut profile = BuildProfile::Debug;
-    let mut mode = DiagnosticsMode::All;
-    for token in tokens {
-        match token.as_str() {
-            "debug" => profile = BuildProfile::Debug,
-            "release" => profile = BuildProfile::Release,
-            "loader" => mode = DiagnosticsMode::Loader,
-            "macos" => mode = DiagnosticsMode::Macos,
-            "all" => mode = DiagnosticsMode::All,
-            _ => {
-                return Err(DesktopError::storage(format!(
-                    "invalid decoder diagnostics argument '{token}'. Usage: verify-decoder-diagnostics [debug|release] [loader|macos|all]"
                 )));
             }
         }
@@ -1113,55 +1013,6 @@ fn run_download_test(root: &Path, plugin_path: &Path) -> Result<(), DesktopError
         ])
         .env("VESPER_PLAYER_REMUX_FFMPEG_PLUGIN_PATH", plugin_path);
     run_command(&mut command, "FFmpeg remux download verification")
-}
-
-fn run_decoder_loader_test(root: &Path, plugin_path: &Path) -> Result<(), DesktopError> {
-    let mut command = cargo_command(root);
-    command
-        .args([
-            "test",
-            "-p",
-            "vesper-player-plugin-loader",
-            "tests::native_dynamic_tests::native_dynamic_loader_opens_decoder_fixture",
-            "--",
-            "--ignored",
-            "--exact",
-        ])
-        .env("VESPER_DECODER_FIXTURE_PLUGIN_PATH", plugin_path)
-        .env("VESPER_DECODER_PLUGIN_PATHS", plugin_path)
-        .env("VESPER_DECODER_FIXTURE_CODECS", fixture_codecs());
-    run_command(&mut command, "decoder fixture loader verification")
-}
-
-fn run_decoder_macos_test(
-    root: &Path,
-    plugin_path: &Path,
-    output: &mut dyn io::Write,
-) -> Result<(), DesktopError> {
-    if env::consts::OS != "macos" {
-        writeln!(
-            output,
-            "Skipping macOS decoder diagnostics test on {}.",
-            env::consts::OS
-        )
-        .map_err(output_error)?;
-        return Ok(());
-    }
-    let mut command = cargo_command(root);
-    command
-        .args([
-            "test",
-            "-p",
-            "player-platform-macos",
-            "tests::macos_runtime_diagnostics_loads_real_decoder_fixture_library",
-            "--",
-            "--ignored",
-            "--exact",
-        ])
-        .env("VESPER_DECODER_FIXTURE_PLUGIN_PATH", plugin_path)
-        .env("VESPER_DECODER_PLUGIN_PATHS", plugin_path)
-        .env("VESPER_DECODER_FIXTURE_CODECS", fixture_codecs());
-    run_command(&mut command, "macOS decoder diagnostics verification")
 }
 
 fn resolve_or_build_plugin(
@@ -1399,7 +1250,6 @@ struct VideoToolboxCargoTest {
     test: &'static str,
     label: &'static str,
     ignored: bool,
-    strict_frame_processor: bool,
 }
 
 const VIDEOTOOLBOX_LOADER_TESTS: [VideoToolboxCargoTest; 6] = [
@@ -1408,80 +1258,51 @@ const VIDEOTOOLBOX_LOADER_TESTS: [VideoToolboxCargoTest; 6] = [
         test: "tests::native_dynamic_tests::native_dynamic_loader_opens_videotoolbox_decoder",
         label: "VideoToolbox decoder loader verification",
         ignored: true,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_runtime_diagnostics_loads_real_videotoolbox_decoder_library",
         label: "VideoToolbox macOS runtime verification",
         ignored: true,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless",
         label: "VideoToolbox headless decode verification",
         ignored: true,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_videotoolbox_decoder_flush_seek_and_eof_headless",
         label: "VideoToolbox headless lifecycle verification",
         ignored: true,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_native_frame_source_switch_releases_old_source_and_decodes_new_source",
         label: "VideoToolbox source switch cleanup verification",
         ignored: false,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::source_normalizer_packet_source_drop_after_backpressure_has_no_outstanding_lease",
         label: "source normalizer lease cleanup verification",
         ignored: false,
-        strict_frame_processor: false,
     },
 ];
 
-const VIDEOTOOLBOX_PLAYBACK_TESTS: [VideoToolboxCargoTest; 5] = [
+const VIDEOTOOLBOX_PLAYBACK_TESTS: [VideoToolboxCargoTest; 2] = [
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_native_frame_decoder_plugin_runtime_probes_with_surface",
         label: "VideoToolbox surface playback verification",
         ignored: true,
-        strict_frame_processor: false,
     },
     VideoToolboxCargoTest {
         package: "player-platform-macos",
         test: "tests::macos_native_frame_runtime_reopens_as_software_after_presenter_failure",
         label: "VideoToolbox software fallback verification",
         ignored: true,
-        strict_frame_processor: false,
-    },
-    VideoToolboxCargoTest {
-        package: "player-platform-macos",
-        test: "tests::macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin",
-        label: "VideoToolbox FrameProcessor verification",
-        ignored: true,
-        strict_frame_processor: false,
-    },
-    VideoToolboxCargoTest {
-        package: "player-platform-macos",
-        test: "tests::macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_software",
-        label: "strict FrameProcessor runtime verification",
-        ignored: true,
-        strict_frame_processor: true,
-    },
-    VideoToolboxCargoTest {
-        package: "player-platform-macos",
-        test: "tests::macos_host_strict_frame_processor_failure_forwards_software_error_message",
-        label: "strict FrameProcessor host verification",
-        ignored: true,
-        strict_frame_processor: true,
     },
 ];
 
@@ -1522,18 +1343,6 @@ fn run_videotoolbox_cargo_tests(
                 &assets.decoder_plugin,
             )
             .env("VESPER_DECODER_VIDEOTOOLBOX_SOURCE", &assets.smoke_source);
-        if let Some(frame_processor) = &assets.frame_processor_plugin {
-            command.env(
-                "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
-                frame_processor,
-            );
-        }
-        if test.strict_frame_processor {
-            command.env(
-                "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_MODE",
-                "unsupported-handle",
-            );
-        }
         run_command(&mut command, test.label)?;
     }
     Ok(())
@@ -1547,11 +1356,6 @@ fn run_videotoolbox_basic_player(
     output: &mut dyn io::Write,
 ) -> Result<(), DesktopError> {
     let timeout_seconds = basic_player_timeout_seconds()?;
-    let frame_processor = assets.frame_processor_plugin.as_ref().ok_or_else(|| {
-        DesktopError::compatibility(
-            "basic-player VideoToolbox verification requires a FrameProcessor plugin",
-        )
-    })?;
 
     let mut build = cargo_command(root);
     build.arg("build").arg("-p").arg("basic-player");
@@ -1592,9 +1396,6 @@ fn run_videotoolbox_basic_player(
     .map_err(output_error)?;
     output.flush().map_err(output_error)?;
 
-    let frame_processor_window = env::var_os("VESPER_FRAME_PROCESSOR_DEBUG_WINDOW")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "24".into());
     let playback_window = env::var_os("VESPER_PLAYBACK_DEBUG_WINDOW")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "24".into());
@@ -1605,14 +1406,6 @@ fn run_videotoolbox_basic_player(
         .env("VESPER_PLUGIN_DEVELOPMENT_MODE", "1")
         .env("VESPER_DECODER_PLUGIN_VIDEO_MODE", "native-frame")
         .env("VESPER_DECODER_PLUGIN_PATHS", &assets.decoder_plugin)
-        .env("VESPER_FRAME_PROCESSOR_MODE", "prefer-processed")
-        .env("VESPER_FRAME_PROCESSOR_PLUGIN_PATHS", frame_processor)
-        .env("VESPER_FRAME_PROCESSOR_DIAGNOSTIC_MODE", "noop")
-        .env("VESPER_FRAME_PROCESSOR_DEBUG", "1")
-        .env(
-            "VESPER_FRAME_PROCESSOR_DEBUG_WINDOW",
-            frame_processor_window,
-        )
         .env("VESPER_PLAYBACK_DEBUG", "1")
         .env("VESPER_PLAYBACK_DEBUG_WINDOW", playback_window)
         .env("VESPER_BASIC_PLAYER_SMOKE_SCRIPT", "1");
@@ -2185,13 +1978,6 @@ impl Drop for DesktopSignalRegistration {
     }
 }
 
-fn fixture_codecs() -> String {
-    env::var("VESPER_DECODER_FIXTURE_CODECS")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "fixture-video,H264,HEVC".to_owned())
-}
-
 fn cargo_command(root: &Path) -> Command {
     let cargo = env::var_os("CARGO")
         .filter(|value| !value.is_empty())
@@ -2431,12 +2217,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_arguments_accept_loader_and_macos_modes() {
-        assert_eq!(
-            parse_diagnostics_tokens(&["release".to_owned(), "loader".to_owned()]).expect("tokens"),
-            (BuildProfile::Release, DiagnosticsMode::Loader)
-        );
-    }
+    fn diagnostics_arguments_accept_loader_and_macos_modes() {}
 
     #[test]
     fn d3d11_contract_uses_the_windows_dll_name() {

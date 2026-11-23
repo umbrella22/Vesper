@@ -108,11 +108,14 @@ fn write_output_data<T>(
 
     let mut counted_generation = None;
     let mut played = 0usize;
+    let callback_generation = state.generation();
+    let mut missing_samples = 0usize;
 
     for output in data.iter_mut() {
         let current_generation = state.generation();
         let Some(sample) = cursor.next_sample(state, current_generation) else {
             *output = T::EQUILIBRIUM;
+            missing_samples += 1;
             continue;
         };
         if counted_generation != Some(current_generation) {
@@ -129,6 +132,10 @@ fn write_output_data<T>(
     if let Some(generation) = counted_generation {
         state.mark_samples_played(generation, played);
     }
+    state.record_output_callback(
+        callback_generation,
+        (missing_samples / usize::from(channels.max(1))) as u64,
+    );
 
     if let Some(generation) = counted_generation
         && state.is_generation_complete_and_drained(generation)

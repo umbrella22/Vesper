@@ -1,0 +1,25 @@
+language = "C"
+cpp_compat = true
+include_guard = "VESPER_PLUGIN_H"
+autogen_warning = "/* Generated from player-plugin-abi. Run vesper plugin header-generate to update. */"
+line_length = 240
+after_includes = """
+#if defined(__cplusplus)
+#define VESPER_NOEXCEPT noexcept
+#else
+#define VESPER_NOEXCEPT
+#endif
+#if defined(_WIN32) && defined(VESPER_PLUGIN_BUILD)
+#define VESPER_PLUGIN_API __declspec(dllexport)
+#elif defined(VESPER_PLUGIN_BUILD) && (defined(__GNUC__) || defined(__clang__))
+#define VESPER_PLUGIN_API __attribute__((visibility(\"default\")))
+#else
+#define VESPER_PLUGIN_API
+#endif
+"""
+
+[export]
+include = [
+    "VesperVideoDecoderVtable", "VesperVideoFilterVtable", "VesperAudioProcessorVtable",
+    "VesperSourceNormalizerVtable", "VesperSourceNormalizerResourceVtable", "VesperPostDownloadProcessorVtable",
+]

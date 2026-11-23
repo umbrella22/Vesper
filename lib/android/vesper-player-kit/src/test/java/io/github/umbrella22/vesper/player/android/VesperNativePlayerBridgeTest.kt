@@ -11,7 +11,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
@@ -1371,6 +1374,55 @@ class VesperNativePlayerBridgeTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
+    fun relativeSeeksUseSampledPlaybackHeadInsteadOfSnapshot() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(
+            bindings = bindings,
+            initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+        )
+        try {
+            bridge.initializeAsync()
+            val snapshot = bridge.uiState.value.timeline
+            assertEquals(0L, snapshot.positionMs)
+            bindings.timelineSample = snapshot.copy(positionMs = 29_500L, durationMs = 150_000L)
+
+            bridge.seekBy(10_000L)
+            bindings.timelineSample = bindings.timelineSample?.copy(positionMs = 73_000L)
+            bridge.seekByAsync(-10_000L)
+            assertEquals(listOf(39_500L, 63_000L), bindings.seekToPositions)
+        } finally {
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun nativeRetryIsObservableWithoutTheBuiltInControls() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(
+            bindings = bindings,
+            initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+        )
+        try {
+            bridge.initializeAsync()
+            val observation = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeout(1_000L) { bridge.playbackEvents.first() }
+            }
+            bindings.events += NativeBridgeEvent.RetryScheduled(attempt = 2, delayMs = 1_750L)
+            bridge.refresh()
+            assertEquals(VesperPlaybackEvent.RetryScheduled(2, 1_750L), observation.await())
+            assertNull(bridge.uiState.value.lastError)
+        } finally {
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun asyncSeekWaitsForNativeConfirmation() = runBlocking {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         val bindings = FakeBindings(awaitableCommands = true)
@@ -2721,6 +2773,39 @@ class VesperNativePlayerBridgeTest {
         assertEquals("sdkManagedNativeFrame", diagnostic["route"])
         assertEquals("open", diagnostic["lifecycle"])
         assertEquals("pending", diagnostic["lastAdvanceStatus"])
+    }
+
+    @Test
+    fun nativeFramePipelineAppliesLatestStartupSeekWhenOpenFinishes() = runBlocking {
+        val scheduler = CoalescingQueuedNativeFramePipelinePumpScheduler()
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(
+            bindings = bindings,
+            initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+            sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+                mode = VesperSourceNormalizerMode.PreflightOnly,
+                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+            ),
+            nativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration(
+                mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+            ),
+            nativeFramePipelinePumpScheduler = scheduler,
+        )
+        try {
+            bridge.initializeAsync()
+            assertTrue(bridge.isNativeFramePipelineOpening())
+            bridge.seekTo(12_000L)
+            bridge.seekToAsync(24_000L)
+            assertEquals(0, bindings.openNativeFramePipelineCount)
+            assertTrue(bindings.seekNativeFramePipelinePositions.isEmpty())
+
+            repeat(6) { scheduler.runNext() }
+            assertEquals(listOf(12_000L, 24_000L), bindings.seekToPositions)
+            assertEquals(listOf(24_000L), bindings.seekNativeFramePipelinePositions)
+        } finally {
+            bridge.dispose()
+        }
     }
 
     @Test
@@ -5522,6 +5607,9 @@ class VesperNativePlayerBridgeTest {
         assertEquals(0, bindings.advanceNativeFramePipelineCount)
         assertEquals(0, bindings.disposeCount)
         assertTrue(bridge.uiState.value.subtitle.contains("simulated native-frame open failure"))
+        val error = checkNotNull(bridge.uiState.value.lastError)
+        assertEquals("simulated native-frame open failure", error.message)
+        assertEquals("nativeFramePipelineOpenFailed", error.details["reason"])
         assertTrue(
             bridge.pluginDiagnostics.any {
                 it["pluginKind"] == "native_frame_pipeline" &&
@@ -6204,6 +6292,8 @@ private class FakeBindings(
     var onInitialize: (() -> Unit)? = null
     var onAdvanceNativeFramePipeline: (() -> Unit)? = null
     var onSeekTo: ((Long) -> Unit)? = null
+    var timelineSample: TimelineUiState? = null
+    override fun sampleTimeline(): TimelineUiState? = timelineSample
     val events = mutableListOf<NativeBridgeEvent>()
     var disposeCount = 0
     var openNativeFramePipelineCount = 0
@@ -6604,7 +6694,7 @@ private class FakeBindings(
         stopCount += 1
     }
 
-    override fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long, commandId: Long, sourceEpoch: Long, timeoutMs: Long) {
         seekToPositions += positionMs
         onSeekTo?.invoke(positionMs)
     }

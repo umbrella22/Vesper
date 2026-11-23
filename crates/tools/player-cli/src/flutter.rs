@@ -20,10 +20,9 @@ const CORE_PACKAGES: [&str; 6] = [
     "vesper_player_external_playback",
     "vesper_player_ui",
 ];
-const OPTIONAL_PACKAGES: [&str; 3] = [
+const OPTIONAL_PACKAGES: [&str; 2] = [
     "vesper_player_source_normalizer_ffmpeg",
     "vesper_player_remux_ffmpeg",
-    "vesper_player_performance_diagnostics",
 ];
 const MAX_LOCAL_OVERRIDES_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_PUBSPEC_BYTES: u64 = 1024 * 1024;
@@ -169,7 +168,6 @@ pub fn verify_android_plugin(root: &Path, include_optional: bool) -> Result<(), 
     if include_optional {
         command.arg(":vesper_player_source_normalizer_ffmpeg:compileDebugKotlin");
         command.arg(":vesper_player_remux_ffmpeg:compileDebugKotlin");
-        command.arg(":vesper_player_performance_diagnostics:compileDebugKotlin");
     }
     command
         .stdin(Stdio::inherit())

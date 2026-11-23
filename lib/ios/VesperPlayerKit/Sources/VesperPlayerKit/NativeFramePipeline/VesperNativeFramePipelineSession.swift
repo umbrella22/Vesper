@@ -65,7 +65,9 @@ final class VesperNativeFramePipelineSession {
         self.sourceNormalizer = sourceNormalizer
         self.surfaceHost = surfaceHost
         self.backend = backend ?? VesperFfiNativeFramePipelineBackend()
-        self.audioOutput = audioOutput ?? VesperNativeFrameAudioOutput()
+        self.audioOutput = audioOutput ?? VesperNativeFrameAudioOutput(
+            processorReference: configuration.audioProcessorReference
+        )
         self.nativeFramePresenter = nativeFramePresenter ?? surfaceHost
         usesSurfaceHostPresenter = nativeFramePresenter == nil
         self.audioOutput.onStateChanged = { [weak self] state in

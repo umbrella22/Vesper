@@ -20,9 +20,7 @@ enum PlayerBridgeFactory {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
-            VesperNativeFramePipelineConfiguration(),
-        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
-            VesperPipelineEventHookConfiguration()
+            VesperNativeFramePipelineConfiguration()
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
@@ -46,8 +44,7 @@ enum PlayerBridgeFactory {
                     benchmarkConfiguration: benchmarkConfiguration,
                     sourceNormalizerConfiguration: sourceNormalizerConfiguration,
                     frameProcessorConfiguration: frameProcessorConfiguration,
-                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
-                    pipelineEventHookConfiguration: pipelineEventHookConfiguration
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
                 ),
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
@@ -73,9 +70,7 @@ public enum VesperPlayerControllerFactory {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
-            VesperNativeFramePipelineConfiguration(),
-        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
-            VesperPipelineEventHookConfiguration()
+            VesperNativeFramePipelineConfiguration()
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
             initialSource: initialSource,
@@ -86,8 +81,7 @@ public enum VesperPlayerControllerFactory {
             benchmarkConfiguration: benchmarkConfiguration,
             sourceNormalizerConfiguration: sourceNormalizerConfiguration,
             frameProcessorConfiguration: frameProcessorConfiguration,
-            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
-            pipelineEventHookConfiguration: pipelineEventHookConfiguration
+            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
         )
     }
 

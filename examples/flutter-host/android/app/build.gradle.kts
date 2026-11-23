@@ -47,14 +47,6 @@ val playerSourceNormalizerPluginAssetsDirFile =
     playerSourceNormalizerPluginAssetsDir.get().asFile
 val playerSourceNormalizerPluginMetadataDirFile =
     playerSourceNormalizerPluginAssetsDir.get().dir("vesper-source-normalizer-ffmpeg").asFile
-val playerFrameProcessorDiagnosticPluginJniLibsDir =
-    layout.buildDirectory.dir("generated/playerFrameProcessorDiagnostic/jniLibs")
-val playerFrameProcessorDiagnosticPluginJniLibsDirFile =
-    playerFrameProcessorDiagnosticPluginJniLibsDir.get().asFile
-val playerPerformanceDiagnosticsPluginJniLibsDir =
-    layout.buildDirectory.dir("generated/playerPerformanceDiagnostics/jniLibs")
-val playerPerformanceDiagnosticsPluginJniLibsDirFile =
-    playerPerformanceDiagnosticsPluginJniLibsDir.get().asFile
 val playerFfmpegPluginBuildProfile =
     providers.provider {
         if (gradle.startParameter.taskNames.any { taskName ->
@@ -80,18 +72,6 @@ val vesperAppPluginRegistries =
             manifestPath = "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
             libraryName = "vesper_source_normalizer_ffmpeg",
             pluginId = "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
-        ),
-        VesperAppPluginRegistryMetadata(
-            taskSegment = "FrameProcessorDiagnostic",
-            manifestPath = "plugins/frame-processor-diagnostic/vesper-plugin.toml",
-            libraryName = "vesper_frame_processor_diagnostic",
-            pluginId = "dev.vesper.frame-processor-diagnostic",
-        ),
-        VesperAppPluginRegistryMetadata(
-            taskSegment = "PerformanceDiagnostics",
-            manifestPath = "plugins/performance-diagnostics/vesper-plugin.toml",
-            libraryName = "vesper_performance_diagnostics",
-            pluginId = "io.github.umbrella22.vesper.performance-diagnostics",
         ),
     )
 val configuredVesperCli = providers.environmentVariable("VESPER_CLI")
@@ -204,7 +184,6 @@ dependencies {
     implementation(project.dependencies.project(":vesper-player-kit-external-playback"))
     implementation(project.dependencies.project(":vesper-player-kit-remux-ffmpeg"))
     implementation(project.dependencies.project(":vesper-player-kit-source-normalizer-ffmpeg"))
-    implementation(project.dependencies.project(":vesper-player-kit-frame-processor-diagnostic"))
 }
 
 val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemuxFfmpegAndroidPlugin") {
@@ -280,71 +259,9 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
     }
 }
 
-val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
-    tasks.register<Exec>("buildPlayerFrameProcessorDiagnosticAndroidPlugin") {
-        description = "Builds the Android player-frame-processor-diagnostic plugin libraries used by the Flutter host."
-        group = "vesper"
-
-        val vesperCli = workspaceRootDir.file("scripts/vesper")
-
-        inputs.file(vesperCli)
-        inputs.file(workspaceRootDir.file("Cargo.toml"))
-        inputs.file(workspaceRootDir.file("Cargo.lock"))
-        inputs.dir(workspaceRootDir.dir("crates/plugin/player-frame-processor-diagnostic"))
-        inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin"))
-        inputs.property("abis", configuredAndroidAbis)
-        inputs.property("profile", playerFfmpegPluginBuildProfile)
-        outputs.dir(playerFrameProcessorDiagnosticPluginJniLibsDirFile)
-
-        workingDir = workspaceRootDir.asFile
-        environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
-
-        doFirst {
-            commandLine(
-                vesperCli.asFile.absolutePath,
-                "android",
-                "frame-processor-plugin",
-                playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
-                playerFfmpegPluginBuildProfile.get(),
-            )
-        }
-    }
-
-val buildPlayerPerformanceDiagnosticsAndroidPlugin =
-    tasks.register<Exec>("buildPlayerPerformanceDiagnosticsAndroidPlugin") {
-        description = "Builds the Android performance diagnostics plugin libraries used by the Flutter host."
-        group = "vesper"
-
-        val vesperCli = workspaceRootDir.file("scripts/vesper")
-
-        inputs.file(vesperCli)
-        inputs.file(workspaceRootDir.file("Cargo.toml"))
-        inputs.file(workspaceRootDir.file("Cargo.lock"))
-        inputs.dir(workspaceRootDir.dir("crates/plugin/player-performance-diagnostics"))
-        inputs.dir(workspaceRootDir.dir("crates/plugin/player-plugin"))
-        inputs.property("abis", configuredAndroidAbis)
-        inputs.property("profile", playerFfmpegPluginBuildProfile)
-        outputs.dir(playerPerformanceDiagnosticsPluginJniLibsDirFile)
-
-        workingDir = workspaceRootDir.asFile
-        environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
-
-        doFirst {
-            commandLine(
-                vesperCli.asFile.absolutePath,
-                "android",
-                "performance-diagnostics-plugin",
-                playerPerformanceDiagnosticsPluginJniLibsDirFile.absolutePath,
-                playerFfmpegPluginBuildProfile.get(),
-            )
-        }
-    }
-
 tasks.named("preBuild").configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
-    dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
-    dependsOn(buildPlayerPerformanceDiagnosticsAndroidPlugin)
 }
 
 val sourceNormalizerPluginProject =
@@ -371,34 +288,6 @@ sourceNormalizerPluginProject.plugins.withId("com.android.library") {
             (task.name.startsWith("lint") && task.name.contains("Analyze"))
     }.configureEach {
         dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
-    }
-}
-
-val frameProcessorPluginProject =
-    rootProject.project(":vesper-player-kit-frame-processor-diagnostic")
-frameProcessorPluginProject.plugins.withId("com.android.library") {
-    frameProcessorPluginProject.tasks.matching { task ->
-        (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
-            (task.name.startsWith("generate") &&
-                task.name.contains("Lint") &&
-                task.name.endsWith("Model")) ||
-            (task.name.startsWith("lint") && task.name.contains("Analyze"))
-    }.configureEach {
-        dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
-    }
-}
-
-val performanceDiagnosticsPluginProject =
-    rootProject.project(":vesper-player-kit-performance-diagnostics")
-performanceDiagnosticsPluginProject.plugins.withId("com.android.library") {
-    performanceDiagnosticsPluginProject.tasks.matching { task ->
-        (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
-            (task.name.startsWith("generate") &&
-                task.name.contains("Lint") &&
-                task.name.endsWith("Model")) ||
-            (task.name.startsWith("lint") && task.name.contains("Analyze"))
-    }.configureEach {
-        dependsOn(buildPlayerPerformanceDiagnosticsAndroidPlugin)
     }
 }
 
@@ -444,8 +333,6 @@ tasks.matching { task ->
 }.configureEach {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
-    dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
-    dependsOn(buildPlayerPerformanceDiagnosticsAndroidPlugin)
 }
 
 val ffmpegRuntimeProject = rootProject.project(":vesper-player-kit-ffmpeg-runtime")

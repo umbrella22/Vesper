@@ -1,0 +1,75 @@
+#![deny(unsafe_code)]
+
+use player_plugin::author::{
+    AudioBlock, AudioProcessor, AudioProcessorCapabilities, AudioProcessorFactory,
+    OpenAudioProcessor, Plugin, PluginError, PluginResult, VesperAudioFormat,
+};
+
+const MODES: AudioProcessorCapabilities = AudioProcessorCapabilities {
+    fixed_block: true,
+    buffered: false,
+};
+const GAIN: f32 = 0.5;
+
+struct GainFactory;
+struct Gain;
+
+impl AudioProcessorFactory for GainFactory {
+    fn capabilities(&self) -> AudioProcessorCapabilities {
+        MODES
+    }
+
+    fn capabilities_json(&self) -> &str {
+        r#"{"fixedBlock":true}"#
+    }
+
+    fn open(&self, input: VesperAudioFormat, _params: &[u8]) -> PluginResult<OpenAudioProcessor> {
+        Ok(OpenAudioProcessor {
+            output_format: input,
+            processor: Box::new(Gain),
+        })
+    }
+}
+
+impl AudioProcessor for Gain {
+    fn capabilities(&self) -> AudioProcessorCapabilities {
+        MODES
+    }
+
+    fn process_block(&mut self, block: AudioBlock<'_>) -> PluginResult<()> {
+        match block {
+            AudioBlock::InPlace { mut audio, .. } => {
+                for sample in audio.samples() {
+                    *sample *= GAIN;
+                }
+            }
+            AudioBlock::Split { input, mut output } => {
+                for (target, &sample) in output.samples().iter_mut().zip(input.samples()) {
+                    *target = sample * GAIN;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn set_playback_policy(&mut self, _rate: f32, _pitch: u32, _epoch: u64) -> PluginResult<()> {
+        Ok(())
+    }
+
+    fn set_param(&mut self, _key: &[u8], _value: &[u8]) -> PluginResult<()> {
+        Err(PluginError::Contract("this gain processor has no parameters"))
+    }
+
+    fn latency_frames(&self) -> u32 {
+        0
+    }
+
+    fn flush(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+}
+
+#[player_plugin::author::export]
+pub fn gain_plugin() -> Plugin {
+    Plugin::new({{PLUGIN_ID}}, {{PLUGIN_NAME}}).with_audio_processor(GainFactory)
+}

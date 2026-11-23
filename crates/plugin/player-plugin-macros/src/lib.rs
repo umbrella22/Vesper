@@ -4,18 +4,14 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemFn, parse_macro_input, spanned::Spanned};
 
-/// Exports a zero-argument plugin factory through the stable native entry.
+/// Exports a safe Rust factory as the native plugin entry point.
 #[proc_macro_attribute]
 pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     if !args.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "`export` takes no arguments",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new(proc_macro2::Span::call_site(), "export takes no arguments")
+            .to_compile_error()
+            .into();
     }
-
     let factory = parse_macro_input!(item as ItemFn);
     let signature = &factory.sig;
     if signature.asyncness.is_some() {
@@ -39,18 +35,17 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
         .to_compile_error()
         .into();
     }
-
-    let factory_name = &signature.ident;
+    let name = &signature.ident;
     quote! {
         #factory
 
         #[doc(hidden)]
         #[allow(unsafe_code)]
         #[unsafe(no_mangle)]
-        pub extern "C" fn vesper_plugin_entry()
-            -> *const ::player_plugin::__private::VesperPluginRoot
+        pub extern "C" fn vesper_native_plugin_entry()
+            -> *const ::player_plugin::author::VesperPluginRoot
         {
-            ::player_plugin::__private::export_plugin(#factory_name)
+            ::player_plugin::author::__export(#name)
         }
     }
     .into()

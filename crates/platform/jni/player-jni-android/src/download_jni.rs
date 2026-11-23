@@ -117,7 +117,6 @@ struct AndroidDownloadSessionConfig {
     run_post_processors_on_completion: bool,
     registry_handle: jlong,
     post_download_references_json: String,
-    event_hook_references_json: String,
 }
 
 struct JniDownloadExportProgress {
@@ -300,8 +299,7 @@ fn new_download_session(
     java_vm: JavaVM,
 ) -> Result<jlong, String> {
     let post_download_references = parse_plugin_references(&config.post_download_references_json)?;
-    let event_hook_references = parse_plugin_references(&config.event_hook_references_json)?;
-    let has_references = !post_download_references.is_empty() || !event_hook_references.is_empty();
+    let has_references = !post_download_references.is_empty();
     let registry = if has_references {
         if config.registry_handle == 0 {
             return Err(
@@ -325,7 +323,6 @@ fn new_download_session(
         config.run_post_processors_on_completion,
         registry.as_deref().unwrap_or(&empty_registry),
         post_download_references,
-        event_hook_references,
     )
     .map_err(|error| error.to_string())?;
     let export_worker = Arc::new(JniDownloadExportCallbackWorker::new(java_vm)?);
@@ -423,8 +420,6 @@ fn download_config_from_java(
             "postDownloadPluginReferencesJson",
         )?
         .unwrap_or_else(|| "[]".to_owned()),
-        event_hook_references_json: string_field(env, &config, "eventHookPluginReferencesJson")?
-            .unwrap_or_else(|| "[]".to_owned()),
     })
 }
 

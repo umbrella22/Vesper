@@ -4,7 +4,6 @@ import 'download_models.dart';
 import 'models.dart';
 import 'sequence_models.dart';
 import 'source_models.dart';
-import 'performance_diagnostics_exception.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 final class VesperPlatformCreateResult {
@@ -99,8 +98,6 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   });
 
   Future<VesperAudioDecoderCapabilityResult> probeAudioDecoderCapability(
@@ -139,72 +136,6 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   Future<void> initialize(String playerId);
 
   Future<void> dispose(String playerId);
-
-  Future<String> startPerformanceDiagnostics(
-    String playerId,
-    VesperPerformanceDiagnosticsConfiguration configuration,
-  ) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'artifactUnavailable',
-      message: 'Performance diagnostics are unavailable on this platform.',
-    );
-  }
-
-  Future<void> updatePerformanceOverlayState(
-    String playerId,
-    String runId,
-    VesperPerformanceOverlayState state,
-  ) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'controllerDisposed',
-      message: 'No performance diagnostics session is active.',
-    );
-  }
-
-  Future<void> recordPerformanceMarker(
-    String playerId,
-    String runId,
-    String name, {
-    double? value,
-    int? sequenceIndex,
-    bool? expectedOverlayActive,
-  }) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'controllerDisposed',
-      message: 'No performance diagnostics session is active.',
-    );
-  }
-
-  Future<void> submitPerformanceFrameSamples(
-    String playerId,
-    String runId,
-    List<VesperPerformanceFrameSample> samples,
-  ) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'controllerDisposed',
-      message: 'No performance diagnostics session is active.',
-    );
-  }
-
-  Future<VesperPerformanceDiagnosticsReport> performanceDiagnosticsSnapshot(
-    String playerId,
-    String runId,
-  ) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'controllerDisposed',
-      message: 'No performance diagnostics session is active.',
-    );
-  }
-
-  Future<VesperPerformanceDiagnosticsReport> stopPerformanceDiagnostics(
-    String playerId,
-    String runId,
-  ) async {
-    throw const VesperPerformanceDiagnosticsException(
-      code: 'controllerDisposed',
-      message: 'No performance diagnostics session is active.',
-    );
-  }
 
   Future<void> refreshPlayer(String playerId) async {
     throw UnimplementedError('refreshPlayer() has not been implemented.');
@@ -536,8 +467,6 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async {
     throw VesperUnsupportedError();
   }

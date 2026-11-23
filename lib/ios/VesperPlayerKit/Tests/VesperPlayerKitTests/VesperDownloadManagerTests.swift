@@ -174,8 +174,7 @@ final class VesperDownloadManagerTests: XCTestCase {
             auto_start: false,
             run_post_processors_on_completion: false,
             plugin_registry_handle: 0,
-            post_download_plugin_references_json: nil,
-            event_hook_plugin_references_json: nil
+            post_download_plugin_references_json: nil
         )
         var handle: UInt64 = 99
         var errorMessage: UnsafeMutablePointer<CChar>?
@@ -781,17 +780,11 @@ final class VesperDownloadManagerTests: XCTestCase {
             capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
             transport: .native
         )
-        let eventHookReference = try VesperPluginReference(
-            pluginId: "dev.vesper.event-hook",
-            capabilityInstanceId: "dev.vesper.event-hook.download",
-            transport: .native
-        )
         let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(
                 autoStart: false,
                 runPostProcessorsOnCompletion: false,
-                postDownloadPluginReferences: [postDownloadReference],
-                eventHookPluginReferences: [eventHookReference]
+                postDownloadPluginReferences: [postDownloadReference]
             ),
             executor: RecordingDownloadExecutor(),
             bindings: bindings
@@ -801,10 +794,6 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(
             bindings.createdConfiguration?.postDownloadPluginReferences,
             [postDownloadReference]
-        )
-        XCTAssertEqual(
-            bindings.createdConfiguration?.eventHookPluginReferences,
-            [eventHookReference]
         )
         XCTAssertEqual(bindings.createdConfiguration?.runPostProcessorsOnCompletion, false)
     }

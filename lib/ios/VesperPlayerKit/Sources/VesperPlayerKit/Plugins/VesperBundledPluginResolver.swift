@@ -51,10 +51,6 @@ enum VesperBundledPluginResolver {
         "io.github.umbrella22.vesper.remux-ffmpeg": "VesperPlayerRemuxFfmpegPlugin",
         "io.github.umbrella22.vesper.decoder-videotoolbox":
             "VesperPlayerDecoderVideoToolboxPlugin",
-        "dev.vesper.frame-processor-diagnostic":
-            "VesperPlayerFrameProcessorDiagnosticPlugin",
-        "io.github.umbrella22.vesper.performance-diagnostics":
-            "VesperPlayerPerformanceDiagnosticsPlugin",
     ]
 
     static func resolvePluginArtifacts(

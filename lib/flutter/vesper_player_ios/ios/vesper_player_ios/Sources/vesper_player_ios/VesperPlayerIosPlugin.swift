@@ -191,96 +191,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     return nil
                 }
             }
-        case "drainPipelineEventHookReports":
-            handleSessionCommand(call, result: result) { session in
-                session.controller.drainPipelineEventHookReports().toMap()
-            }
-        case "startPerformanceDiagnostics":
-            handleAsyncSessionCommand(call, result: result) { session in
-                let arguments = arguments(of: call)
-                let configuration = try nestedMap(arguments["configuration"])?
-                    .toPerformanceDiagnosticsConfiguration()
-                    ?? VesperPerformanceDiagnosticsConfiguration()
-                let probe = VesperPerformanceProbe(
-                    rawValue: arguments["probe"] as? String ?? "flutterFrameTiming"
-                )
-                let diagnostics = try await session.controller.startPerformanceDiagnostics(
-                    probe: probe,
-                    configuration: configuration
-                )
-                session.performanceDiagnosticsSession = diagnostics
-                return diagnostics.runId
-            }
-        case "updatePerformanceOverlayState":
-            handleSessionCommand(call, result: result) { session in
-                let arguments = arguments(of: call)
-                let diagnostics = try session.requirePerformanceDiagnostics(
-                    arguments: arguments
-                )
-                let state = try requireNestedMap(arguments: arguments, key: "state")
-                    .toPerformanceOverlayState()
-                try diagnostics.updateOverlayState(state)
-                return nil
-            }
-        case "recordPerformanceMarker":
-            handleSessionCommand(call, result: result) { session in
-                let arguments = arguments(of: call)
-                let diagnostics = try session.requirePerformanceDiagnostics(
-                    arguments: arguments
-                )
-                guard let name = arguments["name"] as? String else {
-                    throw PluginError.missingArgument("name")
-                }
-                try diagnostics.recordMarker(
-                    name,
-                    value: try arguments.optionalPerformanceMarkerValue(),
-                    sequenceIndex: try arguments.optionalPerformanceSequenceIndex(),
-                    expectedOverlayActive:
-                        try arguments.optionalPerformanceExpectedOverlayActive()
-                )
-                return nil
-            }
-        case "submitPerformanceFrameSamples":
-            handleSessionCommand(call, result: result) { session in
-                let arguments = arguments(of: call)
-                let diagnostics = try session.requirePerformanceDiagnostics(
-                    arguments: arguments
-                )
-                guard let rawSamples = arguments["samples"] as? [Any] else {
-                    throw PluginError.missingArgument("samples")
-                }
-                guard rawSamples.count <= 120 else {
-                    throw VesperPerformanceDiagnosticsError(
-                        code: .protocolViolation,
-                        message: "Performance frame batches are limited to 120 samples."
-                    )
-                }
-                let samples = try rawSamples.map { rawSample in
-                    guard let sample = stringKeyedMap(rawSample) else {
-                        throw VesperPerformanceDiagnosticsError(
-                            code: .protocolViolation,
-                            message: "A performance frame sample must be a map."
-                        )
-                    }
-                    return try sample.toPerformanceFrameSample()
-                }
-                try diagnostics.submitFrameSamples(samples)
-                return nil
-            }
-        case "performanceDiagnosticsSnapshot":
-            handleAsyncSessionCommand(call, result: result) { session in
-                let diagnostics = try session.requirePerformanceDiagnostics(
-                    arguments: arguments(of: call)
-                )
-                return try await diagnostics.snapshot().toFlutterMap()
-            }
-        case "stopPerformanceDiagnostics":
-            handleAsyncSessionCommand(call, result: result) { session in
-                let diagnostics = try session.requirePerformanceDiagnostics(
-                    arguments: arguments(of: call)
-                )
-                return try await diagnostics.stop().toFlutterMap()
-            }
         case "sampleTimeline":
             handleTimelineSample(call, result: result)
         case "refreshDownloadManager":
@@ -869,13 +779,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 nativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration()
             }
-            let pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration
-            if let pipelineEventHookMap = try nestedMap(arguments["pipelineEventHook"]) {
-                pipelineEventHookConfiguration =
-                    try pipelineEventHookMap.toPipelineEventHookConfiguration()
-            } else {
-                pipelineEventHookConfiguration = VesperPipelineEventHookConfiguration()
-            }
             let keepScreenOnDuringPlayback =
                 (arguments["keepScreenOnDuringPlayback"] as? Bool) ?? true
 
@@ -890,8 +793,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     benchmarkConfiguration: benchmarkConfiguration,
                     sourceNormalizerConfiguration: sourceNormalizerConfiguration,
                     frameProcessorConfiguration: frameProcessorConfiguration,
-                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
-                    pipelineEventHookConfiguration: pipelineEventHookConfiguration
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )
@@ -1554,7 +1456,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         syncPictureInPictureConfiguration(for: session)
         let snapshot = buildSnapshotMap(for: session)
         emitHostTerminalErrorIfNeeded(for: session, snapshot: snapshot)
-        emitPipelineEventHookReports(for: session)
         VesperFlutterPlaybackTrace.interval("VesperRefresh#emitSnapshotEvent") {
             emitEvent([
                 "playerId": session.id,
@@ -1563,22 +1464,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             ])
         }
         emitBenchmarkConsoleLog(for: session)
-    }
-
-    @MainActor
-    private func emitPipelineEventHookReports(for session: PlayerSession) {
-        guard eventSink != nil else {
-            return
-        }
-        let batch = session.controller.drainPipelineEventHookReports()
-        guard !batch.isEmpty else {
-            return
-        }
-        emitEvent([
-            "playerId": session.id,
-            "type": "pipelineEventHookReports",
-            "reports": batch.toMap(),
-        ])
     }
 
     @MainActor
@@ -2370,7 +2255,6 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.controller.detachSurfaceHost()
         session.hostView = nil
         session.controller.dispose()
-        emitPipelineEventHookReports(for: session)
         sessions.removeValue(forKey: session.id)
         emitEvent([
             "playerId": session.id,

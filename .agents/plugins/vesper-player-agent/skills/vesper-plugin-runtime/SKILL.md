@@ -118,8 +118,7 @@ and a bounded redacted reason. Keep `plugin_kind` as a diagnostic label only.
 Run the narrow runtime and loader suites first:
 
 ```sh
-cargo test -p player-plugin -p player-plugin-loader -p player-plugin-package
-cargo test -p player-plugin-wasm-host
+cargo test -p vesper-player-plugin -p vesper-player-plugin-loader
 ```
 
 Cover catalog atomicity and digest mismatch, deterministic resolver ordering,

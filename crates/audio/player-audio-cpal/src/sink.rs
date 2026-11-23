@@ -124,6 +124,10 @@ impl AudioSink {
     pub fn take_stream_error(&self) -> bool {
         self.state.take_stream_error()
     }
+
+    pub fn output_stats(&self) -> crate::AudioOutputStats {
+        self.state.output_stats()
+    }
 }
 
 impl AudioSinkController {

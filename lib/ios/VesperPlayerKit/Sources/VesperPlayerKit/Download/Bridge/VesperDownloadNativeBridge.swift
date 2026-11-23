@@ -136,7 +136,6 @@ struct NativeDownloadBindings: DownloadBindings {
         do {
             pluginRegistry = try VesperEmbeddedPluginRegistry.create(
                 references: configuration.postDownloadPluginReferences
-                    + configuration.eventHookPluginReferences
             )
             payload = try configuration.toRuntimeBridgePayload(
                 pluginRegistryHandle: pluginRegistry.handle

@@ -8,17 +8,9 @@ extension VesperDownloadConfiguration {
         let postDownloadReferencesJSON = try encodeVesperPluginReferencesJSON(
             postDownloadPluginReferences
         )
-        let eventHookReferencesJSON = try encodeVesperPluginReferencesJSON(
-            eventHookPluginReferences
-        )
         guard let postDownloadReferencesPointer = duplicateDownloadCString(
             postDownloadReferencesJSON
         ) else {
-            throw VesperDownloadBridgePayloadError.allocationFailed
-        }
-        guard let eventHookReferencesPointer = duplicateDownloadCString(eventHookReferencesJSON)
-        else {
-            freeDownloadCString(postDownloadReferencesPointer)
             throw VesperDownloadBridgePayloadError.allocationFailed
         }
 
@@ -26,8 +18,7 @@ extension VesperDownloadConfiguration {
             auto_start: autoStart,
             run_post_processors_on_completion: runPostProcessorsOnCompletion,
             plugin_registry_handle: pluginRegistryHandle,
-            post_download_plugin_references_json: postDownloadReferencesPointer,
-            event_hook_plugin_references_json: eventHookReferencesPointer
+            post_download_plugin_references_json: postDownloadReferencesPointer
         )
     }
 }

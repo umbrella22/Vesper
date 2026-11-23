@@ -1,0 +1,14 @@
+[package]
+name = {{CRATE_NAME}}
+version = "0.1.0"
+edition = "2024"
+rust-version = "{{RUST_VERSION}}"
+license = {{LICENSE}}
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+player-plugin = { package = "vesper-player-plugin", version = "={{VESPER_SDK_VERSION}}" }
+
+[workspace]

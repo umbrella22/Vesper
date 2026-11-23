@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
+#include "metal_host.h"
 
 typedef struct {
     uint8_t present;
@@ -1448,6 +1450,11 @@ static NSString *const PlayerMacosMetalPresenterShaderSource =
      "  out.texCoord = texCoords[vertexID];\n"
      "  return out;\n"
      "}\n"
+     "fragment float4 fragment_filtered(VertexOut in [[stage_in]], "
+     "texture2d<float> color [[texture(0)]]) {\n"
+     "  constexpr sampler textureSampler(address::clamp_to_edge, filter::linear);\n"
+     "  return color.sample(textureSampler, in.texCoord);\n"
+     "}\n"
      "fragment float4 fragment_main(VertexOut in [[stage_in]], "
      "texture2d<float> yTexture [[texture(0)]], "
      "texture2d<float> uvTexture [[texture(1)]]) {\n"
@@ -1493,10 +1500,15 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
 @property(nonatomic, assign) CVMetalTextureCacheRef textureCache;
 @property(nonatomic, assign) BOOL ownsMetalLayer;
 @property(nonatomic, assign) BOOL requiresMainThread;
+@property(nonatomic, copy) NSData *filterParameters;
+@property(nonatomic, assign) void *filterHost;
+@property(nonatomic, assign) BOOL reportedFilterSubmission;
 
 - (instancetype)initWithSurface:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error;
-- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer error:(NSString **)error;
-- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer error:(NSString **)error;
+- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                completion:(void (^)(BOOL))completion error:(NSString **)error;
+- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer
+                             completion:(void (^)(BOOL))completion error:(NSString **)error;
 - (void)detachSurface;
 
 @end
@@ -1531,6 +1543,19 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
         return nil;
     }
 
+    NSString *filter_path = NSProcessInfo.processInfo.environment[@"VESPER_MACOS_COLOR_FILTER_METALLIB"];
+    if (filter_path.length != 0) {
+        if (![filter_path isAbsolutePath]) {
+            if (error != NULL) *error = @"The Metal filter library path must be absolute";
+            return nil;
+        }
+        self.filterParameters = [NSJSONSerialization dataWithJSONObject:@{@"metalLibrary": filter_path}
+                                                                 options:0 error:NULL];
+        if (self.filterParameters == nil) {
+            if (error != NULL) *error = @"Could not encode Metal filter parameters";
+            return nil;
+        }
+    }
     NSError *shader_error = nil;
     id<MTLLibrary> library = [self.device newLibraryWithSource:PlayerMacosMetalPresenterShaderSource
                                                        options:nil
@@ -1543,8 +1568,10 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
     }
     MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
     descriptor.vertexFunction = [library newFunctionWithName:@"vertex_main"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"fragment_main"];
-    descriptor.colorAttachments[0].pixelFormat = player_macos_native_frame_layer_pixel_format();
+    descriptor.fragmentFunction = [library newFunctionWithName:self.filterParameters == nil
+        ? @"fragment_main" : @"fragment_filtered"];
+    descriptor.colorAttachments[0].pixelFormat = self.filterParameters == nil
+        ? player_macos_native_frame_layer_pixel_format() : MTLPixelFormatRGBA16Float;
     self.pipelineState = [self.device newRenderPipelineStateWithDescriptor:descriptor
                                                                       error:&shader_error];
     if (self.pipelineState == nil) {
@@ -1579,6 +1606,7 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
 
 - (void)dealloc {
     [self detachSurface];
+    vesper_reference_metal_host_destroy(self.filterHost);
     if (_textureCache != NULL) {
         CFRelease(_textureCache);
         _textureCache = NULL;
@@ -1648,7 +1676,13 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
     }
 
     metal_layer.device = self.device;
-    metal_layer.pixelFormat = player_macos_native_frame_layer_pixel_format();
+    metal_layer.pixelFormat = self.filterParameters == nil
+        ? player_macos_native_frame_layer_pixel_format() : MTLPixelFormatRGBA16Float;
+    if (self.filterParameters != nil) {
+        CGColorSpaceRef colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+        metal_layer.colorspace = colorspace;
+        if (colorspace != NULL) CGColorSpaceRelease(colorspace);
+    }
     metal_layer.framebufferOnly = NO;
     metal_layer.opaque = YES;
     metal_layer.contentsGravity = kCAGravityResizeAspect;
@@ -1679,7 +1713,8 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
     self.requiresMainThread = NO;
 }
 
-- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer error:(NSString **)error {
+- (BOOL)presentPixelBuffer:(CVPixelBufferRef)pixelBuffer
+                completion:(void (^)(BOOL))completion error:(NSString **)error {
     if (pixelBuffer == NULL) {
         if (error != NULL) {
             *error = @"cannot present a null CVPixelBuffer";
@@ -1693,10 +1728,13 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
         return NO;
     }
     OSType pixel_format = CVPixelBufferGetPixelFormatType(pixelBuffer);
-    if (player_macos_pixel_format_is_10bit_biplanar(pixel_format)) {
-        return [self presentPixelBufferWithCoreImage:pixelBuffer error:error];
+    BOOL p010 = player_macos_pixel_format_is_10bit_biplanar(pixel_format);
+    if (p010 && self.filterParameters == nil) {
+        return [self presentPixelBufferWithCoreImage:pixelBuffer completion:completion error:error];
     }
-    if (CVPixelBufferGetPlaneCount(pixelBuffer) < 2) {
+    if (CVPixelBufferGetPlaneCount(pixelBuffer) != 2 ||
+        (!p010 && pixel_format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+         pixel_format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)) {
         if (error != NULL) {
             *error = @"Metal presenter currently requires NV12 bi-planar pixel buffers";
         }
@@ -1719,7 +1757,7 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
                                                                   self.textureCache,
                                                                   pixelBuffer,
                                                                   NULL,
-                                                                  MTLPixelFormatR8Unorm,
+                                                                  p010 ? MTLPixelFormatR16Unorm : MTLPixelFormatR8Unorm,
                                                                   y_width,
                                                                   y_height,
                                                                   0,
@@ -1728,7 +1766,7 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
                                                                    self.textureCache,
                                                                    pixelBuffer,
                                                                    NULL,
-                                                                   MTLPixelFormatRG8Unorm,
+                                                                   p010 ? MTLPixelFormatRG16Unorm : MTLPixelFormatRG8Unorm,
                                                                    uv_width,
                                                                    uv_height,
                                                                    1,
@@ -1775,7 +1813,39 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
 
     id<MTLCommandBuffer> command_buffer = [self.commandQueue commandBuffer];
+    if (command_buffer == nil) {
+        CFRelease(y_ref);
+        CFRelease(uv_ref);
+        if (error != NULL) *error = @"failed to allocate a Metal command buffer";
+        return NO;
+    }
+
+    id<MTLTexture> filtered_texture = nil;
+    if (self.filterParameters != nil) {
+        if (self.filterHost == NULL) {
+            self.filterHost = vesper_reference_metal_host_create((__bridge void *)self.device,
+                (__bridge void *)self.commandQueue, self.textureCache,
+                self.filterParameters.bytes, self.filterParameters.length);
+        }
+        const void *texture = NULL;
+        VesperStatus status = vesper_reference_metal_host_encode(self.filterHost,
+            (__bridge void *)command_buffer, pixelBuffer, (__bridge void *)y_texture,
+            (__bridge void *)uv_texture, &texture);
+        if (status != VESPER_OK || texture == NULL) {
+            CFRelease(y_ref);
+            CFRelease(uv_ref);
+            if (error != NULL) *error = [NSString stringWithFormat:@"Metal filter returned status %u", status];
+            return NO;
+        }
+        filtered_texture = (__bridge id<MTLTexture>)texture;
+    }
     id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        CFRelease(y_ref);
+        CFRelease(uv_ref);
+        if (error != NULL) *error = @"failed to allocate a Metal render encoder";
+        return NO;
+    }
     double drawable_width = (double)drawable.texture.width;
     double drawable_height = (double)drawable.texture.height;
     double source_width = (double)y_width;
@@ -1794,20 +1864,39 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
         .zfar = 1.0,
     };
     [encoder setRenderPipelineState:self.pipelineState];
-    [encoder setFragmentTexture:y_texture atIndex:0];
-    [encoder setFragmentTexture:uv_texture atIndex:1];
+    if (filtered_texture != nil) {
+        [encoder setFragmentTexture:filtered_texture atIndex:0];
+    } else {
+        [encoder setFragmentTexture:y_texture atIndex:0];
+        [encoder setFragmentTexture:uv_texture atIndex:1];
+    }
     [encoder setViewport:viewport];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     [encoder endEncoding];
+    // The completion block owns the CoreVideo imports regardless of presenter
+    // teardown. Retaining the pixel buffer also prevents decoder pool reuse.
+    CVPixelBufferRetain(pixelBuffer);
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        CFRelease(y_ref);
+        CFRelease(uv_ref);
+        CVPixelBufferRelease(pixelBuffer);
+        if (completion != nil) completion(completed.status == MTLCommandBufferStatusCompleted);
+        if (completed.status == MTLCommandBufferStatusError) {
+            NSLog(@"Vesper Metal presentation failed with code %ld", (long)completed.error.code);
+        }
+    }];
     [command_buffer presentDrawable:drawable];
     [command_buffer commit];
-
-    CFRelease(y_ref);
-    CFRelease(uv_ref);
+    if (filtered_texture != nil && !self.reportedFilterSubmission) {
+        self.reportedFilterSubmission = YES;
+        NSLog(@"Vesper native plugin ABI Metal filter submitted %zux%zu %@ on the presentation command buffer",
+              y_width, y_height, p010 ? @"P010" : @"NV12");
+    }
     return YES;
 }
 
-- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer error:(NSString **)error {
+- (BOOL)presentPixelBufferWithCoreImage:(CVPixelBufferRef)pixelBuffer
+                             completion:(void (^)(BOOL))completion error:(NSString **)error {
     if (self.ciContext == nil) {
         if (error != NULL) {
             *error = @"CoreImage Metal context is unavailable for HDR CVPixelBuffer presentation";
@@ -1885,6 +1974,11 @@ static CGColorSpaceRef player_macos_native_frame_render_color_space(void) {
     if (color_space != NULL) {
         CGColorSpaceRelease(color_space);
     }
+    CVPixelBufferRetain(pixelBuffer);
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        CVPixelBufferRelease(pixelBuffer);
+        if (completion != nil) completion(completed.status == MTLCommandBufferStatusCompleted);
+    }];
     [command_buffer presentDrawable:drawable];
     [command_buffer commit];
     return YES;
@@ -1921,6 +2015,8 @@ void *player_macos_metal_presenter_create(PlayerMacosVideoSurfaceTarget surface,
 
 bool player_macos_metal_presenter_present_cv_pixel_buffer(void *presenter_handle,
                                                           void *pixel_buffer_handle,
+                                                          void *completion_context,
+                                                          void (*completion)(void *, bool),
                                                           char *error_message,
                                                           size_t error_message_size) {
     @autoreleasepool {
@@ -1935,7 +2031,12 @@ bool player_macos_metal_presenter_present_cv_pixel_buffer(void *presenter_handle
         }
 
         NSString *present_error = nil;
-        BOOL succeeded = [presenter presentPixelBuffer:pixel_buffer error:&present_error];
+        void (^on_complete)(BOOL) = nil;
+        if (completion != NULL) {
+            on_complete = ^(BOOL rendered) { completion(completion_context, rendered); };
+        }
+        BOOL succeeded = [presenter presentPixelBuffer:pixel_buffer
+                                            completion:on_complete error:&present_error];
         player_write_error_message(present_error, error_message, error_message_size);
         return succeeded;
     }

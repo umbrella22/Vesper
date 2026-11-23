@@ -412,6 +412,7 @@ internal interface VesperNativeBindings {
     fun seekNativeFramePipeline(positionMs: Long): Map<String, Any?>?
     fun currentNativeFramePipelineStatus(): Map<String, Any?>?
     fun closeNativeFramePipeline()
+    fun restoreSystemPlaybackVideo() = Unit
     /** Invalidates callbacks and queued events owned by the current system player. */
     fun invalidateSystemPlaybackCallbacks() = Unit
     fun dispose()
@@ -472,20 +473,17 @@ internal interface VesperNativeBindings {
     ): TimelineUiState =
         throw UnsupportedOperationException("awaitable source commands are not supported")
     fun drainEvents(): List<NativeBridgeEvent>
-    /** Returns and clears structured reports emitted by playback EventHooks. */
-    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
-        VesperPipelineEventHookReportBatch()
     fun play()
     fun pause()
     fun stop()
-    fun seekTo(positionMs: Long)
+    fun seekTo(positionMs: Long, commandId: Long, sourceEpoch: Long, timeoutMs: Long)
     suspend fun seekToAndAwait(
         positionMs: Long,
         commandId: Long,
         sourceEpoch: Long,
         timeoutMs: Long,
     ): Long {
-        seekTo(positionMs)
+        seekTo(positionMs, commandId, sourceEpoch, timeoutMs)
         return sampleTimeline()?.positionMs ?: positionMs
     }
     fun cancelPendingSourceCommand(reason: String) = Unit
@@ -582,7 +580,7 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
     override fun play() = Unit
     override fun pause() = Unit
     override fun stop() = Unit
-    override fun seekTo(positionMs: Long) = Unit
+    override fun seekTo(positionMs: Long, commandId: Long, sourceEpoch: Long, timeoutMs: Long) = Unit
     override fun setPlaybackRate(rate: Float) = Unit
     override fun setVideoTrackSelection(selection: VesperTrackSelection) = Unit
     override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit

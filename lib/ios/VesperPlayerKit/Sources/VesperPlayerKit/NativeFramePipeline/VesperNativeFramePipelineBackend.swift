@@ -16,6 +16,24 @@ struct VesperNativeFramePipelineOperationError: LocalizedError, Equatable {
     }
 }
 
+final class VesperNativeFramePresentationLease {
+    private var handle: UnsafeMutableRawPointer?
+
+    init(_ handle: UnsafeMutableRawPointer) {
+        self.handle = handle
+    }
+
+    func finish(presented: Bool) {
+        guard let lease = handle else { return }
+        handle = nil
+        vesper_ios_native_frame_pipeline_finish_presentation_lease(lease, presented)
+    }
+
+    deinit {
+        finish(presented: false)
+    }
+}
+
 protocol VesperNativeFramePipelineBackend: AnyObject, Sendable {
     func open(
         source: VesperPlayerSource,
@@ -39,6 +57,14 @@ protocol VesperNativeFramePipelineBackend: AnyObject, Sendable {
     ) -> Result<[String: Any], VesperNativeFramePipelineOperationError>
 
     func close(handle: UInt64)
+
+    func takePresentationLease(handle: UInt64, frameHandle: UInt64) -> VesperNativeFramePresentationLease?
+}
+
+extension VesperNativeFramePipelineBackend {
+    func takePresentationLease(handle: UInt64, frameHandle: UInt64) -> VesperNativeFramePresentationLease? {
+        nil
+    }
 }
 
 final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBackend, @unchecked Sendable {
@@ -238,6 +264,11 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
             )
         }
         return .success(Self.jsonObject(from: outputPointer))
+    }
+
+    func takePresentationLease(handle: UInt64, frameHandle: UInt64) -> VesperNativeFramePresentationLease? {
+        vesper_ios_native_frame_pipeline_take_presentation_lease(handle, frameHandle)
+            .map(VesperNativeFramePresentationLease.init)
     }
 
     func releaseFrame(

@@ -172,13 +172,11 @@ internal fun VesperNativeJniBindings.dispatchRustCommand(
 internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
     subtitleSourceCallbackGeneration: Long? = null,
     subtitleCommandGeneration: Long? = null,
-) {
-    if (isDisposed.get()) {
-        return
-    }
-    val handle = sessionHandle ?: return
-    val exoPlayer = player ?: return
-
+): Boolean {
+    if (isDisposed.get()) return false
+    val handle = sessionHandle ?: return false
+    val exoPlayer = player ?: return false
+    var seekApplied = false
     VesperNativeJni.drainNativeCommands(handle).forEach { command ->
         when (command) {
             NativePlayerCommand.Play -> {
@@ -196,11 +194,14 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
                     NATIVE_JNI_BINDINGS_TAG,
                     "apply native command: SeekTo timelinePositionMs=${command.positionMs} windowPositionMs=$windowPositionMs",
                 )
+                pendingLiveWindowRecovery = null
                 exoPlayer.seekTo(windowPositionMs)
+                seekApplied = true
             }
             NativePlayerCommand.Stop -> {
                 Log.d(NATIVE_JNI_BINDINGS_TAG, "apply native command: Stop")
                 exoPlayer.pause()
+                pendingLiveWindowRecovery = null
                 exoPlayer.seekTo(0L)
             }
             is NativePlayerCommand.SetPlaybackRate -> {
@@ -303,6 +304,12 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
             }
         }
     }
+    return seekApplied
+}
+
+internal fun VesperNativeJniBindings.publishPlaybackObservation(event: VesperPlaybackEvent) {
+    addLocalBridgeEvent(NativeBridgeEvent.PlaybackObservation(event))
+    notifyNativeUpdate()
 }
 
 internal fun VesperNativeJniBindings.buildPlayerListener(
@@ -315,6 +322,17 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            if (playbackState == Player.STATE_READY) {
+                val recovery = pendingLiveWindowRecovery
+                if (recovery?.first == callbackGeneration) {
+                    pendingLiveWindowRecovery = null
+                    player?.currentTimelineSample()?.let { sample ->
+                        addLocalBridgeEvent(NativeBridgeEvent.PlaybackObservation(
+                            VesperPlaybackEvent.LiveWindowRecovered(recovery.second, sample.timelinePositionMs),
+                        ))
+                    }
+                }
+            }
             updateBehindLiveWindowRecoveryStability(playbackState, callbackGeneration)
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
@@ -431,32 +449,19 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         ) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             playbackDiagnosticsTracker.stallDetector.resetWindow()
-            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                val internalRecoverySeek =
-                    behindLiveWindowInternalSeekSuppression.consumeIfPending(
-                        sourceEpoch = callbackGeneration,
-                        nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
-                    )
-                if (internalRecoverySeek) {
-                    recordBenchmark(
-                        "behind_live_window_internal_seek_completed",
-                        mapOf(
-                            "sourceEpoch" to callbackGeneration.toString(),
-                            "windowPositionMs" to newPosition.positionMs.toString(),
-                        ),
-                    )
-                } else {
-                    sessionHandle?.let { handle ->
-                        val completedPositionMs =
-                            player?.timelinePositionForWindowPosition(newPosition.positionMs)
-                                ?: newPosition.positionMs
-                        recordBenchmark(
-                            "seek_completed",
-                            mapOf("positionMs" to completedPositionMs.toString()),
-                        )
-                        VesperNativeJni.reportSeekCompleted(handle, completedPositionMs)
-                    }
-                }
+            if (reason == Player.DISCONTINUITY_REASON_SEEK &&
+                behindLiveWindowInternalSeekSuppression.consumeIfPending(
+                    sourceEpoch = callbackGeneration,
+                    nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+                )
+            ) {
+                recordBenchmark(
+                    "behind_live_window_internal_seek_completed",
+                    mapOf(
+                        "sourceEpoch" to callbackGeneration.toString(),
+                        "windowPositionMs" to newPosition.positionMs.toString(),
+                    ),
+                )
             }
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
@@ -538,6 +543,7 @@ internal fun VesperNativeJniBindings.handleBehindLiveWindowError(
                 (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW).toString(),
         )
     if (!decision.shouldRecover) {
+        pendingLiveWindowRecovery = null
         recordBenchmark("behind_live_window_recovery_exhausted", attributes)
         Log.e(
             NATIVE_JNI_BINDINGS_TAG,
@@ -567,6 +573,7 @@ internal fun VesperNativeJniBindings.handleBehindLiveWindowError(
             sourceEpoch = callbackGeneration,
             nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
         )
+        pendingLiveWindowRecovery = callbackGeneration to decision.observedFailure
         exoPlayer.seekToDefaultPosition()
         exoPlayer.prepare()
         exoPlayer.playWhenReady = playWhenReady
@@ -575,8 +582,14 @@ internal fun VesperNativeJniBindings.handleBehindLiveWindowError(
             attributes + ("playWhenReady" to playWhenReady.toString()),
         )
     }.fold(
-        onSuccess = { true },
+        onSuccess = {
+            addLocalBridgeEvent(NativeBridgeEvent.PlaybackObservation(
+                VesperPlaybackEvent.LiveWindowRecoveryStarted(decision.observedFailure, decision.maxAttempts),
+            ))
+            true
+        },
         onFailure = { recoveryError ->
+            pendingLiveWindowRecovery = null
             recordBenchmark(
                 "behind_live_window_recovery_failed",
                 attributes +

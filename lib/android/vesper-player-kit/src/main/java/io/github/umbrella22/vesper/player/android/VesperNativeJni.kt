@@ -9,7 +9,6 @@ internal object VesperNativeJni {
 
     external fun createSession(
         sourceUri: String,
-        pipelineEventHookConfig: NativePipelineEventHookConfig,
     ): Long
     external fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long
     external fun createDownloadSession(config: NativeDownloadConfig): Long
@@ -21,10 +20,6 @@ internal object VesperNativeJni {
         runtimeApiLevel: Int,
     ): Long
     external fun disposeEmbeddedPluginRegistry(registryHandle: Long)
-    external fun createBenchmarkSinkSessionFromRegistry(
-        registryHandle: Long,
-        referencesJson: String,
-    ): Long
     external fun probeMobilePlugins(
         sourceUri: String,
         sourceModeOrdinal: Int,
@@ -50,8 +45,7 @@ internal object VesperNativeJni {
         runtimeProfile: String?,
         nativeFrameMode: String,
         decoderPluginArtifactsJson: String,
-        avcDecoderImplementationName: String?,
-        hevcDecoderImplementationName: String?,
+        decoderSelector: VesperHardwareMediaCodecSelector,
         frameProcessorPluginArtifactsJson: String,
         maxInFlightFrames: Int,
         presenterProfile: String,
@@ -90,7 +84,6 @@ internal object VesperNativeJni {
     external fun disposeSession(sessionHandle: Long)
     external fun disposePreloadSession(sessionHandle: Long)
     external fun disposeDownloadSession(sessionHandle: Long)
-    external fun disposeBenchmarkSinkSession(sessionHandle: Long)
     external fun disposePlaylistSession(sessionHandle: Long)
     external fun disposeSequenceSession(sessionHandle: Long)
     external fun executeSequenceCommand(
@@ -101,8 +94,6 @@ internal object VesperNativeJni {
     external fun sequenceSnapshot(sessionHandle: Long): String
     external fun drainSequenceEvents(sessionHandle: Long, maxCount: Int): String
     external fun sequencePreloadIntents(sessionHandle: Long, wallEpochMs: Long): String
-    external fun submitBenchmarkSinkEvents(sessionHandle: Long, batchJson: String): String
-    external fun flushBenchmarkSinkSession(sessionHandle: Long): String
     external fun attachSurface(
         sessionHandle: Long,
         surface: Surface,
@@ -251,9 +242,6 @@ internal object VesperNativeJni {
         width: Int,
         height: Int,
     )
-    external fun flushPipelineEventHooks(sessionHandle: Long, timeoutMs: Long): Boolean
-    external fun closePipelineEventHooks(sessionHandle: Long): Boolean
-    external fun drainPipelineEventHookReports(sessionHandle: Long): String?
     external fun reportError(
         sessionHandle: Long,
         codeOrdinal: Int,
@@ -264,7 +252,7 @@ internal object VesperNativeJni {
     external fun play(sessionHandle: Long)
     external fun pause(sessionHandle: Long)
     external fun stop(sessionHandle: Long)
-    external fun seekTo(sessionHandle: Long, positionMs: Long)
+    external fun seekTo(sessionHandle: Long, positionMs: Long): Boolean
     external fun setPlaybackRate(sessionHandle: Long, rate: Float)
     external fun setVideoTrackSelection(
         sessionHandle: Long,

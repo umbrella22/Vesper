@@ -3,10 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use libloading::Library;
+use player_plugin_abi::{VESPER_PLUGIN_ENTRY_SYMBOL, VesperPluginEntryPoint};
 use thiserror::Error;
 
-use crate::native_abi::CheckedPluginRoot;
-use crate::{LoadedNativePlugin, NativePluginContractError};
+use crate::LoadedNativePlugin;
 
 #[derive(Debug, Error)]
 pub enum PluginLoadError {
@@ -22,8 +22,8 @@ pub enum PluginLoadError {
         #[source]
         source: libloading::Error,
     },
-    #[error("native plugin root violates the ABI contract: {0}")]
-    NativeContract(#[from] NativePluginContractError),
+    #[error("native ABI plugin violates the contract: {0}")]
+    NativeContract(#[from] player_plugin::author::PluginError),
 }
 
 impl LoadedNativePlugin {
@@ -46,6 +46,32 @@ impl LoadedNativePlugin {
     }
 
     fn load_unchecked(path: &Path) -> Result<Self, PluginLoadError> {
+        let library = LibraryHolder::open(path)?;
+        // SAFETY: the admitted module remains resident and the symbol has the native signature.
+        let entry = unsafe {
+            library
+                .library
+                .get::<VesperPluginEntryPoint>(VESPER_PLUGIN_ENTRY_SYMBOL.to_bytes_with_nul())
+        }
+        .map_err(|source| PluginLoadError::ResolveEntrySymbol {
+            symbol: "vesper_native_plugin_entry",
+            source,
+        })?;
+        // SAFETY: the entry and its callbacks stay mapped for the life of the process.
+        let plugin = unsafe { crate::native::NativePlugin::from_entry(*entry) }?;
+        Ok(Self::from_native_plugin(plugin)?)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct LibraryHolder {
+    // Plugins may register thread-local destructors through native
+    // dependencies. Keep the library mapped for the process lifetime.
+    library: ManuallyDrop<Library>,
+}
+
+impl LibraryHolder {
+    fn open(path: &Path) -> Result<Arc<Self>, PluginLoadError> {
         let path_string = path.display().to_string();
         // SAFETY: the caller selects the native library. It is immediately
         // placed in `LibraryHolder`, whose process-lifetime policy keeps all
@@ -55,38 +81,62 @@ impl LoadedNativePlugin {
                 path: path_string,
                 source,
             })?;
-        let library = Arc::new(LibraryHolder {
+        Ok(Arc::new(Self {
             library: ManuallyDrop::new(library),
-        });
-
-        // SAFETY: the symbol name and signature come from the raw native ABI
-        // crate. There is deliberately no legacy-symbol fallback.
-        let entry = unsafe {
-            library
-                .library
-                .get::<player_plugin_abi::VesperPluginEntryPoint>(
-                    player_plugin_abi::VESPER_PLUGIN_ENTRY_SYMBOL,
-                )
-        }
-        .map_err(|source| PluginLoadError::ResolveEntrySymbol {
-            symbol: player_plugin_abi::VESPER_PLUGIN_ENTRY_SYMBOL_NAME,
-            source,
-        })?;
-
-        // SAFETY: the resolved plugin entry transfers one root owner to the host.
-        let root = unsafe { entry() };
-        let checked =
-            // SAFETY: the entry contract permits null or a readable native root;
-            // validation owns all subsequent pointer and size checks.
-            unsafe { CheckedPluginRoot::from_raw(root, Some(library)) }?;
-        Ok(Self::from_checked(checked))
+        }))
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct LibraryHolder {
-    // Plugins may register thread-local destructors through native
-    // dependencies. Keep the library mapped for the process lifetime.
-    #[allow(dead_code)]
-    pub(crate) library: ManuallyDrop<Library>,
+#[cfg(all(test, unix, not(target_os = "android")))]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    #[test]
+    fn native_admission_rejects_retired_entry_symbols() {
+        let fixture = tempfile::tempdir().expect("native fixture directory");
+        let library_flag = if cfg!(target_vendor = "apple") {
+            "-dynamiclib"
+        } else {
+            "-shared"
+        };
+        for (index, retired_entry) in ["vesper_plugin_entry", "vesper_plugin_entry_v2"]
+            .into_iter()
+            .enumerate()
+        {
+            let source = fixture.path().join(format!("retired-{index}.c"));
+            let library = fixture.path().join(format!("retired-{index}.shared"));
+            std::fs::write(
+                &source,
+                format!("#include <stdlib.h>\nvoid *{retired_entry}(void) {{ abort(); }}\n"),
+            )
+            .expect("write retired entry fixture");
+            assert!(
+                Command::new("cc")
+                    .args([library_flag, "-fPIC", "-o"])
+                    .arg(&library)
+                    .arg(&source)
+                    .status()
+                    .expect("compile retired entry fixture")
+                    .success()
+            );
+
+            for result in [
+                LoadedNativePlugin::load_development(&library),
+                LoadedNativePlugin::load_host_verified(&library),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(PluginLoadError::ResolveEntrySymbol {
+                        symbol: "vesper_native_plugin_entry",
+                        ..
+                    })
+                ));
+            }
+            // SAFETY: the fixture contains only the retired export. It has no constructors.
+            let result = unsafe { crate::native::NativePlugin::load(&library) };
+            assert!(matches!(result, Err(crate::native::LoadError::Entry(_))));
+        }
+    }
 }

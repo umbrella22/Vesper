@@ -347,14 +347,6 @@ fn render_notes(input: NotesInput<'_>) -> String {
             "VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip",
             "Optional VideoToolbox decoder plugin XCFramework",
         ),
-        (
-            "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
-            "Optional diagnostic FrameProcessor plugin XCFramework",
-        ),
-        (
-            "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
-            "Optional performance diagnostics BenchmarkSink plugin XCFramework",
-        ),
     ] {
         download(&mut output, input.download_base, asset, label);
     }

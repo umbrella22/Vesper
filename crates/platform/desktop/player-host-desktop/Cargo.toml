@@ -19,6 +19,11 @@ player-platform-macos = { path = "../player-platform-macos" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 player-platform-linux = { path = "../player-platform-linux" }
+player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
+tracing.workspace = true
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../../plugin/player-plugin-abi" }
+player-render-vulkan = { path = "../../../render/player-render-vulkan" }
+x11-dl = "2.21.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 player-platform-windows = { path = "../player-platform-windows" }

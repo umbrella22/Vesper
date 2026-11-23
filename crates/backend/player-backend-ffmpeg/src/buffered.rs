@@ -12,16 +12,16 @@ use crate::{DecodedVideoFrame, FfmpegBackend, MediaProbe, VideoDecodeInfo, Video
 const PREFETCH_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 
 #[derive(Debug)]
-pub enum BufferedFramePoll {
-    Ready(DecodedVideoFrame),
+pub enum BufferedFramePoll<F = DecodedVideoFrame> {
+    Ready(F),
     Pending,
     EndOfStream,
 }
 
 #[derive(Debug)]
-pub struct BufferedVideoSource {
+pub struct BufferedVideoSource<F = DecodedVideoFrame> {
     command_tx: Sender<WorkerCommand>,
-    frame_rx: Receiver<WorkerEvent>,
+    frame_rx: Receiver<WorkerEvent<F>>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
     buffered_frame_count: Arc<AtomicUsize>,
@@ -32,8 +32,8 @@ pub struct BufferedVideoSource {
 }
 
 #[derive(Debug)]
-pub struct BufferedVideoSourceBootstrap {
-    pub source: BufferedVideoSource,
+pub struct BufferedVideoSourceBootstrap<F = DecodedVideoFrame> {
+    pub source: BufferedVideoSource<F>,
     pub decode_info: VideoDecodeInfo,
     pub probe: MediaProbe,
 }
@@ -45,18 +45,10 @@ enum WorkerCommand {
 }
 
 #[derive(Debug)]
-enum WorkerEvent {
-    Frame {
-        generation: u64,
-        frame: DecodedVideoFrame,
-    },
-    EndOfStream {
-        generation: u64,
-    },
-    Error {
-        generation: u64,
-        message: String,
-    },
+enum WorkerEvent<F> {
+    Frame { generation: u64, frame: F },
+    EndOfStream { generation: u64 },
+    Error { generation: u64, message: String },
 }
 
 #[derive(Debug)]
@@ -78,6 +70,63 @@ impl BufferedVideoSource {
         buffer_capacity: usize,
         interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> Result<BufferedVideoSourceBootstrap> {
+        Self::new_with_decoder(
+            source,
+            buffer_capacity,
+            interrupt_flag,
+            |backend, source, interrupt| {
+                let decoder =
+                    backend.open_video_source_with_interrupt(source.clone(), interrupt)?;
+                let init = BufferedVideoSourceInit {
+                    decode_info: decoder.decode_info().clone(),
+                    probe: decoder.media_probe(&source)?,
+                };
+                Ok((decoder, init))
+            },
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl BufferedVideoSource<crate::VaapiVideoFrame> {
+    pub fn new_vaapi(
+        source: MediaSource,
+        buffer_capacity: usize,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+        drm_device: std::path::PathBuf,
+    ) -> Result<BufferedVideoSourceBootstrap<crate::VaapiVideoFrame>> {
+        Self::new_with_decoder(
+            source,
+            buffer_capacity,
+            interrupt_flag,
+            move |backend, source, interrupt| {
+                let mut decoder =
+                    backend.open_vaapi_video_source(source.clone(), interrupt, &drm_device)?;
+                // Negotiate the actual hardware format before committing the host route.
+                decoder.prime()?;
+                let init = BufferedVideoSourceInit {
+                    decode_info: decoder.decode_info().clone(),
+                    probe: decoder.media_probe(&source)?,
+                };
+                Ok((decoder, init))
+            },
+        )
+    }
+}
+
+impl<F: Send + 'static> BufferedVideoSource<F> {
+    fn new_with_decoder<D: BufferedFrameDecoder<Frame = F>>(
+        source: MediaSource,
+        buffer_capacity: usize,
+        interrupt_flag: Option<Arc<AtomicBool>>,
+        open_decoder: impl FnOnce(
+            FfmpegBackend,
+            MediaSource,
+            Option<Arc<AtomicBool>>,
+        ) -> Result<(D, BufferedVideoSourceInit)>
+        + Send
+        + 'static,
+    ) -> Result<BufferedVideoSourceBootstrap<F>> {
         let (command_tx, command_rx) = mpsc::channel();
         let frame_capacity = buffer_capacity.max(1);
         let event_capacity = frame_capacity
@@ -94,16 +143,25 @@ impl BufferedVideoSource {
         let worker = thread::Builder::new()
             .name("ffmpeg-video-prefetch".to_owned())
             .spawn(move || {
-                worker_loop(
-                    source,
-                    interrupt_flag,
-                    command_rx,
-                    frame_tx,
-                    init_tx,
-                    worker_generation,
-                    worker_buffered_frame_count,
-                    worker_prefetch_limit,
-                )
+                let opened = FfmpegBackend::new()
+                    .and_then(|backend| open_decoder(backend, source, interrupt_flag));
+                let (decoder, init) = match opened {
+                    Ok(opened) => opened,
+                    Err(error) => {
+                        let _ = init_tx.send(Err(error));
+                        return;
+                    }
+                };
+                if init_tx.send(Ok(init)).is_ok() {
+                    run_buffered_worker(
+                        decoder,
+                        command_rx,
+                        frame_tx,
+                        worker_generation,
+                        worker_buffered_frame_count,
+                        worker_prefetch_limit,
+                    );
+                }
             })
             .context("failed to spawn video predecode worker")?;
         let init = init_rx
@@ -127,7 +185,7 @@ impl BufferedVideoSource {
         })
     }
 
-    pub fn recv_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
+    pub fn recv_frame(&mut self) -> Result<Option<F>> {
         if self.ended {
             return Ok(None);
         }
@@ -147,7 +205,7 @@ impl BufferedVideoSource {
         }
     }
 
-    pub fn try_recv_frame(&mut self) -> Result<BufferedFramePoll> {
+    pub fn try_recv_frame(&mut self) -> Result<BufferedFramePoll<F>> {
         if self.ended {
             return Ok(BufferedFramePoll::EndOfStream);
         }
@@ -171,7 +229,7 @@ impl BufferedVideoSource {
         }
     }
 
-    pub fn seek_to(&mut self, position: Duration) -> Result<Option<DecodedVideoFrame>> {
+    pub fn seek_to(&mut self, position: Duration) -> Result<Option<F>> {
         self.generation = self.generation.wrapping_add(1);
         self.current_generation
             .store(self.generation, Ordering::SeqCst);
@@ -198,7 +256,7 @@ impl BufferedVideoSource {
         );
     }
 
-    fn handle_event(&mut self, event: WorkerEvent) -> Result<Option<DecodedVideoFrame>> {
+    fn handle_event(&mut self, event: WorkerEvent<F>) -> Result<Option<F>> {
         match event {
             WorkerEvent::Frame { generation, frame } if generation == self.generation => {
                 decrement_buffered_frame_count(&self.buffered_frame_count);
@@ -220,7 +278,7 @@ impl BufferedVideoSource {
     }
 }
 
-impl Drop for BufferedVideoSource {
+impl<F> Drop for BufferedVideoSource<F> {
     fn drop(&mut self) {
         let _ = self.command_tx.send(WorkerCommand::Shutdown);
         if let Some(worker) = self.worker.take() {
@@ -229,72 +287,15 @@ impl Drop for BufferedVideoSource {
     }
 }
 
-fn worker_loop(
-    source: MediaSource,
-    interrupt_flag: Option<Arc<AtomicBool>>,
-    command_rx: Receiver<WorkerCommand>,
-    frame_tx: SyncSender<WorkerEvent>,
-    init_tx: Sender<Result<BufferedVideoSourceInit>>,
-    current_generation: Arc<AtomicU64>,
-    buffered_frame_count: Arc<AtomicUsize>,
-    prefetch_limit: Arc<AtomicUsize>,
-) {
-    let media_source = source;
-    let backend = match FfmpegBackend::new() {
-        Ok(backend) => backend,
-        Err(error) => {
-            let _ = init_tx.send(Err(anyhow::anyhow!(error.to_string())));
-            let _ = frame_tx.send(WorkerEvent::Error {
-                generation: 0,
-                message: error.to_string(),
-            });
-            return;
-        }
-    };
-    let video_source =
-        match backend.open_video_source_with_interrupt(media_source.clone(), interrupt_flag) {
-            Ok(source) => source,
-            Err(error) => {
-                let _ = init_tx.send(Err(anyhow::anyhow!(error.to_string())));
-                let _ = frame_tx.send(WorkerEvent::Error {
-                    generation: 0,
-                    message: error.to_string(),
-                });
-                return;
-            }
-        };
-    let probe = match video_source.media_probe(&media_source) {
-        Ok(probe) => probe,
-        Err(error) => {
-            let _ = init_tx.send(Err(anyhow::anyhow!(error.to_string())));
-            let _ = frame_tx.send(WorkerEvent::Error {
-                generation: 0,
-                message: error.to_string(),
-            });
-            return;
-        }
-    };
-    let _ = init_tx.send(Ok(BufferedVideoSourceInit {
-        decode_info: video_source.decode_info().clone(),
-        probe,
-    }));
-    run_buffered_worker(
-        video_source,
-        command_rx,
-        frame_tx,
-        current_generation,
-        buffered_frame_count,
-        prefetch_limit,
-    );
-}
-
 trait BufferedFrameDecoder {
-    fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>>;
-
-    fn seek_to(&mut self, position: Duration) -> Result<Option<DecodedVideoFrame>>;
+    type Frame;
+    fn next_frame(&mut self) -> Result<Option<Self::Frame>>;
+    fn seek_to(&mut self, position: Duration) -> Result<Option<Self::Frame>>;
 }
 
 impl BufferedFrameDecoder for VideoFrameSource {
+    type Frame = DecodedVideoFrame;
+
     fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
         VideoFrameSource::next_frame(self)
     }
@@ -304,10 +305,30 @@ impl BufferedFrameDecoder for VideoFrameSource {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl BufferedFrameDecoder for crate::VaapiVideoSource {
+    type Frame = crate::VaapiVideoFrame;
+
+    fn next_frame(&mut self) -> Result<Option<Self::Frame>> {
+        Self::next_frame(self)
+    }
+
+    fn seek_to(&mut self, position: Duration) -> Result<Option<Self::Frame>> {
+        self.reset_to(position)?;
+        let interval = self.nominal_frame_interval();
+        while let Some(frame) = self.next_frame()? {
+            if frame.presentation_time.saturating_add(interval) >= position {
+                return Ok(Some(frame));
+            }
+        }
+        Ok(None)
+    }
+}
+
 fn run_buffered_worker<D>(
     mut video_source: D,
     command_rx: Receiver<WorkerCommand>,
-    frame_tx: SyncSender<WorkerEvent>,
+    frame_tx: SyncSender<WorkerEvent<D::Frame>>,
     current_generation: Arc<AtomicU64>,
     buffered_frame_count: Arc<AtomicUsize>,
     prefetch_limit: Arc<AtomicUsize>,
@@ -409,14 +430,14 @@ fn latest_command(command_rx: &Receiver<WorkerCommand>) -> Option<WorkerCommand>
     }
 }
 
-fn frame_event_generation(event: &WorkerEvent) -> Option<u64> {
+fn frame_event_generation<F>(event: &WorkerEvent<F>) -> Option<u64> {
     match event {
         WorkerEvent::Frame { generation, .. } => Some(*generation),
         _ => None,
     }
 }
 
-fn is_terminal_event(event: &WorkerEvent) -> bool {
+fn is_terminal_event<F>(event: &WorkerEvent<F>) -> bool {
     matches!(
         event,
         WorkerEvent::EndOfStream { .. } | WorkerEvent::Error { .. }
@@ -463,6 +484,8 @@ mod tests {
     }
 
     impl BufferedFrameDecoder for PermanentTerminalDecoder {
+        type Frame = DecodedVideoFrame;
+
         fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
             let call = self.next_calls.fetch_add(1, Ordering::SeqCst) + 1;
             if call > 1 {
@@ -613,6 +636,8 @@ mod tests {
     }
 
     impl BufferedFrameDecoder for FiniteFrameDecoder {
+        type Frame = DecodedVideoFrame;
+
         fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
             self.next_calls.fetch_add(1, Ordering::SeqCst);
             if self.next_index >= self.frame_count {

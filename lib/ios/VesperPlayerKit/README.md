@@ -30,7 +30,7 @@ Tagged GitHub Releases publish the following core artifacts via
 - `VesperPlayerKit-ios-simulator-arm64.framework.zip` — Apple Silicon Simulator
 - `VesperPlayerKit.xcframework.zip` — combined device + Apple Silicon Simulator
 
-The same release also publishes three FFmpeg component XCFrameworks and five
+The optional v2 artifact set includes three FFmpeg component XCFrameworks and three
 plugin XCFrameworks as an optional sibling set:
 
 - `VesperFFmpegAVCodec.xcframework.zip`
@@ -39,8 +39,6 @@ plugin XCFrameworks as an optional sibling set:
 - `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
 - `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
 - `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`
-- `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
-- `VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip`
 
 The optional set is released only with both mandatory redistribution assets:
 
@@ -87,10 +85,9 @@ Add that URL in Xcode's package dependency editor and select the exact release
 version, including a suffix such as `0.5.0-rc.1` when testing a prerelease. Link
 the `VesperPlayerKit` product for the binary host kit. Link
 `VesperPlayerKitUI` as well when the app uses the version-matched SwiftUI stage
-and controls. Optional apps link `VesperPlayerSourceNormalizerFfmpeg`,
-`VesperPlayerRemuxFfmpeg`, or `VesperPlayerPerformanceDiagnostics`. The FFmpeg
-products include their plugin and three matching FFmpeg component targets;
-performance diagnostics contains only its BenchmarkSink plugin target.
+and controls. App targets can add `VesperPlayerSourceNormalizerFfmpeg` or
+`VesperPlayerRemuxFfmpeg`. Each FFmpeg product includes its plugin and three
+matching FFmpeg component targets.
 
 The package repository contains the manifest, license, and
 `VesperPlayerKitUI` sources. Its binary targets reference the matching GitHub
@@ -159,8 +156,8 @@ builds, or any other working directory.
 ### Swift Package Publishing
 
 The `publish-swift-package` release job runs after the GitHub Release. It
-downloads the core XCFramework plus the three FFmpeg components and the remux,
-SourceNormalizer and performance-diagnostics plugin XCFrameworks, computes
+downloads the core XCFramework plus the three FFmpeg components and the four
+optional plugin XCFrameworks, computes
 their SwiftPM checksums,
 validates the generated capability-level manifest, and atomically pushes the
 package branch and matching stable or prerelease tag.
@@ -457,11 +454,10 @@ consumers add the capability-level products they need:
 
 - `VesperPlayerSourceNormalizerFfmpeg`
 - `VesperPlayerRemuxFfmpeg`
-- `VesperPlayerPerformanceDiagnostics`
 
 The FFmpeg products close over their plugin and three shared FFmpeg component
-targets. Performance diagnostics closes over only its plugin. Repository
-examples and archive verification stage the local eight-product package before
+targets. Repository examples and archive verification stage the local
+six-product package before
 SwiftPM resolution:
 
 ```sh
@@ -472,7 +468,7 @@ SwiftPM resolution:
 ```
 
 The repository App targets depend on the local
-`VesperPlayerOptionalPlugins` Swift package and embed its eight same-named
+`VesperPlayerOptionalPlugins` Swift package and embed its six same-named
 binary products with Embed & Sign. Hosted consumers let the selected capability
 products embed only the required closure. SwiftPM places the selected FFmpeg
 component and plugin frameworks as top-level siblings under
@@ -496,9 +492,8 @@ redistribution boundary.
 
 ## Optional Mobile Plugin Routes
 
-`VesperSourceNormalizerConfiguration` and `VesperFrameProcessorConfiguration`
-are disabled by default. When enabled, their `pluginReferences` select explicit
-native plugin identities. `VesperBundledPluginReferences` provides canonical
+`VesperSourceNormalizerConfiguration` is disabled by default. When enabled,
+its `pluginReferences` select explicit native plugin identities. `VesperBundledPluginReferences` provides canonical
 references for the distributed plugins, and the host kit maps those references
 to signed framework executables internally. The App target embeds the FFmpeg
 component frameworks as sibling dynamic dependencies; they are not plugin
@@ -523,8 +518,8 @@ on the sibling `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and
 profile so their `profile-hash.txt` values match. The SourceNormalizer plugin
 XCFramework must not contain duplicate FFmpeg libraries.
 
-FrameProcessor mobile remains explicit through
-`VesperNativeFramePipelineConfiguration`. The iOS host kit now exposes the
+The SDK-managed native-frame path is opt-in through
+`VesperNativeFramePipelineConfiguration`. The iOS host kit exposes the
 native-frame route decision for SourceNormalizer packet input, VideoToolbox,
 MetalLayer presentation, Swift native audio bridge status, fallback reason, and
 frame counters. Local/VOD SDR native-frame playback is explicitly opt-in:

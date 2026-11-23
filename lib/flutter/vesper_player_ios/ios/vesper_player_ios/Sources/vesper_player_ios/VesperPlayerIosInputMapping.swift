@@ -322,14 +322,6 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toPipelineEventHookConfiguration() throws -> VesperPipelineEventHookConfiguration {
-        VesperPipelineEventHookConfiguration(
-            pluginReferences: try toVesperPluginReferences(
-                self["pluginReferences"],
-                fieldName: "pluginReferences"
-            )
-        )
-    }
 
     func toSourceNormalizerConfiguration() throws -> VesperSourceNormalizerConfiguration {
         let mode: VesperSourceNormalizerMode
@@ -416,10 +408,6 @@ extension Dictionary where Key == String, Value == Any {
             postDownloadPluginReferences: try toVesperPluginReferences(
                 self["postDownloadPluginReferences"],
                 fieldName: "postDownloadPluginReferences"
-            ),
-            eventHookPluginReferences: try toVesperPluginReferences(
-                self["eventHookPluginReferences"],
-                fieldName: "eventHookPluginReferences"
             ),
             rangeChunkBytes: (self["rangeChunkBytes"] as? NSNumber)?.uint64Value,
             minProgressBytes: (self["minProgressBytes"] as? NSNumber)?.uint64Value ?? 512 * 1024,

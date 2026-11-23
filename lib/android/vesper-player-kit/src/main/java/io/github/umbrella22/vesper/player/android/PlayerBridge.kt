@@ -2,6 +2,7 @@ package io.github.umbrella22.vesper.player.android
 
 import android.view.ViewGroup
 import android.view.Window
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.absoluteValue
 
@@ -32,6 +33,11 @@ data class SeekableRangeUi(
     val endMs: Long,
 )
 
+/**
+ * A timeline reading in milliseconds. A controller UI state carries the last published reading.
+ * Use [VesperPlayerController.sampleTimeline] for the current playback position.
+ * VOD positions are media-relative. Live DVR positions share the coordinate system of [seekableRange].
+ */
 data class TimelineUiState(
     val kind: TimelineKind,
     val isSeekable: Boolean,
@@ -144,6 +150,10 @@ data class VesperPictureInPictureReadiness(
     val diagnostics: Map<String, Any?> = emptyMap(),
 )
 
+/**
+ * State published on playback events and command updates.
+ * @property timeline Last published timeline reading. Use [VesperPlayerController.sampleTimeline] for live progress.
+ */
 data class PlayerHostUiState(
     val title: String,
     val subtitle: String,
@@ -318,6 +328,7 @@ internal interface PlayerBridge {
     val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
     val pluginDiagnostics: List<Map<String, Any?>>
+    val playbackEvents: SharedFlow<VesperPlaybackEvent>
 
     fun initialize()
     suspend fun initializeAsync()
@@ -336,6 +347,8 @@ internal interface PlayerBridge {
     fun stop()
     fun seekBy(deltaMs: Long)
     suspend fun seekByAsync(deltaMs: Long)
+    fun seekTo(positionMs: Long)
+    suspend fun seekToAsync(positionMs: Long): Long
     fun seekToRatio(ratio: Float)
     suspend fun seekToRatioAsync(ratio: Float)
     fun seekToLiveEdge()
@@ -357,26 +370,43 @@ internal interface PlayerBridge {
     fun pictureInPictureReadiness(): VesperPictureInPictureReadiness
     fun drainRuntimeWarnings(): List<VesperRuntimeWarning>
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
-    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch
     fun benchmarkSummary(): VesperBenchmarkSummary
-    fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean
     fun startPerformanceDiagnostics(
         configuration: VesperPerformanceDiagnosticsConfiguration,
         probe: VesperPerformanceProbe,
         window: Window?,
-    ): String
-    fun updatePerformanceOverlayState(runId: String, state: VesperPerformanceOverlayState)
+    ): String {
+        if (configuration.maxRawEvents !in 0..2_048) {
+            throw VesperPerformanceDiagnosticsException(
+                VesperPerformanceDiagnosticsErrorCode.InvalidConfiguration,
+                "maxRawEvents must be between 0 and 2048.",
+            )
+        }
+        if (probe != VesperPerformanceProbe.AndroidFrameMetrics &&
+            probe != VesperPerformanceProbe.FlutterFrameTiming
+        ) {
+            throw VesperPerformanceDiagnosticsException(
+                VesperPerformanceDiagnosticsErrorCode.ProbeUnavailable,
+                "The requested Android performance probe is unavailable.",
+            )
+        }
+        retiredPerformanceDiagnostics()
+    }
+    fun updatePerformanceOverlayState(runId: String, state: VesperPerformanceOverlayState): Unit =
+        inactivePerformanceDiagnostics()
     fun recordPerformanceMarker(
         runId: String,
         name: String,
         value: Double?,
         sequenceIndex: Int?,
         expectedOverlayActive: Boolean?,
-    )
+    ): Unit = inactivePerformanceDiagnostics()
     fun submitPerformanceFrameSamples(
         runId: String,
         samples: List<VesperPerformanceFrameSample>,
-    )
-    fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport
-    fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport
+    ): Unit = inactivePerformanceDiagnostics()
+    fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport =
+        inactivePerformanceDiagnostics()
+    fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport =
+        inactivePerformanceDiagnostics()
 }

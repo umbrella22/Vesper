@@ -6,8 +6,6 @@ use player_platform_ios::{
     IosSequenceBridgeSession,
 };
 use player_platform_mobile::MobileSourceNormalizerResourceOpen;
-use player_plugin_loader::BenchmarkSinkPluginSession;
-use player_runtime::PipelineEventDispatcher;
 
 use crate::native_frame_pipeline::IosNativeFramePipelineSession;
 
@@ -18,19 +16,6 @@ use crate::native_frame_pipeline::IosNativeFramePipelineSession;
 /// lock while running caller closures. This keeps blocking I/O off the global
 /// registry mutex.
 pub(crate) type IosSourceNormalizerResourceSession = Arc<Mutex<MobileSourceNormalizerResourceOpen>>;
-
-/// Benchmark sink sessions invoke plugin FFI calls (`on_event_batch`/`flush`)
-/// that may block on a dlopen-loaded plugin. They are stored behind an
-/// `Arc<Mutex<...>>` so accessors clone the `Arc` under the global registry
-/// lock, drop the registry lock, and only then take the per-session lock while
-/// running caller closures. This keeps plugin FFI off the global registry
-/// mutex, mirroring the JNI `AndroidBenchmarkSinkSession` pattern.
-pub(crate) type IosBenchmarkSinkSession = Arc<Mutex<BenchmarkSinkPluginSession>>;
-
-/// Playback EventHook sessions are kept behind an `Arc<Mutex<...>>` so the
-/// generation-safe handle registry can clone the session under its lock and
-/// execute plugin dispatch/flush work after releasing the global lock.
-pub(crate) type IosPlaybackEventHookSession = Arc<Mutex<PipelineEventDispatcher>>;
 
 /// Native-frame pipeline sessions perform blocking VideoToolbox decode,
 /// plugin FFI (decoder/packet/processor flush + close), and EOS-drain sleeps
@@ -153,10 +138,6 @@ static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession
     OnceLock::new();
 static SEQUENCE_SESSIONS: OnceLock<Mutex<HandleRegistry<IosSequenceBridgeSessionHandle>>> =
     OnceLock::new();
-static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<IosBenchmarkSinkSession>>> =
-    OnceLock::new();
-static PLAYBACK_EVENT_HOOK_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaybackEventHookSession>>> =
-    OnceLock::new();
 static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
     Mutex<HandleRegistry<IosSourceNormalizerResourceSession>>,
 > = OnceLock::new();
@@ -187,15 +168,6 @@ pub(crate) fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBr
 pub(crate) fn sequence_sessions() -> &'static Mutex<HandleRegistry<IosSequenceBridgeSessionHandle>>
 {
     SEQUENCE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
-}
-
-pub(crate) fn benchmark_sessions() -> &'static Mutex<HandleRegistry<IosBenchmarkSinkSession>> {
-    BENCHMARK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
-}
-
-pub(crate) fn playback_event_hook_sessions()
--> &'static Mutex<HandleRegistry<IosPlaybackEventHookSession>> {
-    PLAYBACK_EVENT_HOOK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 pub(crate) fn source_normalizer_resource_sessions()

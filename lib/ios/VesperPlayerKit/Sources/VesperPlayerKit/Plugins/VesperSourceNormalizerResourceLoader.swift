@@ -102,6 +102,39 @@ final class VesperSourceNormalizerResourceSession {
     }
 }
 
+/// Accessed only on the loader's serial queue. A removed request cannot finish.
+struct VesperSourceNormalizerPendingRequests {
+    private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var invalidated = false
+    // One item shares this budget across its range and segment requests.
+    private let maximumPendingRequests = 16
+
+    mutating func start(_ id: ObjectIdentifier, task: () -> Task<Void, Never>) -> Bool {
+        guard !invalidated, tasks.count < maximumPendingRequests, tasks[id] == nil else {
+            return false
+        }
+        tasks[id] = task()
+        return true
+    }
+
+    mutating func cancel(_ id: ObjectIdentifier) {
+        tasks.removeValue(forKey: id)?.cancel()
+    }
+
+    mutating func claimCompletion(_ id: ObjectIdentifier) -> Bool {
+        guard let task = tasks.removeValue(forKey: id) else { return false }
+        return !task.isCancelled
+    }
+
+    mutating func invalidate() {
+        invalidated = true
+        for task in tasks.values {
+            task.cancel()
+        }
+        tasks.removeAll()
+    }
+}
+
 final class VesperSourceNormalizerResourceLoaderDelegate:
     NSObject,
     AVAssetResourceLoaderDelegate,
@@ -109,7 +142,7 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
 {
     let resourceLoadingQueue: DispatchQueue
     private let session: VesperSourceNormalizerResourceSession
-    private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var requests = VesperSourceNormalizerPendingRequests()
 
     init(session: VesperSourceNormalizerResourceSession) {
         self.session = session
@@ -131,22 +164,22 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
         }
 
         let requestId = ObjectIdentifier(loadingRequest)
-        let task = Task { [weak self, session, loadingRequest] in
-            do {
-                try Task.checkCancellation()
-                let body = try session.localResourceBody(for: localURL)
-                await self?.finish(
-                    loadingRequest,
-                    requestId: requestId,
-                    body: body,
-                    readPolicy: session.readPolicy
-                )
-            } catch {
-                await self?.finish(loadingRequest, requestId: requestId, error: error)
+        return requests.start(requestId) {
+            Task { [weak self, session, loadingRequest] in
+                do {
+                    try Task.checkCancellation()
+                    let body = try session.localResourceBody(for: localURL)
+                    self?.finish(
+                        loadingRequest,
+                        requestId: requestId,
+                        body: body,
+                        readPolicy: session.readPolicy
+                    )
+                } catch {
+                    self?.finish(loadingRequest, requestId: requestId, error: error)
+                }
             }
         }
-        tasks[requestId] = task
-        return true
     }
 
     func resourceLoader(
@@ -154,10 +187,19 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
         let requestId = ObjectIdentifier(loadingRequest)
-        tasks.removeValue(forKey: requestId)?.cancel()
+        requests.cancel(requestId)
     }
 
-    @MainActor
+    /// Retires all requests before the normalizer removes its backing files.
+    func invalidate() async {
+        await withCheckedContinuation { continuation in
+            resourceLoadingQueue.async {
+                self.requests.invalidate()
+                continuation.resume()
+            }
+        }
+    }
+
     private func finish(
         _ loadingRequest: AVAssetResourceLoadingRequest,
         requestId: ObjectIdentifier,
@@ -165,7 +207,7 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
         readPolicy: VesperLocalResourceReadPolicy
     ) {
         resourceLoadingQueue.async { [weak self] in
-            self?.tasks.removeValue(forKey: requestId)
+            guard self?.claimCompletion(loadingRequest, requestId: requestId) == true else { return }
             VesperLocalResourceResponder.finish(
                 loadingRequest,
                 body: body,
@@ -174,16 +216,22 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
         }
     }
 
-    @MainActor
     private func finish(
         _ loadingRequest: AVAssetResourceLoadingRequest,
         requestId: ObjectIdentifier,
         error: Error
     ) {
         resourceLoadingQueue.async { [weak self] in
-            self?.tasks.removeValue(forKey: requestId)
+            guard self?.claimCompletion(loadingRequest, requestId: requestId) == true else { return }
             VesperLocalResourceResponder.finish(loadingRequest, error: error)
         }
+    }
+
+    private func claimCompletion(
+        _ loadingRequest: AVAssetResourceLoadingRequest,
+        requestId: ObjectIdentifier
+    ) -> Bool {
+        requests.claimCompletion(requestId) && !loadingRequest.isCancelled
     }
 }
 

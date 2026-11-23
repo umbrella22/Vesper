@@ -18,7 +18,7 @@ use crate::{PluginReference, PluginReferenceError, PluginTransport};
 /// Version of the pure artifact/catalog wire model.
 pub const PLUGIN_CATALOG_SCHEMA_VERSION: u32 = 1;
 /// Migration guide identity carried by new catalog records.
-pub const PLUGIN_CATALOG_MIGRATION_VERSION: &str = "vesper-plugin-runtime-rewrite-v1";
+pub const PLUGIN_CATALOG_MIGRATION_VERSION: &str = "vesper-native-plugin";
 pub const MAX_PLUGIN_ARTIFACT_CAPABILITIES: usize = 64;
 pub const MAX_PLUGIN_REQUIREMENTS: usize = 64;
 pub const MAX_PLUGIN_PROVISIONS: usize = 64;

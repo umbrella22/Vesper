@@ -350,6 +350,7 @@ pub(crate) fn should_bypass_source_normalizer_for_native_adaptive(source: &Media
 
 enum PacketSessionState {
     Available(Box<dyn SourceNormalizerPacketSession>),
+    Native(player_plugin_loader::native::NativePacketStream),
     InUse,
     Closed,
 }
@@ -357,8 +358,33 @@ enum PacketSessionState {
 pub(crate) struct SourceNormalizerPacketSessionSlot(Mutex<PacketSessionState>);
 
 impl SourceNormalizerPacketSessionSlot {
+    #[cfg(test)]
     pub(crate) fn new(session: Box<dyn SourceNormalizerPacketSession>) -> Self {
         Self(Mutex::new(PacketSessionState::Available(session)))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn take_native(&self) -> Option<player_plugin_loader::native::NativePacketStream> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if !matches!(*state, PacketSessionState::Native(_)) {
+            return None;
+        }
+        match std::mem::replace(&mut *state, PacketSessionState::Closed) {
+            PacketSessionState::Native(session) => Some(session),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn stream_info(
+        &self,
+    ) -> anyhow::Result<player_plugin::SourceNormalizerPacketStreamInfo> {
+        {
+            let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+            if let PacketSessionState::Native(session) = &*state {
+                return Ok(session.stream_info().clone());
+            }
+        }
+        self.with_session(|session| Ok(session.stream_info()))
     }
 
     pub(crate) fn with_session<T>(
@@ -374,14 +400,13 @@ impl SourceNormalizerPacketSessionSlot {
                 PacketSessionState::InUse => {
                     anyhow::bail!("source normalizer packet session is busy")
                 }
-                PacketSessionState::Available(_) => {}
+                PacketSessionState::Available(_) | PacketSessionState::Native(_) => {}
             }
-            let PacketSessionState::Available(session) =
-                std::mem::replace(&mut *state, PacketSessionState::InUse)
-            else {
-                anyhow::bail!("source normalizer packet session is unavailable");
-            };
-            session
+            match std::mem::replace(&mut *state, PacketSessionState::InUse) {
+                PacketSessionState::Available(session) => session,
+                PacketSessionState::Native(session) => session.into_rust_session(),
+                _ => anyhow::bail!("source normalizer packet session is unavailable"),
+            }
         };
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             operation(session.as_mut())
@@ -471,10 +496,20 @@ pub(crate) fn open_source_normalizer_packet_session(
         preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
     };
     let started = Instant::now();
-    let session = factory
-        .open_packet_session(&config)
-        .map_err(|error| format!("open_packet_session failed: {error}"))?;
-    let stream_info = session.stream_info();
+    let native = registry
+        .native_artifact(reference)
+        .map_err(|error| error.to_string())?
+        .native_plugin()
+        .ok_or_else(|| "source normalizer has no admitted native plugin".to_owned())?;
+    let stream = native
+        .open_packet_stream(&config)
+        .map_err(|error| format!("open native packet stream failed: {error}"))?;
+    let stream_info = stream.stream_info().clone();
+    tracing::info!(
+        plugin_id = native.id(),
+        "macOS selected a native packet normalizer"
+    );
+    let session = SourceNormalizerPacketSessionSlot(Mutex::new(PacketSessionState::Native(stream)));
     macos_packet_stream_info_from_source_normalizer(&stream_info)
         .map_err(|error| format!("invalid packet stream info: {error}"))?;
     Ok(ReadySourceNormalizerPacketSession {
@@ -485,7 +520,7 @@ pub(crate) fn open_source_normalizer_packet_session(
             .or_else(|| Some(factory.name().to_owned())),
         ready_latency: started.elapsed(),
         stream_info,
-        session: Arc::new(SourceNormalizerPacketSessionSlot::new(session)),
+        session: Arc::new(session),
     })
 }
 

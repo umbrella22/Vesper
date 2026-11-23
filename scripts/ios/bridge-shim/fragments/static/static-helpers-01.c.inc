@@ -101,8 +101,6 @@ static PlayerFfiDownloadConfig ffi_download_config_from_runtime(
       .plugin_registry_handle = config->plugin_registry_handle,
       .post_download_plugin_references_json =
           config->post_download_plugin_references_json,
-      .event_hook_plugin_references_json =
-          config->event_hook_plugin_references_json,
   };
   return ffi_config;
 }

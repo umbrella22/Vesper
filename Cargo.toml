@@ -25,15 +25,13 @@ homepage = "https://github.com/umbrella22/Vesper"
 license = "Apache-2.0"
 repository = "https://github.com/umbrella22/Vesper"
 rust-version = "1.99.0"
-version = "0.10.0"
+version = "0.11.0"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 cpal = "0.18.2"
 crossbeam-queue = "0.3.14"
-dlmalloc = { version = "0.2.14", features = ["global"] }
-ed25519-dalek = "3.0.0"
 ffmpeg-next = { version = "9.1.0", default-features = false }
 flate2 = "1.1.11"
 getrandom = "0.4.3"
@@ -62,13 +60,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 unicode-casefold = "0.2.0"
 unicode-normalization = "0.1.26"
-url = "2.5.8"
+url = "2.5.9"
 uuid = { version = "1.29.2", features = ["serde"] }
-wasmtime = { version = "50.0.2", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
-wat = "1.263.0"
-wit-bindgen = { version = "0.63.0", default-features = false, features = ["macros", "realloc"] }
-wit-component = "0.263.0"
-wit-parser = "0.263.0"
 zip = { version = "9.5.1", default-features = false }
 xz2 = "0.1.7"
 x509-parser = "0.18.1"

@@ -37,7 +37,6 @@ produce AAR artifacts.
 | `vesper-player-kit-decoder-mediacodec` | Experimental MediaCodec decoder plugin for the explicit SDK-managed native-frame route |
 | `vesper-player-kit-source-normalizer-ffmpeg` | Experimental FFmpeg SourceNormalizer plugin and verified embedded registry metadata |
 | `vesper-player-kit-remux-ffmpeg` | Optional FFmpeg-backed post-download MP4 remux plugin and verified embedded registry metadata |
-| `vesper-player-kit-frame-processor-diagnostic` | Experimental FrameProcessor diagnostic plugin |
 | `vesper-player-kit-compose` | Optional Compose lifecycle and surface adapter without opinionated controls |
 | `vesper-player-kit-compose-ui` | Optional Compose `VesperPlayerStage` controls built on the Compose adapter |
 
@@ -50,7 +49,7 @@ Maven publication contains seven coordinates: the core kit, both Compose
 modules, external playback, the shared FFmpeg runtime, SourceNormalizer, and
 post-download remux. SourceNormalizer and remux remain direct opt-in
 dependencies and do not enter the core or main Flutter dependency closure.
-Decoder and FrameProcessor remain source-staged experimental artifacts. The
+The MediaCodec decoder remains a source-staged experimental artifact. The
 Android package README and release workflow define the current published set.
 
 ### iOS

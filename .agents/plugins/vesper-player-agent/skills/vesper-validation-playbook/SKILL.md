@@ -76,21 +76,17 @@ flutter test
 its LSP JSON output. Report that tool failure separately and retain
 `dart analyze --format=machine` as the source analyzer evidence.
 
-Plugin ABI, package, or WASM host changes:
+Native plugin ABI or artifact changes:
 
 ```sh
-cargo check -p player-plugin-abi -p player-plugin -p player-plugin-loader -p player-plugin-package -p player-plugin-wasm-host -p player-cli
-cargo test -p player-plugin-abi -p player-plugin -p player-plugin-loader -p player-plugin-package -p player-plugin-wasm-host -p player-cli
+cargo check -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader -p vesper-player-cli
+cargo test -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader -p vesper-player-cli
+./scripts/vesper plugin header-verify
 ./scripts/vesper plugin check <project>/vesper-plugin.toml \
   --artifact <artifact> --transport native
-./scripts/vesper plugin package <project>/vesper-plugin.toml \
-  --signing-key <publisher-key.json> --output <project>.vesper-plugin
-./scripts/vesper plugin verify <project>.vesper-plugin --trust-store <trust-store.json>
 ```
 
-The Native SDK surface is tested with ordinary Rust author crates. The WASM
-surface is tested with `wasm32-wasip2` Component fixtures and the Wasmtime host;
-the supported WASM capabilities are EventHook and BenchmarkSink only.
+Build the Rust and C++17 author scaffolds independently and check both artifacts.
 
 Runtime-focused plugin validation must also exercise catalog importer/index
 atomicity, resolver determinism and typed conflict/cycle errors, immutable plan
@@ -143,8 +139,7 @@ prerequisite is available:
 Desktop decoder plugin checks:
 
 ```sh
-./scripts/vesper desktop verify-decoder-diagnostics debug all
-./scripts/vesper desktop verify-decoder-videotoolbox debug loader
+./scripts/vesper desktop verify-decoder-videotoolbox loader
 ```
 
 FFmpeg packaging:

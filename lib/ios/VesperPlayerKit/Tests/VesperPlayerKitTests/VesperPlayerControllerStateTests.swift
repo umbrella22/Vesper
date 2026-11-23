@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 import XCTest
 @_spi(VesperFlutter) @testable import VesperPlayerKit
@@ -2832,9 +2833,12 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             kind: .local,
             protocol: .file
         )
-        let surfaceView = PlayerSurfaceView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let surfaceView = smoke.metalFilterLibraryPath.map {
+            PlayerSurfaceView(frame: frame, bundledFilterLibrary: URL(fileURLWithPath: $0))
+        } ?? PlayerSurfaceView(frame: frame)
         guard surfaceView.supportsNativeFrameMetalPresentation else {
-            throw XCTSkip("Metal is unavailable in this iOS Simulator runtime.")
+            throw XCTSkip("Metal is unavailable on the current iOS destination.")
         }
         let window = UIWindow(frame: surfaceView.bounds)
         let viewController = UIViewController()
@@ -2846,6 +2850,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         surfaceView.frame = viewController.view.bounds
         surfaceView.layoutIfNeeded()
         surfaceView.attachNativeFramePresenter()
+        if smoke.metalFilterLibraryPath != nil {
+            XCTAssertTrue(surfaceView.isBundledMetalFilterReady)
+        }
 
         let presenter = RecordingNativeFramePresenter(wrapped: surfaceView)
         let backend = VesperFfiNativeFramePipelineBackend { references in
@@ -2969,13 +2976,75 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
         XCTAssertTrue(presenter.presentedPixelBufferAddresses.allSatisfy { $0 != 0 })
         XCTAssertTrue(presenter.presentedResults.allSatisfy { $0 })
-        session.close()
+        await session.close().value
         XCTAssertEqual(presenter.enabledStates.last, false)
+        XCTAssertFalse(surfaceView.isBundledMetalFilterReady)
         print(
             "real iOS native-frame smoke presentedFrames=\(session.counters.presentedFrames) " +
                 "processedFrames=\(session.counters.processedFrames) " +
-                "skippedAudioPackets=\(session.counters.skippedAudioPackets)"
+                "skippedAudioPackets=\(session.counters.skippedAudioPackets) " +
+                "filterRequested=\(smoke.metalFilterLibraryPath != nil)"
         )
+    }
+
+    func testRequiredNormalizerResourcePlaysThroughAVPlayerAndCleansUp() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard Self.smokeSetting(environment, key: "VESPER_IOS_NATIVE_FRAME_SMOKE_ENABLED") == "1" else {
+            throw XCTSkip("Enable the real iOS plugin smoke tests.")
+        }
+        let sourcePath = try Self.requiredExistingFilePath(
+            environment,
+            key: "VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE"
+        )
+        let source = try VesperPlayerSource(
+            uri: URL(fileURLWithPath: sourcePath).absoluteString,
+            label: "Required Normalizer Smoke MP4",
+            kind: .local,
+            protocol: .file
+        )
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: .requireNormalized,
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg],
+                runtimeProfile: Self.smokeSetting(
+                    environment,
+                    key: "VESPER_IOS_SOURCE_NORMALIZER_RUNTIME_PROFILE"
+                )
+            ),
+            systemPlayerVolume: 0
+        )
+        defer { bridge.dispose() }
+        bridge.initialize()
+        let reachedTerminalState = await waitForNativeFrameSmoke(timeout: 10) {
+            bridge.player?.currentItem?.status == .readyToPlay || bridge.lastError != nil
+        }
+        XCTAssertTrue(reachedTerminalState)
+        XCTAssertNil(bridge.lastError)
+        let player = try XCTUnwrap(bridge.player)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertEqual(item.status, .readyToPlay)
+        let asset = try XCTUnwrap(item.asset as? AVURLAsset)
+        XCTAssertEqual(asset.url.scheme, "vesper-normalized")
+        let resource = try XCTUnwrap(bridge.currentSourceNormalizerResource)
+        XCTAssertEqual(resource.outputRoute, "fmp4LocalStream")
+        XCTAssertNotNil(bridge.sourceNormalizerResourceLoaderDelegate)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resource.primaryResourcePath))
+
+        bridge.play()
+        let advanced = await waitForNativeFrameSmoke(timeout: 5) {
+            player.currentTime().seconds > 0.2 || bridge.lastError != nil
+        }
+        XCTAssertTrue(advanced)
+        XCTAssertNil(bridge.lastError)
+        bridge.dispose()
+        XCTAssertNil(bridge.currentSourceNormalizerResource)
+        XCTAssertNil(bridge.sourceNormalizerResourceLoaderDelegate)
+        let removed = await waitForNativeFrameSmoke(timeout: 5) {
+            !FileManager.default.fileExists(atPath: resource.primaryResourcePath)
+        }
+        XCTAssertTrue(removed, "disposing the resource must remove the normalized output")
+        print("real iOS normalized resource smoke advanced=\(advanced) removed=\(removed)")
     }
 
     func testNativeFramePipelineTimelineFallsBackToVideoClockWithoutAudio() async {
@@ -3240,6 +3309,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 environment,
                 key: "VESPER_IOS_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH"
             ),
+            metalFilterLibraryPath: optionalExistingFilePath(
+                environment,
+                key: "VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB"
+            ),
             runtimeProfile: smokeSetting(
                 environment,
                 key: "VESPER_IOS_SOURCE_NORMALIZER_RUNTIME_PROFILE"
@@ -3283,7 +3356,29 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         if let value = smokeConfigurationFileValue(environment, key: key), !value.isEmpty {
             return value
         }
-        return Bundle(for: Self.self).object(forInfoDictionaryKey: key) as? String
+        if let value = Bundle(for: Self.self).object(forInfoDictionaryKey: key) as? String {
+            return value
+        }
+        switch key {
+        case "VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE":
+            return Bundle.main.url(forResource: "vesper-native-frame-smoke", withExtension: "mp4")?.path
+        case "VESPER_IOS_NATIVE_FRAME_SMOKE_METALLIB":
+            return Bundle.main.url(forResource: "vesper-color-filter", withExtension: "metallib")?.path
+        case "VESPER_IOS_SOURCE_NORMALIZER_PLUGIN_PATH":
+            return bundledSmokePlugin("VesperPlayerSourceNormalizerFfmpegPlugin")
+        case "VESPER_IOS_DECODER_VIDEOTOOLBOX_PLUGIN_PATH":
+            return bundledSmokePlugin("VesperPlayerDecoderVideoToolboxPlugin")
+        default:
+            return nil
+        }
+    }
+
+    private static func bundledSmokePlugin(_ frameworkName: String) -> String? {
+        guard let frameworks = Bundle.main.privateFrameworksURL else { return nil }
+        return VesperBundledPluginResolver.findPluginBinary(
+            frameworkName: frameworkName,
+            searchURLs: [frameworks]
+        )
     }
 
     private static func smokeConfigurationFileValue(
@@ -3323,6 +3418,7 @@ private struct NativeFrameSmokeConfiguration {
     let sourceNormalizerPluginPath: String
     let decoderPluginPath: String
     let frameProcessorPluginPath: String?
+    let metalFilterLibraryPath: String?
     let runtimeProfile: String?
 }
 

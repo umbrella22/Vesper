@@ -27,11 +27,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       final sourceNormalizerConfiguration = _sourceNormalizerConfiguration(
         directNativePlaybackRequired: directNativePlaybackRequired,
       );
-      final frameProcessorPluginReferences = directNativePlaybackRequired
-          ? const <VesperPluginReference>[]
-          : <VesperPluginReference>[
-              VesperBundledPluginReferences.frameProcessorDiagnostic,
-            ];
+      const frameProcessorPluginReferences = <VesperPluginReference>[];
       // Scrolling list stages are composed by Flutter, where TextureView keeps
       // native video geometry inside the platform view. Direct-native sources
       // retain SurfaceView for HDR and high-fidelity playback.

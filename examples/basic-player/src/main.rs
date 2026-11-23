@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,35 +43,26 @@ use player_platform_macos::{
     MacosVideoLayerFrame, MacosVideoLayerSurface,
     open_macos_host_runtime_uri_with_options_and_interrupt,
 };
-use player_plugin::{PluginReference, PluginTransport};
-use player_plugin_loader::{PluginRegistry, WasmPluginArtifact, WasmPluginInterfaceDeclaration};
-use player_plugin_package::{
-    InstalledPluginActivation, PluginHostTarget, PluginTrustStore, verify_installed_plugin_catalog,
-};
 use player_render_wgpu::{
     DisplayRect, RenderFrameOutcome, RenderMode, RenderSurfaceConfig, RgbaVideoFrame,
     VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame, default_window_attributes,
 };
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MAX_PIPELINE_EVENT_HOOKS,
-    MediaTrackCatalog, MediaTrackSelectionSnapshot, PipelineEventHookRegistration,
-    PipelineEventHookReportBatch, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
-    PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
-    PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent,
-    PlayerRuntimeOptions, PlayerSnapshot, PlayerTimelineKind, PlayerTimelineSnapshot,
-    PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState, SourceNormalizerMode,
-    VideoPixelFormat,
+    DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MediaTrackCatalog,
+    MediaTrackSelectionSnapshot, PipelineEventHookReportBatch, PlaybackProgress,
+    PlayerDecoderPluginVideoMode, PlayerMediaInfo, PlayerPlaybackRoute,
+    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerPluginParticipation, PlayerResilienceMetrics, PlayerRuntime, PlayerRuntimeBootstrap,
+    PlayerRuntimeCommand, PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerSnapshot,
+    PlayerTimelineKind, PlayerTimelineSnapshot, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+    PresentationState, SourceNormalizerMode, VideoPixelFormat,
 };
-use semver::Version;
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -91,19 +81,15 @@ const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
 const DECODER_PLUGIN_VIDEO_MODE_ENV: &str = "VESPER_DECODER_PLUGIN_VIDEO_MODE";
 const SOURCE_NORMALIZER_PLUGIN_PATHS_ENV: &str = "VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS";
 const SOURCE_NORMALIZER_MODE_ENV: &str = "VESPER_SOURCE_NORMALIZER_MODE";
+const AUDIO_PROCESSOR_PLUGIN_PATHS_ENV: &str = "VESPER_AUDIO_PROCESSOR_PLUGIN_PATHS";
 const FRAME_PROCESSOR_PLUGIN_PATHS_ENV: &str = "VESPER_FRAME_PROCESSOR_PLUGIN_PATHS";
 const FRAME_PROCESSOR_MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_MODE";
 const PLUGIN_DEVELOPMENT_MODE_ENV: &str = "VESPER_PLUGIN_DEVELOPMENT_MODE";
-const PLUGIN_INSTALL_ROOT_ENV: &str = "VESPER_PLUGIN_INSTALL_ROOT";
-const PLUGIN_TRUST_STORE_ENV: &str = "VESPER_PLUGIN_TRUST_STORE";
-const PLUGIN_ACTIVATIONS_ENV: &str = "VESPER_PLUGIN_ACTIVATIONS";
-const PIPELINE_EVENT_HOOK_REFERENCES_ENV: &str = "VESPER_PIPELINE_EVENT_HOOK_REFERENCES";
-const WASM_EVENT_HOOK_COMPONENT_ENV: &str = "VESPER_WASM_EVENT_HOOK_COMPONENT";
-const WASM_EVENT_HOOK_REFERENCE_ENV: &str = "VESPER_WASM_EVENT_HOOK_REFERENCE";
 const PLAYBACK_DEBUG_ENV: &str = "VESPER_PLAYBACK_DEBUG";
 const PLAYBACK_DEBUG_TRACE_ENV: &str = "VESPER_PLAYBACK_DEBUG_TRACE";
 const PLAYBACK_DEBUG_WINDOW_ENV: &str = "VESPER_PLAYBACK_DEBUG_WINDOW";
 const BASIC_PLAYER_SMOKE_SCRIPT_ENV: &str = "VESPER_BASIC_PLAYER_SMOKE_SCRIPT";
+const BASIC_PLAYER_SMOKE_EXIT_ENV: &str = "VESPER_BASIC_PLAYER_SMOKE_EXIT";
 const DEFAULT_PLAYBACK_DEBUG_WINDOW: u64 = 120;
 const DESKTOP_HLS_DEMO_URL: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 const DESKTOP_DASH_DEMO_URL: &str = "https://dash.akamaized.net/envivio/EnvivioDash3/manifest.mpd";
@@ -171,18 +157,20 @@ enum FileDialogEvent {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(false)
         .compact()
         .init();
 
     let source = resolve_initial_media_source_uri()?;
-    let pipeline_event_hooks = pipeline_event_hook_registrations_from_env()?;
 
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::<()>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = DesktopPlayerApp::new(source, pipeline_event_hooks);
+    let mut app = DesktopPlayerApp::new(source);
+    app.launch_wakeup = Some(event_loop.create_proxy());
     match event_loop.run_app(&mut app) {
         Ok(()) => Ok(()),
         Err(run_error) => {
@@ -195,12 +183,14 @@ fn main() -> Result<()> {
 struct DesktopPlayerApp {
     source: Option<String>,
     runtime: Option<PlayerRuntime>,
-    pipeline_event_hooks: Vec<PipelineEventHookRegistration>,
+
     last_frame: Option<DecodedVideoFrame>,
     render_config: RenderSurfaceConfig,
     uses_external_video_surface: bool,
     window: Option<Arc<Window>>,
     renderer: Option<VideoRenderer>,
+    #[cfg(target_os = "linux")]
+    linux_vulkan: Option<player_host_desktop::LinuxVulkanPlaybackPresenter>,
     #[cfg(target_os = "macos")]
     native_video_surface: Option<MacosVideoLayerSurface>,
     title_cache: Option<String>,
@@ -222,6 +212,7 @@ struct DesktopPlayerApp {
     planner_rx: Receiver<PlannerEvent>,
     launch_tx: Sender<LaunchEvent>,
     launch_rx: Receiver<LaunchEvent>,
+    launch_wakeup: Option<EventLoopProxy<()>>,
     playback: DesktopPlaybackSession,
     pending_launch_activation: Option<PendingLaunchActivation>,
     pending_launch_activation_needs_paint: bool,
@@ -441,6 +432,7 @@ enum BasicPlayerSmokeScriptStep {
 #[derive(Debug)]
 struct BasicPlayerSmokeScript {
     enabled: bool,
+    exit_after_rate_change: bool,
     step: BasicPlayerSmokeScriptStep,
     next_action_at: Option<Instant>,
     started_at: Instant,
@@ -450,6 +442,7 @@ impl BasicPlayerSmokeScript {
     fn from_env() -> Self {
         Self {
             enabled: env_flag(BASIC_PLAYER_SMOKE_SCRIPT_ENV),
+            exit_after_rate_change: env_flag(BASIC_PLAYER_SMOKE_EXIT_ENV),
             step: BasicPlayerSmokeScriptStep::WaitForPlayback,
             next_action_at: None,
             started_at: Instant::now(),
@@ -461,7 +454,10 @@ impl BasicPlayerSmokeScript {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        if self.enabled && self.step != BasicPlayerSmokeScriptStep::Done {
+        if self.enabled {
+            if self.step == BasicPlayerSmokeScriptStep::Done {
+                return self.next_action_at;
+            }
             Some(
                 self.next_action_at
                     .unwrap_or_else(|| Instant::now() + Duration::from_millis(100)),
@@ -470,13 +466,17 @@ impl BasicPlayerSmokeScript {
             None
         }
     }
+
+    fn exit_due(&self, now: Instant) -> bool {
+        self.enabled
+            && self.exit_after_rate_change
+            && self.step == BasicPlayerSmokeScriptStep::Done
+            && self.next_action_at.is_some_and(|deadline| now >= deadline)
+    }
 }
 
 impl DesktopPlayerApp {
-    fn new(
-        source: Option<String>,
-        pipeline_event_hooks: Vec<PipelineEventHookRegistration>,
-    ) -> Self {
+    fn new(source: Option<String>) -> Self {
         let playlist_entries = source
             .as_ref()
             .map(|initial_source| DesktopPlaylistEntry {
@@ -491,12 +491,13 @@ impl DesktopPlayerApp {
         Self {
             source,
             runtime: None,
-            pipeline_event_hooks,
             last_frame: None,
             render_config: RenderSurfaceConfig::default(),
             uses_external_video_surface: false,
             window: None,
             renderer: None,
+            #[cfg(target_os = "linux")]
+            linux_vulkan: None,
             #[cfg(target_os = "macos")]
             native_video_surface: None,
             title_cache: None,
@@ -518,6 +519,7 @@ impl DesktopPlayerApp {
             planner_rx,
             launch_tx,
             launch_rx,
+            launch_wakeup: None,
             playback: DesktopPlaybackSession::default(),
             pending_launch_activation: None,
             pending_launch_activation_needs_paint: false,
@@ -868,6 +870,10 @@ impl DesktopPlayerApp {
     }
 
     fn request_source_launch(&mut self, source: String, label: Option<String>) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(presenter) = self.linux_vulkan.as_mut() {
+            presenter.begin_epoch()?;
+        }
         let label = label.unwrap_or_else(|| source_display_label(&source));
         let (launch_token, cancel_flag) = self.playback.begin_source_launch();
         let request_id = launch_token.request_id;
@@ -900,23 +906,25 @@ impl DesktopPlayerApp {
         #[cfg(target_os = "macos")]
         let runtime_options = {
             let video_surface = self.ensure_native_video_surface(window.as_ref())?;
-            let options = basic_player_runtime_options(&self.pipeline_event_hooks)?
-                .with_video_surface(video_surface);
+            let options = basic_player_runtime_options()?.with_video_surface(video_surface);
             runtime_options_for_winit_window(window.as_ref(), options)?
         };
         #[cfg(not(target_os = "macos"))]
-        let runtime_options = runtime_options_for_winit_window(
-            window.as_ref(),
-            basic_player_runtime_options(&self.pipeline_event_hooks)?,
-        )?;
+        let runtime_options =
+            runtime_options_for_winit_window(window.as_ref(), basic_player_runtime_options()?)?;
 
         let launch_tx = self.launch_tx.clone();
+        let launch_wakeup = self.launch_wakeup.clone();
+        #[cfg(target_os = "linux")]
+        let linux_vulkan = self.linux_vulkan.clone();
         thread::spawn(move || {
             let prepare_started_at = Instant::now();
             let event = match open_basic_player_runtime_for_source(
                 &source,
                 runtime_options,
                 cancel_flag.clone(),
+                #[cfg(target_os = "linux")]
+                linux_vulkan.as_ref(),
             ) {
                 Ok((prepared_bootstrap, capabilities)) => {
                     let launch_plan = RuntimeLaunchPlan {
@@ -954,7 +962,12 @@ impl DesktopPlayerApp {
             if cancel_flag.load(Ordering::SeqCst) {
                 return;
             }
-            let _ = launch_tx.send(event);
+            if launch_tx.send(event).is_ok()
+                && let Some(wakeup) = launch_wakeup
+            {
+                // The event loop can be waiting with no pending window deadline.
+                let _ = wakeup.send_event(());
+            }
         });
 
         Ok(())
@@ -1220,6 +1233,23 @@ impl DesktopPlayerApp {
             }
         }
         self.window = Some(window.clone());
+        #[cfg(target_os = "linux")]
+        if let Some(shader) = std::env::var_os("VESPER_LINUX_VULKAN_COLOR_FILTER_SPIRV") {
+            match player_host_desktop::LinuxVulkanPlaybackPresenter::open(
+                window.clone(),
+                Path::new(&shader),
+            ) {
+                Ok(presenter) => {
+                    window.set_resizable(false);
+                    self.linux_vulkan = Some(presenter);
+                    info!("Linux Vulkan video presentation active");
+                }
+                Err(error) => warn!(
+                    ?error,
+                    "Linux Vulkan reference presenter unavailable, using desktop renderer"
+                ),
+            }
+        }
         self.ensure_renderer_ready(window.clone())?;
         if let Some(source) = self.source.clone() {
             self.request_source_launch(source, Some(self.current_source_label()))?;
@@ -1355,6 +1385,24 @@ impl DesktopPlayerApp {
         let Some(window) = self.window.as_ref() else {
             return Ok(());
         };
+        #[cfg(target_os = "linux")]
+        if let Some(presenter) = self.linux_vulkan.as_mut() {
+            if let Some(frame) = self.last_frame.as_ref()
+                && self.last_uploaded_frame_sequence != Some(self.frame_sequence)
+            {
+                window.pre_present_notify();
+                let outcome = presenter.present(frame)?;
+                if outcome == RenderFrameOutcome::Presented {
+                    self.last_uploaded_frame_sequence = Some(self.frame_sequence);
+                    debug!(
+                        retired = presenter.retired_frames(),
+                        "Linux Vulkan frame submitted"
+                    );
+                }
+                self.observe_render_outcome(outcome);
+            }
+            return Ok(());
+        }
         if self.renderer.is_none() {
             return Ok(());
         };
@@ -1533,6 +1581,15 @@ impl DesktopPlayerApp {
         upload_video_frame: bool,
         upload_overlay: bool,
     ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if self.linux_vulkan.is_some() {
+            self.overlay_dirty = false;
+            self.last_overlay_refresh_at = Some(Instant::now());
+            if upload_video_frame && let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return Ok(());
+        }
         if self.runtime.is_none() {
             return self.refresh_host_overlay();
         }
@@ -1623,6 +1680,12 @@ impl DesktopPlayerApp {
     }
 
     fn refresh_host_overlay(&mut self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if self.linux_vulkan.is_some() {
+            self.overlay_dirty = false;
+            self.last_overlay_refresh_at = Some(Instant::now());
+            return Ok(());
+        }
         let window = self
             .window
             .as_ref()
@@ -1731,6 +1794,10 @@ impl DesktopPlayerApp {
         window: Arc<Window>,
         frame_size: (u32, u32),
     ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if self.linux_vulkan.is_some() {
+            return Ok(());
+        }
         if self.renderer.is_none() {
             let mut renderer = pollster::block_on(VideoRenderer::new(window, frame_size))?;
             renderer.set_render_mode(RenderMode::Fit);
@@ -1778,10 +1845,25 @@ impl DesktopPlayerApp {
 
     fn dispatch_command(&mut self, command: PlayerRuntimeCommand) -> Result<()> {
         self.playback.record_command_dispatch();
+        #[cfg(target_os = "linux")]
+        let affects_video_epoch = matches!(
+            command,
+            PlayerRuntimeCommand::SeekTo { .. }
+                | PlayerRuntimeCommand::Stop
+                | PlayerRuntimeCommand::SetVideoTrackSelection { .. }
+        );
         let result = {
             let runtime = self.runtime_mut()?;
             runtime.dispatch(command)?
         };
+        #[cfg(target_os = "linux")]
+        if result.applied
+            && affects_video_epoch
+            && let Some(presenter) = self.linux_vulkan.as_mut()
+        {
+            presenter.begin_epoch()?;
+            self.last_frame = None;
+        }
         let frame = result.frame;
         let snapshot = result.snapshot;
         self.playback.record_snapshot_event();
@@ -1908,6 +1990,9 @@ impl DesktopPlayerApp {
         };
         let snapshot = runtime.snapshot();
         if snapshot.state == PresentationState::Finished {
+            if self.smoke_script.step != BasicPlayerSmokeScriptStep::Done {
+                self.smoke_script.next_action_at = None;
+            }
             self.smoke_script.step = BasicPlayerSmokeScriptStep::Done;
             return Ok(false);
         }
@@ -1990,7 +2075,10 @@ impl DesktopPlayerApp {
                     "basic-player smoke script changed rate"
                 );
                 self.smoke_script.step = BasicPlayerSmokeScriptStep::Done;
-                self.smoke_script.next_action_at = None;
+                self.smoke_script.next_action_at = self
+                    .smoke_script
+                    .exit_after_rate_change
+                    .then(|| Instant::now() + Duration::from_millis(500));
                 Ok(true)
             }
             BasicPlayerSmokeScriptStep::WaitForPlayback | BasicPlayerSmokeScriptStep::Done => {
@@ -2048,6 +2136,13 @@ impl DesktopPlayerApp {
             let runtime = self.runtime_mut()?;
             runtime.set_playback_rate(rate)?
         };
+        #[cfg(target_os = "linux")]
+        if result.applied
+            && let Some(presenter) = self.linux_vulkan.as_mut()
+        {
+            presenter.begin_epoch()?;
+            self.last_frame = None;
+        }
         let frame = result.frame;
         self.log_runtime_events();
         self.update_window_title();
@@ -2429,10 +2524,20 @@ fn open_basic_player_runtime_for_source(
     source: &str,
     options: PlayerRuntimeOptions,
     interrupt_flag: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")] linux_vulkan: Option<
+        &player_host_desktop::LinuxVulkanPlaybackPresenter,
+    >,
 ) -> Result<(
     PlayerRuntimeBootstrap,
     player_runtime::PlayerRuntimeAdapterCapabilities,
 )> {
+    #[cfg(target_os = "linux")]
+    if let Some(presenter) = linux_vulkan
+        && let Some(runtime) =
+            presenter.try_open_vaapi_runtime(source, options.clone(), interrupt_flag.clone())?
+    {
+        return Ok(runtime);
+    }
     open_desktop_host_runtime_uri_with_options_and_interrupt(
         source.to_owned(),
         options,
@@ -2440,273 +2545,30 @@ fn open_basic_player_runtime_for_source(
     )
 }
 
-fn pipeline_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>> {
-    let mut registrations = installed_event_hook_registrations_from_env()?;
-    registrations.extend(development_wasm_event_hook_registrations_from_env()?);
-    if registrations.len() > MAX_PIPELINE_EVENT_HOOKS {
-        bail!(
-            "configured pipeline EventHooks exceed the {MAX_PIPELINE_EVENT_HOOKS}-hook runtime limit"
-        );
-    }
-    let mut references = HashSet::new();
-    for registration in &registrations {
-        if !references.insert(registration.reference().clone()) {
-            bail!(
-                "pipeline EventHook '{}' is configured more than once",
-                registration.reference().plugin_id()
-            );
-        }
-    }
-    Ok(registrations)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct InstalledPluginActivationConfig {
-    plugin_id: String,
-    version: String,
-}
-
-fn installed_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>> {
-    let install_root = configured_path(PLUGIN_INSTALL_ROOT_ENV);
-    let trust_store_path = configured_path(PLUGIN_TRUST_STORE_ENV);
-    let references =
-        parse_json_environment::<Vec<PluginReference>>(PIPELINE_EVENT_HOOK_REFERENCES_ENV)?;
-    let activation_configs =
-        parse_json_environment::<Vec<InstalledPluginActivationConfig>>(PLUGIN_ACTIVATIONS_ENV)?;
-    if install_root.is_none()
-        && trust_store_path.is_none()
-        && references.is_none()
-        && activation_configs.is_none()
-    {
-        return Ok(Vec::new());
-    }
-
-    let install_root = install_root.with_context(|| {
-        format!("{PLUGIN_INSTALL_ROOT_ENV} is required when installed plugins are configured")
-    })?;
-    let trust_store_path = trust_store_path.with_context(|| {
-        format!("{PLUGIN_TRUST_STORE_ENV} is required when installed plugins are configured")
-    })?;
-    let references = references.unwrap_or_default();
-    if references.len() > MAX_PIPELINE_EVENT_HOOKS {
-        bail!(
-            "{PIPELINE_EVENT_HOOK_REFERENCES_ENV} exceeds the {MAX_PIPELINE_EVENT_HOOKS}-hook runtime limit"
-        );
-    }
-    let activations = activation_configs
-        .unwrap_or_default()
-        .into_iter()
-        .map(|activation| {
-            InstalledPluginActivation::new(&activation.plugin_id, &activation.version).with_context(
-                || {
-                    format!(
-                        "invalid activation for installed plugin '{}'",
-                        activation.plugin_id
-                    )
-                },
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let trust_store = PluginTrustStore::from_file(&trust_store_path).with_context(|| {
-        format!(
-            "failed to load plugin trust store '{}'",
-            trust_store_path.display()
-        )
-    })?;
-    let host = current_desktop_plugin_host_target()?;
-    let catalog = verify_installed_plugin_catalog(
-        &install_root,
-        &trust_store,
-        &host,
-        &references,
-        &activations,
-    )
-    .with_context(|| {
-        format!(
-            "failed to verify installed plugin catalog '{}'",
-            install_root.display()
-        )
-    })?;
-    let registry = PluginRegistry::load_verified_installed_catalog(&catalog)
-        .context("failed to load the verified installed plugin catalog")?;
-    references
-        .into_iter()
-        .map(|reference| {
-            let resolved = registry
-                .resolve_pipeline_event_hook(&reference)
-                .with_context(|| {
-                    format!(
-                        "failed to resolve installed pipeline EventHook '{}'",
-                        reference.plugin_id()
-                    )
-                })?;
-            info!(
-                plugin_id = resolved.reference().plugin_id(),
-                instance_id = resolved
-                    .reference()
-                    .capability_instance_id()
-                    .unwrap_or("unknown"),
-                transport = ?resolved.reference().transport(),
-                "loaded a verified installed pipeline EventHook"
-            );
-            PipelineEventHookRegistration::new(resolved.reference().clone(), resolved.capability())
-                .context("failed to register a verified installed pipeline EventHook")
-        })
-        .collect()
-}
-
-fn current_desktop_plugin_host_target() -> Result<PluginHostTarget> {
-    let target_env = if cfg!(target_env = "gnu") {
-        "gnu"
-    } else if cfg!(target_env = "msvc") {
-        "msvc"
-    } else {
-        ""
-    };
-    let (target, architecture) =
-        desktop_native_plugin_coordinates(std::env::consts::OS, std::env::consts::ARCH, target_env)
-            .with_context(|| {
-                format!(
-                    "installed Native plugins are not supported for host {}/{}/{}",
-                    std::env::consts::OS,
-                    std::env::consts::ARCH,
-                    target_env
-                )
-            })?;
-    let host_sdk = Version::parse(env!("CARGO_PKG_VERSION"))
-        .context("basic-player package version is not valid SemVer")?;
-    PluginHostTarget::new(host_sdk, target, architecture)
-        .context("failed to construct the desktop plugin host target")
-}
-
-fn desktop_native_plugin_coordinates(
-    os: &str,
-    architecture: &str,
-    target_env: &str,
-) -> Option<(&'static str, &'static str)> {
-    match (os, architecture, target_env) {
-        ("macos", "aarch64", _) => Some(("aarch64-apple-darwin", "arm64")),
-        ("macos", "x86_64", _) => Some(("x86_64-apple-darwin", "x86_64")),
-        ("linux", "aarch64", "gnu") => Some(("aarch64-unknown-linux-gnu", "arm64")),
-        ("linux", "x86_64", "gnu") => Some(("x86_64-unknown-linux-gnu", "x86_64")),
-        ("windows", "aarch64", "msvc") => Some(("aarch64-pc-windows-msvc", "arm64")),
-        ("windows", "x86_64", "msvc") => Some(("x86_64-pc-windows-msvc", "x86_64")),
-        _ => None,
-    }
-}
-
-fn configured_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-}
-
-fn parse_json_environment<T>(name: &str) -> Result<Option<T>>
-where
-    T: DeserializeOwned,
-{
-    let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    let Some(value) = value.to_str() else {
-        bail!("{name} must contain UTF-8 JSON");
-    };
-    parse_json_config(name, value).map(Some)
-}
-
-fn parse_json_config<T>(name: &str, value: &str) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_str(value).with_context(|| format!("failed to parse {name}"))
-}
-
-fn development_wasm_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>>
-{
-    let component_path = std::env::var_os(WASM_EVENT_HOOK_COMPONENT_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let reference_json =
-        std::env::var_os(WASM_EVENT_HOOK_REFERENCE_ENV).filter(|value| !value.is_empty());
-    let (component_path, reference_json) = match (component_path, reference_json) {
-        (None, None) => return Ok(Vec::new()),
-        (Some(component_path), Some(reference_json)) => (component_path, reference_json),
-        _ => {
-            bail!(
-                "{WASM_EVENT_HOOK_COMPONENT_ENV} and {WASM_EVENT_HOOK_REFERENCE_ENV} must be configured together"
-            )
-        }
-    };
-    if !env_flag(PLUGIN_DEVELOPMENT_MODE_ENV) {
-        bail!(
-            "raw WASM components require explicit development policy through {PLUGIN_DEVELOPMENT_MODE_ENV}=1"
-        );
-    }
-    let Some(reference_json) = reference_json.to_str() else {
-        bail!("{WASM_EVENT_HOOK_REFERENCE_ENV} must contain UTF-8 JSON");
-    };
-    let reference: PluginReference = serde_json::from_str(reference_json)
-        .with_context(|| format!("failed to parse {WASM_EVENT_HOOK_REFERENCE_ENV}"))?;
-    if reference.transport() != PluginTransport::Wasm {
-        bail!("{WASM_EVENT_HOOK_REFERENCE_ENV} must select the WASM transport");
-    }
-    let instance_id = reference
-        .capability_instance_id()
-        .context("development WASM EventHook reference must select a capability instance")?
-        .to_owned();
-
-    warn!(
-        plugin_id = reference.plugin_id(),
-        instance_id,
-        component_path = %component_path.display(),
-        "loading an unsigned raw WASM component under explicit development policy"
-    );
-    let artifact = WasmPluginArtifact::new(
-        reference.plugin_id(),
-        component_path,
-        [WasmPluginInterfaceDeclaration::pipeline_event_hook(
-            instance_id,
-        )],
-    )
-    .context("invalid development WASM EventHook artifact")?;
-    let registry = PluginRegistry::load_wasm_artifacts([artifact])
-        .context("failed to load development WASM EventHook artifact")?;
-    let resolved = registry
-        .resolve_pipeline_event_hook(&reference)
-        .context("failed to resolve development WASM EventHook reference")?;
-    let registration =
-        PipelineEventHookRegistration::new(resolved.reference().clone(), resolved.capability())
-            .context("failed to register development WASM EventHook")?;
-    Ok(vec![registration])
-}
-
-fn basic_player_runtime_options(
-    pipeline_event_hooks: &[PipelineEventHookRegistration],
-) -> Result<PlayerRuntimeOptions> {
+fn basic_player_runtime_options() -> Result<PlayerRuntimeOptions> {
     let decoder_paths = development_plugin_library_paths_from_env(DECODER_PLUGIN_PATHS_ENV)?;
     let source_normalizer_paths =
         development_plugin_library_paths_from_env(SOURCE_NORMALIZER_PLUGIN_PATHS_ENV)?;
     let frame_processor_paths =
         development_plugin_library_paths_from_env(FRAME_PROCESSOR_PLUGIN_PATHS_ENV)?;
+    let audio_processor_paths =
+        development_plugin_library_paths_from_env(AUDIO_PROCESSOR_PLUGIN_PATHS_ENV)?;
     let has_development_native_plugins = !decoder_paths.is_empty()
         || !source_normalizer_paths.is_empty()
-        || !frame_processor_paths.is_empty();
+        || !frame_processor_paths.is_empty()
+        || !audio_processor_paths.is_empty();
     let mut options = PlayerRuntimeOptions::default()
         .with_decoder_plugin_library_paths(decoder_paths)
         .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
         .with_source_normalizer_plugin_library_paths(source_normalizer_paths)
         .with_source_normalizer_mode(source_normalizer_mode_from_env())
+        .with_audio_processor_library_paths(audio_processor_paths)
         .with_frame_processor_library_paths(frame_processor_paths)
         .with_frame_processor_mode(frame_processor_mode_from_env());
     if has_development_native_plugins {
         options = options.with_development_native_plugin_loading();
     }
-    if pipeline_event_hooks.is_empty() {
-        Ok(options.with_pipeline_event_platform(std::env::consts::OS))
-    } else {
-        Ok(options.with_pipeline_event_hooks(pipeline_event_hooks.to_vec(), std::env::consts::OS))
-    }
+    Ok(options.with_pipeline_event_platform(std::env::consts::OS))
 }
 
 fn development_plugin_library_paths_from_env(name: &str) -> Result<Vec<PathBuf>> {
@@ -3192,6 +3054,11 @@ impl ApplicationHandler for DesktopPlayerApp {
                 return;
             }
         }
+        if self.smoke_script.exit_due(Instant::now()) {
+            info!("basic-player smoke script completed");
+            event_loop.exit();
+            return;
+        }
         self.update_window_title();
         if let Err(error) = self.refresh_ui_overlay_if_due() {
             error!(?error, "failed to refresh dirty overlay");
@@ -3637,13 +3504,11 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 mod tests {
     use super::{
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
-        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, InstalledPluginActivationConfig, SourceLaunchStatus,
-        decoder_plugin_video_mode_from_value, desktop_native_plugin_coordinates,
-        frame_processor_mode_from_value, parse_json_config, plugin_diagnostics_summary,
-        require_development_policy_for_raw_plugin_paths, resolve_media_source_argument,
-        source_normalizer_mode_from_value,
+        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
+        decoder_plugin_video_mode_from_value, frame_processor_mode_from_value,
+        plugin_diagnostics_summary, require_development_policy_for_raw_plugin_paths,
+        resolve_media_source_argument, source_normalizer_mode_from_value,
     };
-    use player_plugin::PluginReference;
     use player_render_wgpu::RenderFrameOutcome;
     use player_runtime::{
         FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerPluginCapabilitySummary,
@@ -3663,30 +3528,6 @@ mod tests {
         assert_eq!(
             resolve_media_source_argument(DASH_DEMO_CLI_FLAG.to_owned()).expect("dash demo"),
             DESKTOP_DASH_DEMO_URL
-        );
-    }
-
-    #[test]
-    fn desktop_plugin_target_mapping_is_explicit_about_supported_abis() {
-        assert_eq!(
-            desktop_native_plugin_coordinates("macos", "aarch64", ""),
-            Some(("aarch64-apple-darwin", "arm64"))
-        );
-        assert_eq!(
-            desktop_native_plugin_coordinates("linux", "x86_64", "gnu"),
-            Some(("x86_64-unknown-linux-gnu", "x86_64"))
-        );
-        assert_eq!(
-            desktop_native_plugin_coordinates("windows", "aarch64", "msvc"),
-            Some(("aarch64-pc-windows-msvc", "arm64"))
-        );
-        assert_eq!(
-            desktop_native_plugin_coordinates("linux", "aarch64", "musl"),
-            None
-        );
-        assert_eq!(
-            desktop_native_plugin_coordinates("windows", "x86_64", "gnu"),
-            None
         );
     }
 
@@ -3733,28 +3574,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("empty path entries"));
-    }
-
-    #[test]
-    fn installed_plugin_json_preserves_typed_reference_fields() {
-        let references = parse_json_config::<Vec<PluginReference>>(
-            "VESPER_TEST_PLUGIN_REFERENCES",
-            r#"[{"pluginId":"dev.vesper.event-hook-2","capabilityInstanceId":"dev.vesper.event-hook-2.primary","transport":"wasm"}]"#,
-        )
-        .expect("plugin references");
-        assert_eq!(references.len(), 1);
-        assert_eq!(references[0].plugin_id(), "dev.vesper.event-hook-2");
-        assert_eq!(
-            references[0].capability_instance_id(),
-            Some("dev.vesper.event-hook-2.primary")
-        );
-
-        let error = parse_json_config::<Vec<InstalledPluginActivationConfig>>(
-            "VESPER_TEST_PLUGIN_ACTIVATIONS",
-            r#"[{"pluginId":"dev.vesper.event-hook-2","version":"1.2.3","latest":true}]"#,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("VESPER_TEST_PLUGIN_ACTIVATIONS"));
     }
 
     #[test]
@@ -3921,7 +3740,7 @@ mod tests {
 
     #[test]
     fn playlist_row_reflects_loading_and_failed_launch_states() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
         app.register_playlist_source(DESKTOP_HLS_DEMO_URL, Some("HLS DEMO".to_owned()));
 
         app.active_launch_request_id = Some(7);
@@ -3939,7 +3758,7 @@ mod tests {
 
     #[test]
     fn host_overlay_only_exposes_runtime_free_actions_while_loading() {
-        let app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
+        let app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
 
         assert!(app.is_control_action_available(ControlAction::OpenLocalFile));
         assert!(app.is_control_action_available(ControlAction::OpenHlsDemo));
@@ -3951,7 +3770,7 @@ mod tests {
 
     #[test]
     fn empty_start_has_no_default_media_or_playlist_entry() {
-        let app = DesktopPlayerApp::new(None, Vec::new());
+        let app = DesktopPlayerApp::new(None);
 
         assert!(app.source.is_none());
         assert!(app.playlist_item_view_data().is_empty());
@@ -3964,7 +3783,7 @@ mod tests {
 
     #[test]
     fn replacing_launch_cancel_flag_interrupts_previous_prepare() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
 
         let first = app.replace_active_launch_cancel_flag();
         assert!(!first.load(std::sync::atomic::Ordering::SeqCst));
@@ -3976,7 +3795,7 @@ mod tests {
 
     #[test]
     fn deferred_post_launch_play_waits_for_present_or_short_timeout() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
         app.pending_post_launch_play = true;
         app.pending_post_launch_play_needs_paint = true;
         app.pending_post_launch_play_paint_deadline = Some(Instant::now() + Duration::from_secs(1));

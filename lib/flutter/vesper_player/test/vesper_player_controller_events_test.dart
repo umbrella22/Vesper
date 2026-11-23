@@ -226,27 +226,7 @@ void main() {
     expect(platform.initializeCalls, 1);
   });
 
-  test('forwards pipeline EventHook reports once without changing snapshot',
-      () async {
-    controller = await VesperPlayerController.create();
-    final snapshotBefore = controller!.snapshot;
-    final event = _reportsEvent('playback.ready');
-    final received = <VesperPlayerPipelineEventHookReportsEvent>[];
-    final subscription = controller!.events.listen((event) {
-      if (event is VesperPlayerPipelineEventHookReportsEvent) {
-        received.add(event);
-      }
-    });
-    addTearDown(subscription.cancel);
 
-    platform.emit(event);
-    await Future<void>.delayed(Duration.zero);
-
-    expect(received, hasLength(1));
-    expect(identical(received.single, event), isTrue);
-    expect(identical(received.single.reports, event.reports), isTrue);
-    expect(identical(controller!.snapshot, snapshotBefore), isTrue);
-  });
 
   test('publishes output invalidation independently of capability warnings',
       () async {
@@ -306,15 +286,15 @@ void main() {
     ]);
   });
 
-  test('keeps final dispose reports and ignores events after disposal',
+  test('keeps final dispose events and ignores events after disposal',
       () async {
-    final finalEvent = _reportsEvent('playback.dispose');
-    final lateEvent = _reportsEvent('playback.late');
+    final finalEvent = _customEvent('playback.dispose');
+    final lateEvent = _customEvent('playback.late');
     platform.eventOnDispose = finalEvent;
     controller = await VesperPlayerController.create();
-    final received = <VesperPlayerPipelineEventHookReportsEvent>[];
+    final received = <VesperPlayerUnknownEvent>[];
     final subscription = controller!.events.listen((event) {
-      if (event is VesperPlayerPipelineEventHookReportsEvent) {
+      if (event is VesperPlayerUnknownEvent) {
         received.add(event);
       }
     });
@@ -329,25 +309,11 @@ void main() {
   });
 }
 
-VesperPlayerPipelineEventHookReportsEvent _reportsEvent(String eventName) {
-  return VesperPlayerPipelineEventHookReportsEvent(
+VesperPlayerUnknownEvent _customEvent(String eventName) {
+  return VesperPlayerUnknownEvent(
     playerId: _EventTestPlatform.playerId,
-    reports: VesperPipelineEventHookReportBatch(
-      reports: <VesperPipelineEventHookReport>[
-        VesperPipelineEventHookReport(
-          pluginId: 'dev.vesper.hook',
-          capabilityInstanceId: 'dev.vesper.hook.playback',
-          transport: VesperPluginTransport.native,
-          runId: 'run-1',
-          sessionId: 'session-1',
-          eventName: eventName,
-          result: const VesperPipelineEventHookResult(
-            status: VesperPipelineEventHookResultStatus.accepted,
-            outcome: VesperPipelineEventHookOutcome(accepted: true),
-          ),
-        ),
-      ],
-    ),
+    type: eventName,
+    payload: <String, Object?>{'type': eventName},
   );
 }
 
@@ -413,8 +379,6 @@ final class _EventTestPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
-    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
-        const VesperPipelineEventHookConfiguration(),
   }) async {
     return const VesperPlatformCreateResult(
       playerId: playerId,
