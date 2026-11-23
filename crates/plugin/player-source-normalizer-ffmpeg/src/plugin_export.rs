@@ -287,8 +287,8 @@ unsafe extern "C" fn flush(raw: *mut VesperSession) -> VesperStatus {
 
 unsafe extern "C" fn destroy_packet(raw: *mut VesperSession) {
     if !raw.is_null() {
-        // SAFETY: destroy consumes the unique packet session and there are no outstanding borrows.
         let _ = guarded(|| {
+            // SAFETY: destroy consumes the unique packet session with no outstanding borrows.
             unsafe { drop(Box::from_raw(raw.cast::<PacketSession>())) };
             VESPER_OK
         });
@@ -297,8 +297,8 @@ unsafe extern "C" fn destroy_packet(raw: *mut VesperSession) {
 
 unsafe extern "C" fn destroy_resource(raw: *mut VesperSession) {
     if !raw.is_null() {
-        // SAFETY: destroy consumes the unique resource session after its consumer is closed.
         let _ = guarded(|| {
+            // SAFETY: destroy consumes the unique resource session after its consumer is closed.
             unsafe { drop(Box::from_raw(raw.cast::<ResourceSession>())) };
             VESPER_OK
         });
