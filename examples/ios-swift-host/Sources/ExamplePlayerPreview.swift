@@ -67,41 +67,46 @@ import VesperPlayerKit
     .background(Color.black)
 }
 
-#Preview("Play Sources Light") {
-    let palette = exampleHostPalette(useDarkTheme: false)
-    ZStack {
-        LinearGradient(
-            colors: [palette.pageTop, palette.pageBottom],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+#Preview("Open Media Light") {
+    ExampleOpenMediaSheet(
+        remoteStreamUrl: .constant(IOS_HLS_DEMO_URL),
+        hostMessage: nil,
+        onPickVideo: {},
+        onOpenRemote: {},
+        onSelectSample: { _ in },
+        onDismiss: {}
+    )
+    .preferredColorScheme(.light)
+}
 
-        ExampleQuickSourcePanel(
-            palette: palette,
-            remoteStreamUrl: .constant(IOS_HLS_DEMO_URL),
-            hostMessage: nil,
-            dashDemoEnabled: true,
-            dashDemoNote: nil,
-            onPickVideo: {},
-            onUseHlsDemo: {},
-            onUseDashDemo: {},
-            onUseLiveDvrAcceptance: {},
-            onOpenRemote: {}
-        )
-        .padding(20)
+#Preview("Library Light") {
+    NavigationStack {
+        ExampleLibraryPage(
+            dolbyPresets: [],
+            onPlayItem: { _ in },
+            onAddItemToQueue: { _ in }
+        ) {
+            EmptyView()
+        }
+        .navigationTitle(ExampleI18n.libraryTitle)
     }
+    .preferredColorScheme(.light)
+}
+
+#Preview("Settings Dark") {
+    ExampleSettingsSheet(
+        themeMode: .dark,
+        onThemeModeChange: { _ in },
+        onDismiss: {}
+    )
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Play Queue Light") {
     let palette = exampleHostPalette(useDarkTheme: false)
     ZStack {
-        LinearGradient(
-            colors: [palette.pageTop, palette.pageBottom],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+        Color(.systemGroupedBackground)
+            .ignoresSafeArea()
 
         ExampleQueuePanel(
             palette: palette,
@@ -116,12 +121,8 @@ import VesperPlayerKit
 #Preview("Resilience Light") {
     let palette = exampleHostPalette(useDarkTheme: false)
     ZStack {
-        LinearGradient(
-            colors: [palette.pageTop, palette.pageBottom],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+        Color(.systemGroupedBackground)
+            .ignoresSafeArea()
 
         ExampleResilienceSection(
             palette: palette,

@@ -23,18 +23,9 @@ enum ExampleI18n {
     static var themeLight: String { string("example.theme.light") }
     static var themeDark: String { string("example.theme.dark") }
     static var tabPlay: String { string("example.tab.play") }
-    static var tabPlayer: String { tabPlay }
-    static var tabDiagnostics: String { string("example.tab.diagnostics") }
     static var tabDownloads: String { string("example.tab.downloads") }
 
-    static var sourcesTitle: String { string("example.sources.title") }
-    static var sourcesSubtitle: String { string("example.sources.subtitle") }
-    static var pickVideo: String { string("example.sources.pick_video") }
     static var pickFromPhotos: String { string("example.sources.pick_from_photos") }
-    static var useHlsDemo: String { string("example.sources.use_hls_demo") }
-    static var useDashDemo: String { string("example.sources.use_dash_demo") }
-    static var useLiveDvrAcceptance: String { string("example.sources.use_live_dvr_acceptance") }
-    static var dashDemoUnavailableNote: String { string("example.sources.dash_demo_unavailable_note") }
     static var themeTitle: String { string("example.sources.theme_title") }
     static var remoteUrlPlaceholder: String { string("example.sources.remote_url_placeholder") }
     static var openRemoteUrl: String { string("example.sources.open_remote_url") }
@@ -337,9 +328,6 @@ enum ExampleI18n {
     static func liveEdge(_ time: String) -> String {
         string("example.stage.live_edge", time)
     }
-    static var buffering: String { string("example.stage.buffering") }
-    static var play: String { string("example.stage.play") }
-    static var pause: String { string("example.stage.pause") }
 
     static var audioTrack: String { string("example.track.audio_track") }
     static func audioChannels(_ value: Int) -> String {
@@ -410,4 +398,49 @@ enum ExampleI18n {
     static var subtitleAutoSubtitle: String { string("example.sheet.subtitle.auto_subtitle") }
     static var speedCurrentlyActive: String { string("example.sheet.speed.currently_active") }
     static var speedApplyImmediately: String { string("example.sheet.speed.apply_immediately") }
+}
+
+// MARK: - Host shell (tabs, library, sheets, settings)
+
+extension ExampleI18n {
+    static var tabLibrary: String { string("example.tab.library") }
+    static var tabLab: String { string("example.tab.lab") }
+
+    static var shellDone: String { string("example.shell.done") }
+    static var shellCancel: String { string("example.shell.cancel") }
+    static var shellSettings: String { string("example.shell.settings") }
+    static var shellNowPlaying: String { string("example.shell.now_playing") }
+    static var shellNothingPlaying: String { string("example.shell.nothing_playing") }
+    static var shellOpenPlayer: String { string("example.shell.open_player") }
+
+    static var openMediaTitle: String { string("example.open_media.title") }
+    static var openMediaSubtitle: String { string("example.open_media.subtitle") }
+    static var openMediaPhotosSubtitle: String { string("example.open_media.photos_subtitle") }
+    static var openMediaStreamUrl: String { string("example.open_media.stream_url") }
+    static var openMediaStreamUrlHint: String { string("example.open_media.stream_url_hint") }
+    static var openMediaQuickSamples: String { string("example.open_media.quick_samples") }
+    static var openMediaDashBridgeNote: String { string("example.open_media.dash_bridge_note") }
+
+    static var libraryTitle: String { string("example.library.title") }
+    static var librarySubtitle: String { string("example.library.subtitle") }
+    static var libraryCollections: String { string("example.library.collections") }
+    static func libraryItemCount(_ count: Int) -> String {
+        string("example.library.item_count", count)
+    }
+    static func libraryCollectionTitle(_ collection: ExampleLibraryCollection) -> String {
+        string("example.library.collection.\(collection.rawValue).title")
+    }
+    static func libraryCollectionSummary(_ collection: ExampleLibraryCollection) -> String {
+        string("example.library.collection.\(collection.rawValue).summary")
+    }
+
+    static var downloadsTitle: String { string("example.downloads.title") }
+    static var downloadsNew: String { string("example.downloads.new") }
+    static var downloadsTaskList: String { string("example.downloads.task_list") }
+
+    static var labTitle: String { string("example.lab.title") }
+    static var labSubtitle: String { string("example.lab.subtitle") }
+
+    static var settingsAppearance: String { string("example.settings.appearance") }
+    static var settingsAbout: String { string("example.settings.about") }
 }

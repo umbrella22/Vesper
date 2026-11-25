@@ -173,6 +173,8 @@ struct PlayerHostView: View {
     @State private var pictureInPictureDelegate = ExamplePictureInPictureDelegate()
     @State private var currentSurfaceView: PlayerSurfaceView?
     @State private var selectedTab: ExampleHostTab = .play
+    @State private var activeShellSheet: ExampleShellSheet?
+    @State private var shellSheetDetent: PresentationDetent = .medium
     @State private var isManageQueuePresented = false
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
@@ -274,13 +276,6 @@ struct PlayerHostView: View {
         let downloadSnapshot = downloadManager.snapshot
 
         ZStack {
-            LinearGradient(
-                colors: [palette.pageTop, palette.pageBottom],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
             if isFullscreen {
                 Color.black.ignoresSafeArea()
 
@@ -289,36 +284,12 @@ struct PlayerHostView: View {
                     .background(Color.black)
                     .ignoresSafeArea()
             } else {
-                TabView(selection: $selectedTab) {
-                    playPage(
-                        palette: palette,
-                        uiState: uiState,
-                        playlistSnapshot: playlistSnapshot
-                    )
-                    .tag(ExampleHostTab.play)
-                    .tabItem {
-                        Label(ExampleI18n.tabPlay, systemImage: "play.rectangle.fill")
-                    }
-
-                    diagnosticsPage(
-                        palette: palette,
-                        uiState: uiState
-                    )
-                    .tag(ExampleHostTab.diagnostics)
-                    .tabItem {
-                        Label(ExampleI18n.tabDiagnostics, systemImage: "stethoscope")
-                    }
-
-                    downloadPage(
-                        palette: palette,
-                        downloadSnapshot: downloadSnapshot
-                    )
-                    .tag(ExampleHostTab.downloads)
-                    .tabItem {
-                        Label(ExampleI18n.tabDownloads, systemImage: "arrow.down.circle.fill")
-                    }
-                }
-                .tint(palette.primaryAction)
+                shellTabView(
+                    palette: palette,
+                    uiState: uiState,
+                    playlistSnapshot: playlistSnapshot,
+                    downloadSnapshot: downloadSnapshot
+                )
             }
 
             ExampleHiddenVolumeView(deviceControls: deviceControls)
@@ -336,6 +307,13 @@ struct PlayerHostView: View {
                 applyPlaylistQueue(focusItemId: IOS_HLS_PLAYLIST_ITEM_ID)
             }
             scheduleControlsAutoHide(for: uiState)
+            #if DEBUG
+            if let tab = ExampleDebugLaunch.consumeTab() { selectedTab = tab }
+            if let sheet = ExampleDebugLaunch.consumeSheet() { activeShellSheet = sheet }
+            if ExampleDebugLaunch.consumeLargeDetent() { shellSheetDetent = .large }
+            if let sheet = ExampleDebugLaunch.consumePlayerSheet() { activeSheet = sheet }
+            if let itemId = ExampleDebugLaunch.consumePlayItem() { playLibraryItem(itemId) }
+            #endif
         }
         .onDisappear {
             controlsHideTask?.cancel()
@@ -454,8 +432,17 @@ struct PlayerHostView: View {
                     activeSheet = nil
                 }
             )
-            .presentationDetents([.height(sheetHeight(for: sheet))])
-            .presentationDragIndicator(.hidden)
+            .presentationDetents(examplePlayerSheetDetents(sheet))
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $activeShellSheet) { sheet in
+            shellSheetContent(sheet, downloadSnapshot: downloadSnapshot)
+                .presentationDetents(exampleShellSheetDetents(sheet), selection: $shellSheetDetent)
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: activeShellSheet) { _, sheet in
+            // Each shell sheet opens at medium again after it is dismissed.
+            if sheet == nil { shellSheetDetent = .medium }
         }
         .sheet(isPresented: $isManageQueuePresented) {
             ExampleQueueManagementSheet(
@@ -489,6 +476,74 @@ struct PlayerHostView: View {
     }
 
     @ViewBuilder
+    private func shellTabView(
+        palette: ExampleHostPalette,
+        uiState: PlayerHostUiState,
+        playlistSnapshot: VesperPlaylistSnapshot,
+        downloadSnapshot: VesperDownloadSnapshot
+    ) -> some View {
+        TabView(selection: $selectedTab) {
+            shellNavigation(.play) {
+                playPage(palette: palette, uiState: uiState, playlistSnapshot: playlistSnapshot)
+            }
+            .tag(ExampleHostTab.play)
+            .tabItem { Label(ExampleHostTab.play.title, systemImage: ExampleHostTab.play.systemImage) }
+
+            shellNavigation(.library) {
+                libraryPage(palette: palette)
+            }
+            .tag(ExampleHostTab.library)
+            .tabItem { Label(ExampleHostTab.library.title, systemImage: ExampleHostTab.library.systemImage) }
+
+            shellNavigation(.downloads) {
+                downloadPage(palette: palette, downloadSnapshot: downloadSnapshot)
+            }
+            .tag(ExampleHostTab.downloads)
+            .tabItem { Label(ExampleHostTab.downloads.title, systemImage: ExampleHostTab.downloads.systemImage) }
+
+            shellNavigation(.lab) {
+                labPage(palette: palette, uiState: uiState)
+            }
+            .tag(ExampleHostTab.lab)
+            .tabItem { Label(ExampleHostTab.lab.title, systemImage: ExampleHostTab.lab.systemImage) }
+        }
+        .tint(exampleShellAccent)
+        .exampleTabBarMinimizeOnScroll()
+        .exampleMiniPlayerAccessory(
+            isEnabled: exampleShowsMiniPlayer(
+                selectedTab: selectedTab,
+                hasActiveSource: activePlaybackSource() != nil,
+                isFullscreen: isFullscreen
+            )
+        ) {
+            miniPlayer(uiState: uiState)
+        }
+    }
+
+    /// Each tab owns a standard NavigationStack so the system toolbar keeps its
+    /// Liquid Glass treatment. No custom toolbar background is applied.
+    private func shellNavigation<Content: View>(
+        _ tab: ExampleHostTab,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        NavigationStack {
+            content()
+                .navigationTitle(tab.title)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            activeShellSheet = .settings
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel(ExampleI18n.shellSettings)
+                        .accessibilityIdentifier("shell.settings.\(tab.rawValue)")
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
     private func playPage(
         palette: ExampleHostPalette,
         uiState: PlayerHostUiState,
@@ -496,55 +551,52 @@ struct PlayerHostView: View {
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                ExamplePlayerHeader(
-                    sourceLabel: uiState.sourceLabel,
-                    subtitle: uiState.subtitle,
-                    palette: palette
-                )
-
-                ExampleThemeModeControl(
-                    palette: palette,
-                    themeMode: themeMode,
-                    onThemeModeChange: { themeModeRaw = $0.rawValue }
-                )
-
                 playerStage(uiState: uiState)
                     .frame(height: 248)
 
-                ExampleQuickSourcePanel(
-                    palette: palette,
-                    remoteStreamUrl: $remoteStreamUrl,
-                    hostMessage: hostMessage,
-                    dashDemoEnabled: true,
-                    dashDemoNote: nil,
-                    onPickVideo: {
-                        pickVideo()
-                    },
-                    onUseHlsDemo: {
-                        enqueueAndFocusPlaylistItem(
-                            IOS_HLS_PLAYLIST_ITEM_ID,
-                            logTitle: ExampleI18n.logSourceSelected,
-                            logDetail: ExampleI18n.hlsDemoLabel
-                        )
-                    },
-                    onUseDashDemo: {
-                        enqueueAndFocusPlaylistItem(
-                            IOS_DASH_PLAYLIST_ITEM_ID,
-                            logTitle: ExampleI18n.logSourceSelected,
-                            logDetail: ExampleI18n.dashDemoLabel
-                        )
-                    },
-                    onUseLiveDvrAcceptance: {
-                        enqueueAndFocusPlaylistItem(
-                            IOS_LIVE_DVR_PLAYLIST_ITEM_ID,
-                            logTitle: ExampleI18n.logSourceSelected,
-                            logDetail: ExampleI18n.liveDvrAcceptanceLabel
-                        )
-                    },
-                    onOpenRemote: {
-                        openRemoteSource()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(uiState.sourceLabel.isEmpty ? ExampleI18n.shellNothingPlaying : uiState.sourceLabel)
+                        .font(.title3.weight(.bold))
+                        .lineLimit(2)
+                    Text(uiState.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                ExampleGlassGroup {
+                    HStack(spacing: 10) {
+                        Button(action: requestPictureInPicture) {
+                            Label(ExampleI18n.pictureInPictureTitle, systemImage: "pip.enter")
+                        }
+                        Button {
+                            activeSheet = .menu
+                        } label: {
+                            Label(ExampleI18n.playbackTools, systemImage: "slider.horizontal.3")
+                        }
+                        .accessibilityIdentifier("play.playback-tools")
                     }
-                )
+                    .font(.subheadline.weight(.semibold))
+                    .exampleGlassButtonStyle()
+                }
+
+                Button {
+                    hostMessage = nil
+                    activeShellSheet = .openMedia
+                } label: {
+                    Label(ExampleI18n.openMediaTitle, systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .exampleGlassButtonStyle(prominent: true)
+                .accessibilityIdentifier("play.open-media")
+
+                if let hostMessage {
+                    Text(hostMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
 
                 ExampleQueuePanel(
                     palette: palette,
@@ -558,19 +610,178 @@ struct PlayerHostView: View {
                     enabled: $pictureInPictureEnabled,
                     onRequestPictureInPicture: requestPictureInPicture
                 )
-
             }
             .padding(20)
         }
+        .background(Color(.systemGroupedBackground))
     }
 
     @ViewBuilder
-    private func diagnosticsPage(
+    private func libraryPage(palette: ExampleHostPalette) -> some View {
+        ExampleLibraryPage(
+            dolbyPresets: exampleDolbyAcceptanceCatalog,
+            onPlayItem: playLibraryItem,
+            onAddItemToQueue: addLibraryItemToQueue
+        ) {
+            dolbyCatalogPanel(palette: palette)
+        }
+    }
+
+    private func dolbyCatalogPanel(palette: ExampleHostPalette) -> some View {
+        ExampleDolbyCatalogPanel(
+            palette: palette,
+            presets: exampleDolbyAcceptanceCatalog,
+            selectedDrmKind: selectedDolbyDrmKind,
+            selectedProfile: selectedDolbyProfile,
+            selectedFps: selectedDolbyFps,
+            onDrmKindChange: { selectedDolbyDrmKind = $0 },
+            onProfileChange: { selectedDolbyProfile = $0 },
+            onFpsChange: { selectedDolbyFps = $0 },
+            onPresetPlayNow: { preset in
+                activateDolbyAcceptancePreset(
+                    preset,
+                    origin: .dolbyAdHoc(presetId: preset.id)
+                )
+                selectedTab = .play
+            },
+            onPresetAddToQueue: addDolbyPresetToQueue
+        )
+    }
+
+    @ViewBuilder
+    private func shellSheetContent(
+        _ sheet: ExampleShellSheet,
+        downloadSnapshot: VesperDownloadSnapshot
+    ) -> some View {
+        let palette = exampleHostPalette(useDarkTheme: useDarkTheme)
+        switch sheet {
+        case .openMedia:
+            ExampleOpenMediaSheet(
+                remoteStreamUrl: $remoteStreamUrl,
+                hostMessage: hostMessage,
+                onPickVideo: {
+                    activeShellSheet = nil
+                    pickVideo()
+                },
+                onOpenRemote: {
+                    openRemoteSource()
+                    if hostMessage == nil {
+                        activeShellSheet = nil
+                    }
+                },
+                onSelectSample: { itemId in
+                    activeShellSheet = nil
+                    playLibraryItem(itemId)
+                },
+                onDismiss: { activeShellSheet = nil }
+            )
+        case .settings:
+            ExampleSettingsSheet(
+                themeMode: themeMode,
+                onThemeModeChange: { themeModeRaw = $0.rawValue },
+                onDismiss: { activeShellSheet = nil }
+            )
+        case .newDownload:
+            NavigationStack {
+                ScrollView {
+                    ExampleDownloadCreateSection(
+                        palette: palette,
+                        remoteUrl: $downloadRemoteUrl,
+                        message: downloadMessage,
+                        onUseHlsDemo: {
+                            createDownloadTask(
+                                assetIdPrefix: IOS_HLS_PLAYLIST_ITEM_ID,
+                                source: iosHlsDemoSource()
+                            )
+                            activeShellSheet = nil
+                        },
+                        onUseDashDemo: {
+                            createDownloadTask(
+                                assetIdPrefix: IOS_DASH_PLAYLIST_ITEM_ID,
+                                source: iosDashDemoSource()
+                            )
+                            activeShellSheet = nil
+                        },
+                        onCreateRemote: {
+                            openRemoteDownloadSource()
+                        }
+                    )
+                    .padding(20)
+                }
+                .navigationTitle(ExampleI18n.downloadsNew)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(ExampleI18n.shellDone) { activeShellSheet = nil }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compact now-playing row shown in the tab bar accessory (iOS 26.1+).
+    private func miniPlayer(uiState: PlayerHostUiState) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                selectedTab = .play
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(ExampleI18n.shellNowPlaying)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(uiState.sourceLabel.isEmpty ? ExampleI18n.shellNothingPlaying : uiState.sourceLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ExampleI18n.shellOpenPlayer)
+            .accessibilityIdentifier("mini-player.open")
+
+            Button {
+                controller.togglePause()
+            } label: {
+                Image(systemName: uiState.playbackState == .playing ? "pause.fill" : "play.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("mini-player.toggle")
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func playLibraryItem(_ itemId: String) {
+        let label = exampleLibraryItem(playlistItemId: itemId)?.title ?? itemId
+        enqueueAndFocusPlaylistItem(
+            itemId,
+            logTitle: ExampleI18n.logSourceSelected,
+            logDetail: label
+        )
+        selectedTab = .play
+    }
+
+    private func addLibraryItemToQueue(_ itemId: String) {
+        let nextPlaylistItemIds = enqueuePlaylistItem(playlistItemIds, itemId: itemId)
+        applyPlaylistQueue(playlistItemIds: nextPlaylistItemIds)
+        appendHostLog(
+            title: ExampleI18n.logSourceSelected,
+            detail: exampleLibraryItem(playlistItemId: itemId)?.title ?? itemId
+        )
+    }
+
+    @ViewBuilder
+    private func labPage(
         palette: ExampleHostPalette,
         uiState: PlayerHostUiState
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                Text(ExampleI18n.labSubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
                 ExampleDiagnosticsSummarySection(
                     palette: palette,
                     sourceLabel: uiState.sourceLabel.isEmpty ? ExampleI18n.diagnosticsNone : uiState.sourceLabel,
@@ -584,24 +795,6 @@ struct PlayerHostView: View {
                 ExampleEventLogSection(
                     palette: palette,
                     entries: hostLogEntries
-                )
-
-                ExampleDolbyCatalogPanel(
-                    palette: palette,
-                    presets: exampleDolbyAcceptanceCatalog,
-                    selectedDrmKind: selectedDolbyDrmKind,
-                    selectedProfile: selectedDolbyProfile,
-                    selectedFps: selectedDolbyFps,
-                    onDrmKindChange: { selectedDolbyDrmKind = $0 },
-                    onProfileChange: { selectedDolbyProfile = $0 },
-                    onFpsChange: { selectedDolbyFps = $0 },
-                    onPresetPlayNow: { preset in
-                        activateDolbyAcceptancePreset(
-                            preset,
-                            origin: .dolbyAdHoc(presetId: preset.id)
-                        )
-                    },
-                    onPresetAddToQueue: addDolbyPresetToQueue
                 )
 
                 ExamplePluginDiagnosticsSection(
@@ -647,26 +840,23 @@ struct PlayerHostView: View {
                     isDownloadExportPluginInstalled: isDownloadExportPluginInstalled
                 )
 
-                ExampleDownloadCreateSection(
-                    palette: palette,
-                    remoteUrl: $downloadRemoteUrl,
-                    message: downloadMessage,
-                    onUseHlsDemo: {
-                        createDownloadTask(
-                            assetIdPrefix: IOS_HLS_PLAYLIST_ITEM_ID,
-                            source: iosHlsDemoSource()
-                        )
-                    },
-                    onUseDashDemo: {
-                        createDownloadTask(
-                            assetIdPrefix: IOS_DASH_PLAYLIST_ITEM_ID,
-                            source: iosDashDemoSource()
-                        )
-                    },
-                    onCreateRemote: {
-                        openRemoteDownloadSource()
-                    }
-                )
+                Button {
+                    downloadMessage = nil
+                    activeShellSheet = .newDownload
+                } label: {
+                    Label(ExampleI18n.downloadsNew, systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .exampleGlassButtonStyle(prominent: true)
+                .accessibilityIdentifier("downloads.new")
+
+                if let downloadMessage {
+                    Text(downloadMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
 
                 ExampleDownloadTasksSection(
                     palette: palette,

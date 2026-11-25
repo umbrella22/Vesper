@@ -386,8 +386,8 @@ func audioButtonLabel(
     _ trackCatalog: VesperTrackCatalog,
     _ trackSelection: VesperTrackSelectionSnapshot
 ) -> String {
-    guard trackSelection.audio.mode == .track else { return ExampleI18n.audio }
-    return trackCatalog.audioTracks.first { $0.id == trackSelection.audio.trackId }.map(audioLabel) ?? ExampleI18n.audio
+    guard trackSelection.audio.mode == .track else { return ExampleI18n.auto }
+    return trackCatalog.audioTracks.first { $0.id == trackSelection.audio.trackId }.map(audioLabel) ?? ExampleI18n.auto
 }
 
 func subtitleButtonLabel(
@@ -1103,21 +1103,6 @@ func sheetTitle(_ sheet: ExamplePlayerSheet) -> String {
 
 func sheetSubtitle(_ sheet: ExamplePlayerSheet) -> String {
     return ExampleI18n.sheetSubtitle(sheet)
-}
-
-func sheetHeight(for sheet: ExamplePlayerSheet) -> CGFloat {
-    switch sheet {
-    case .menu:
-        return 360
-    case .quality:
-        return 620
-    case .audio:
-        return 440
-    case .subtitle:
-        return 470
-    case .speed:
-        return 360
-    }
 }
 
 func exampleIosHostLog(_ message: String) {

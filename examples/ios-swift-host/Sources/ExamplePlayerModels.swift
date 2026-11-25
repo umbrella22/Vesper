@@ -53,12 +53,6 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum ExampleHostTab: Hashable {
-    case play
-    case diagnostics
-    case downloads
-}
-
 enum ExamplePlaybackOrigin: Equatable {
     case queue(itemId: String)
     case dolbyAdHoc(presetId: String)
@@ -279,8 +273,6 @@ func makeExamplePlaybackPluginConfiguration(
 }
 
 struct ExampleHostPalette {
-    let pageTop: Color
-    let pageBottom: Color
     let sectionBackground: Color
     let sectionStroke: Color
     let title: Color
@@ -293,8 +285,6 @@ struct ExampleHostPalette {
 func exampleHostPalette(useDarkTheme: Bool) -> ExampleHostPalette {
     if useDarkTheme {
         return ExampleHostPalette(
-            pageTop: Color(red: 0.047, green: 0.063, blue: 0.098),
-            pageBottom: Color(red: 0.023, green: 0.027, blue: 0.043),
             sectionBackground: .white.opacity(0.04),
             sectionStroke: .white.opacity(0.06),
             title: .white,
@@ -305,8 +295,6 @@ func exampleHostPalette(useDarkTheme: Bool) -> ExampleHostPalette {
         )
     } else {
         return ExampleHostPalette(
-            pageTop: Color(red: 0.972, green: 0.949, blue: 0.918),
-            pageBottom: Color(red: 0.949, green: 0.957, blue: 0.976),
             sectionBackground: .white.opacity(0.88),
             sectionStroke: Color.black.opacity(0.06),
             title: Color(red: 0.063, green: 0.082, blue: 0.129),
