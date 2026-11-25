@@ -9,11 +9,16 @@ class VesperTimelineScrubber extends StatefulWidget {
     required this.onSeekCancel,
     this.compact = false,
     this.enabled = true,
+    this.semanticLabel,
   });
 
   final double displayedRatio;
   final bool compact;
   final bool enabled;
+
+  /// Accessibility label. Null resolves
+  /// [VesperPlayerStageStrings.playbackPosition] from the context.
+  final String? semanticLabel;
   final ValueChanged<double> onSeekPreview;
   final ValueChanged<double> onSeekCommit;
   final VoidCallback onSeekCancel;
@@ -209,7 +214,14 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
             child: scrubber,
           );
         }
-        return scrubber;
+        return Semantics(
+          slider: true,
+          enabled: enabled,
+          label: widget.semanticLabel ??
+              VesperPlayerStageStrings.of(context).playbackPosition,
+          value: '${(ratio * 100).round()}%',
+          child: scrubber,
+        );
       },
     );
   }

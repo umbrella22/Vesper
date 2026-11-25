@@ -1,9 +1,43 @@
+import 'package:cupertino_ui/cupertino_ui.dart'
+    show CupertinoLocalizations, DefaultCupertinoLocalizations;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/semantics.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart';
+
+/// Loads the default Material copy for any locale so tests can exercise
+/// non-English locales without depending on flutter_localizations.
+class _AnyLocaleMaterialLocalizationsDelegate
+    extends LocalizationsDelegate<MaterialLocalizations> {
+  const _AnyLocaleMaterialLocalizationsDelegate();
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<MaterialLocalizations> load(Locale locale) =>
+      DefaultMaterialLocalizations.load(locale);
+
+  @override
+  bool shouldReload(_AnyLocaleMaterialLocalizationsDelegate old) => false;
+}
+
+class _AnyLocaleCupertinoLocalizationsDelegate
+    extends LocalizationsDelegate<CupertinoLocalizations> {
+  const _AnyLocaleCupertinoLocalizationsDelegate();
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<CupertinoLocalizations> load(Locale locale) =>
+      DefaultCupertinoLocalizations.load(locale);
+
+  @override
+  bool shouldReload(_AnyLocaleCupertinoLocalizationsDelegate old) => false;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -34,7 +68,9 @@ void main() {
     Widget? topBarPrimaryAction,
     Widget? topBarSecondaryAction,
     VesperPlayerSnapshot? snapshot,
-    VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+    VesperPlayerStageStrings? strings,
+    Locale? locale,
+    Widget Function(Widget stage)? wrapStage,
     bool keepControlsVisible = false,
     bool pictureInPicturePresentation = false,
     VesperStageControlLayout controlLayout = VesperStageControlLayout.compact,
@@ -77,15 +113,23 @@ void main() {
       ),
     );
 
+    final hosted = wrapStage?.call(stage) ?? stage;
     await tester.pumpWidget(
       MaterialApp(
+        locale: locale,
+        supportedLocales: const <Locale>[Locale('en'), Locale('zh')],
+        localizationsDelegates: const <LocalizationsDelegate<Object>>[
+          _AnyLocaleMaterialLocalizationsDelegate(),
+          _AnyLocaleCupertinoLocalizationsDelegate(),
+          DefaultWidgetsLocalizations.delegate,
+        ],
         home: Scaffold(
           body: insideVerticalScrollView
               ? SingleChildScrollView(
                   controller: scrollController,
-                  child: SizedBox(height: 900, child: stage),
+                  child: SizedBox(height: 900, child: hosted),
                 )
-              : stage,
+              : hosted,
         ),
       ),
     );
@@ -607,6 +651,109 @@ void main() {
 
     expect(find.text('Loading media'), findsOneWidget);
     expect(find.text('On-demand asset'), findsOneWidget);
+  });
+
+  testWidgets('stage defaults to English copy for an English locale',
+      (tester) async {
+    await pumpStage(
+      tester,
+      locale: const Locale('en'),
+      snapshot: _playingSnapshot.copyWith(isBuffering: true),
+    );
+
+    expect(find.text('Buffering'), findsOneWidget);
+    expect(find.text('Video on demand'), findsOneWidget);
+  });
+
+  testWidgets('stage follows a Chinese locale without explicit strings',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await pumpStage(
+        tester,
+        locale: const Locale('zh'),
+        snapshot: _playingSnapshot.copyWith(isBuffering: true),
+      );
+
+      expect(find.text('缓冲中'), findsOneWidget);
+      expect(find.text('点播视频'), findsOneWidget);
+      expect(find.text('Buffering'), findsNothing);
+      expect(find.bySemanticsLabel('播放进度'), findsOneWidget);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('strings scope overrides the locale default', (tester) async {
+    await pumpStage(
+      tester,
+      locale: const Locale('en'),
+      snapshot: _playingSnapshot.copyWith(isBuffering: true),
+      wrapStage: (stage) => VesperPlayerStageStringsScope(
+        strings: const VesperPlayerStageStrings.zhHans()
+            .copyWith(buffering: '加载中'),
+        child: stage,
+      ),
+    );
+
+    expect(find.text('加载中'), findsOneWidget);
+    expect(find.text('点播视频'), findsOneWidget);
+  });
+
+  testWidgets('explicit stage strings take precedence over the scope',
+      (tester) async {
+    await pumpStage(
+      tester,
+      locale: const Locale('zh'),
+      snapshot: _playingSnapshot.copyWith(isBuffering: true),
+      strings: const VesperPlayerStageStrings(buffering: 'Host buffering'),
+      wrapStage: (stage) => VesperPlayerStageStringsScope(
+        strings: const VesperPlayerStageStrings.zhHans(),
+        child: stage,
+      ),
+    );
+
+    expect(find.text('Host buffering'), findsOneWidget);
+    expect(find.text('缓冲中'), findsNothing);
+  });
+
+  test('built-in strings resolve by language and support copyWith', () {
+    expect(VesperPlayerStageStrings.forLocale(null),
+        const VesperPlayerStageStrings());
+    expect(VesperPlayerStageStrings.forLocale(const Locale('fr')),
+        const VesperPlayerStageStrings.en());
+    expect(
+        VesperPlayerStageStrings.forLocale(
+            const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant')),
+        const VesperPlayerStageStrings.zhHans());
+    expect(VesperPlayerStageStrings.forLocale(const Locale('zh', 'CN')).play,
+        '播放');
+
+    final custom =
+        const VesperPlayerStageStrings.zhHans().copyWith(play: '开始');
+    expect(custom.play, '开始');
+    expect(custom.pause, '暂停');
+    expect(custom, isNot(const VesperPlayerStageStrings.zhHans()));
+    expect(custom.hashCode,
+        const VesperPlayerStageStrings.zhHans().copyWith(play: '开始').hashCode);
+  });
+
+  testWidgets('standalone primary button follows the strings scope',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(MaterialApp(
+        home: VesperPlayerStageStringsScope(
+          strings: const VesperPlayerStageStrings.zhHans(),
+          child: Center(
+              child: VesperStagePrimaryPlayButton(
+                  isPlaying: true, onPressed: () {})),
+        ),
+      ));
+      expect(find.bySemanticsLabel('暂停'), findsOneWidget);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   for (final layout in VesperStageControlLayout.values) {

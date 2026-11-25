@@ -11,7 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  material_ui: ^1.3.0
+  material_ui: ^1.11.1
   vesper_player: ^0.11.0
   vesper_player_platform_interface: ^0.11.0
 

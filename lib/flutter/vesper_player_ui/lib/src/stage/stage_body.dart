@@ -4,6 +4,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   VesperPlayerStageSkin get _skin =>
       widget.skin ?? const VesperPlayerStageSkin();
 
+  VesperPlayerStageStrings get _strings =>
+      widget.strings ?? VesperPlayerStageStrings.of(context);
+
   Size? _stageSize;
   int _interactionRevision = 0;
   int _deviceGestureGeneration = 0;
@@ -282,7 +285,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           VesperStageIconButton(
             icon: const VesperStageIcon(VesperStageIconRole.navigateBack),
             label:
-                widget.navigateBackSemanticLabel ?? widget.strings.navigateBack,
+                widget.navigateBackSemanticLabel ?? _strings.navigateBack,
             variant: VesperStageButtonVariant.navigation,
             onPressed: widget.onNavigateBack!,
           ),
@@ -308,7 +311,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                   if (snapshot.isBuffering) ...<Widget>[
                     SizedBox(width: _skin.metrics.buttonSpacing),
                     VesperStageChip(
-                      label: widget.strings.buffering,
+                      label: _strings.buffering,
                       accent: _skin.colors.accent,
                       compact: true,
                     ),
@@ -317,7 +320,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               ),
               const SizedBox(height: 4),
               Text(
-                stageBadgeText(snapshot.timeline, strings: widget.strings),
+                stageBadgeText(snapshot.timeline, strings: _strings),
                 style: Theme.of(
                   context,
                 )
@@ -341,7 +344,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   Widget _defaultMenuAction() {
     return VesperStageIconButton(
       icon: const VesperStageIcon(VesperStageIconRole.more),
-      label: widget.strings.more,
+      label: _strings.more,
       variant: VesperStageButtonVariant.toolbar,
       onPressed: () => widget.onOpenSheet(VesperPlayerStageSheet.menu),
     );
@@ -359,7 +362,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         VesperStageIconButton(
           icon: VesperStageIcon(
               isPlaying ? VesperStageIconRole.pause : VesperStageIconRole.play),
-          label: isPlaying ? widget.strings.pause : widget.strings.play,
+          label: isPlaying ? _strings.pause : _strings.play,
           variant: VesperStageButtonVariant.compact,
           onPressed: _togglePause,
         ),
@@ -370,6 +373,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             displayedRatio: displayedRatio,
             compact: true,
             enabled: snapshot.timeline.isSeekable,
+            semanticLabel: _strings.playbackPosition,
             onSeekPreview: _handleSeekPreview,
             onSeekCommit: _handleSeekCommit,
             onSeekCancel: _handleSeekCancel,
@@ -380,7 +384,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           compactTimelineSummary(
             snapshot.timeline,
             _pendingSeekRatio,
-            strings: widget.strings,
+            strings: _strings,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -392,7 +396,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         if (snapshot.timeline.kind == VesperTimelineKind.liveDvr) ...<Widget>[
           SizedBox(width: _skin.metrics.buttonSpacing),
           VesperStagePillButton(
-            label: liveButtonLabel(snapshot.timeline, strings: widget.strings),
+            label: liveButtonLabel(snapshot.timeline, strings: _strings),
             compact: true,
             onPressed: _seekToLiveEdge,
           ),
@@ -403,8 +407,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               ? VesperStageIconRole.exitFullscreen
               : VesperStageIconRole.fullscreen),
           label: widget.isFullscreen
-              ? widget.strings.exitFullscreen
-              : widget.strings.fullscreen,
+              ? _strings.exitFullscreen
+              : _strings.fullscreen,
           variant: VesperStageButtonVariant.compactFullscreen,
           onPressed: widget.onToggleFullscreen,
         ),
@@ -423,7 +427,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       snapshot.trackSelection,
       effectiveVideoTrackId: snapshot.effectiveVideoTrackId,
       fixedTrackStatus: snapshot.fixedTrackStatus,
-      strings: widget.strings,
+      strings: _strings,
     );
 
     return Column(
@@ -433,7 +437,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           timelineSummary(
             snapshot.timeline,
             _pendingSeekRatio,
-            strings: widget.strings,
+            strings: _strings,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -448,6 +452,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           displayedRatio: displayedRatio,
           compact: true,
           enabled: snapshot.timeline.isSeekable,
+          semanticLabel: _strings.playbackPosition,
           onSeekPreview: _handleSeekPreview,
           onSeekCommit: _handleSeekCommit,
           onSeekCancel: _handleSeekCancel,
@@ -459,7 +464,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               icon: VesperStageIcon(isPlaying
                   ? VesperStageIconRole.pause
                   : VesperStageIconRole.play),
-              label: isPlaying ? widget.strings.pause : widget.strings.play,
+              label: isPlaying ? _strings.pause : _strings.play,
               variant: VesperStageButtonVariant.expanded,
               onPressed: _togglePause,
             ),
@@ -470,7 +475,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                 VesperTimelineKind.liveDvr) ...<Widget>[
               VesperStagePillButton(
                 label:
-                    liveButtonLabel(snapshot.timeline, strings: widget.strings),
+                    liveButtonLabel(snapshot.timeline, strings: _strings),
                 compact: true,
                 onPressed: _seekToLiveEdge,
               ),
@@ -494,8 +499,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                   ? VesperStageIconRole.exitFullscreen
                   : VesperStageIconRole.fullscreen),
               label: widget.isFullscreen
-                  ? widget.strings.exitFullscreen
-                  : widget.strings.fullscreen,
+                  ? _strings.exitFullscreen
+                  : _strings.fullscreen,
               variant: VesperStageButtonVariant.expandedFullscreen,
               onPressed: widget.onToggleFullscreen,
             ),

@@ -44,7 +44,7 @@ class VesperPlayerStage extends StatefulWidget {
     this.topBarSecondaryAction,
     this.keepControlsVisible = false,
     this.pictureInPicturePresentation = false,
-    this.strings = const VesperPlayerStageStrings(),
+    this.strings,
     this.skin,
   });
 
@@ -98,7 +98,11 @@ class VesperPlayerStage extends StatefulWidget {
   /// Changing this to false restarts the normal auto-hide interval.
   final bool keepControlsVisible;
   final bool pictureInPicturePresentation;
-  final VesperPlayerStageStrings strings;
+
+  /// Stage copy. Null resolves [VesperPlayerStageStrings.of] from the context:
+  /// the nearest [VesperPlayerStageStringsScope], otherwise the built-in
+  /// English or Simplified Chinese copy for `Localizations.localeOf`.
+  final VesperPlayerStageStrings? strings;
 
   /// Null selects the SDK default, including inside another theme scope.
   final VesperPlayerStageSkin? skin;

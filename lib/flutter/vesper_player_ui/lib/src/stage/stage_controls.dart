@@ -7,23 +7,28 @@ class VesperStagePrimaryPlayButton extends StatelessWidget {
     super.key,
     required this.isPlaying,
     required this.onPressed,
-    this.strings = const VesperPlayerStageStrings(),
+    this.strings,
     this.style,
   });
   final bool isPlaying;
   final VoidCallback onPressed;
-  final VesperPlayerStageStrings strings;
+
+  /// Null resolves [VesperPlayerStageStrings.of] from the context.
+  final VesperPlayerStageStrings? strings;
   final VesperStageButtonStyle? style;
 
   @override
-  Widget build(BuildContext context) => VesperStageIconButton(
-        icon: VesperStageIcon(
-            isPlaying ? VesperStageIconRole.pause : VesperStageIconRole.play),
-        label: isPlaying ? strings.pause : strings.play,
-        variant: VesperStageButtonVariant.primary,
-        style: style,
-        onPressed: onPressed,
-      );
+  Widget build(BuildContext context) {
+    final resolved = strings ?? VesperPlayerStageStrings.of(context);
+    return VesperStageIconButton(
+      icon: VesperStageIcon(
+          isPlaying ? VesperStageIconRole.pause : VesperStageIconRole.play),
+      label: isPlaying ? resolved.pause : resolved.play,
+      variant: VesperStageButtonVariant.primary,
+      style: style,
+      onPressed: onPressed,
+    );
+  }
 }
 
 /// A decorative icon inside a skinned, accessible action button.
