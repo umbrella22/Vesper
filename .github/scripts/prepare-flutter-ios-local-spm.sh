@@ -2,7 +2,16 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-runner_temp="${RUNNER_TEMP:?RUNNER_TEMP is required}"
+# CI rewrites the tracked plugin manifests. `--print-env` stages the same local
+# package for a developer checkout and prints the VESPER_FLUTTER_IOS_LOCAL_KIT
+# export instead, leaving the manifests untouched.
+mode="rewrite"
+if [[ "${1:-}" == "--print-env" ]]; then
+  mode="print-env"
+  runner_temp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+else
+  runner_temp="${RUNNER_TEMP:?RUNNER_TEMP is required}"
+fi
 local_root="$(mktemp -d "${runner_temp%/}/vesper-flutter-ios-local-spm.XXXXXX")"
 local_package="$local_root/VesperPlayerKit"
 source_package="$repository_root/lib/ios/VesperPlayerKit"
@@ -94,7 +103,8 @@ let package = Package(
         .target(
             name: "VesperPlayerKitUI",
             dependencies: ["VesperPlayerKit"],
-            path: "Sources/VesperPlayerKitUI"
+            path: "Sources/VesperPlayerKitUI",
+            resources: [.process("Resources")]
         ),
         .binaryTarget(
             name: "VesperFFmpegAVCodec",
@@ -130,6 +140,11 @@ jq -e '
     "VesperPlayerSourceNormalizerFfmpeg"
   ]
 ' "$local_root/manifest.json" >/dev/null
+
+if [[ "$mode" == "print-env" ]]; then
+  printf 'export VESPER_FLUTTER_IOS_LOCAL_KIT=%q\n' "$local_package"
+  exit 0
+fi
 
 manifests=(
   "$repository_root/lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift"

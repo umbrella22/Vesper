@@ -3,6 +3,18 @@ import PackageDescription
 
 private let vesperPlayerKitVersion: Version = "0.11.0"
 
+// Repository development only: point VESPER_FLUTTER_IOS_LOCAL_KIT at a local
+// VesperPlayerKit package to build against the checkout's host kit. Published
+// builds leave it unset and resolve the remote binary package.
+private let vesperPlayerKitLocalPath = Context.environment["VESPER_FLUTTER_IOS_LOCAL_KIT"]
+    .flatMap { $0.isEmpty ? nil : $0 }
+
+private let vesperPlayerKitDependency: Package.Dependency =
+    vesperPlayerKitLocalPath.map { Package.Dependency.package(path: $0) } ?? .package(
+        url: "https://github.com/umbrella22/VesperPlayerKit.git",
+        exact: vesperPlayerKitVersion
+    )
+
 let package = Package(
     name: "vesper_player_ios",
     defaultLocalization: "en",
@@ -14,10 +26,7 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "FlutterFramework", path: "../FlutterFramework"),
-        .package(
-            url: "https://github.com/umbrella22/VesperPlayerKit.git",
-            exact: vesperPlayerKitVersion
-        ),
+        vesperPlayerKitDependency,
     ],
     targets: [
         .target(
