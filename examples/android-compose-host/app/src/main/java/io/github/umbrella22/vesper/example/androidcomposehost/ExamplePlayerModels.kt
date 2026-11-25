@@ -257,34 +257,39 @@ internal data class ExampleHostPalette(
     val fieldBackground: Color,
     val fieldText: Color,
     val primaryAction: Color,
+    val onPrimaryAction: Color,
+    val accentInk: Color,
+    val ok: Color,
+    val warn: Color,
+    val err: Color,
+    val info: Color,
 )
 
-internal fun exampleHostPalette(useDarkTheme: Boolean): ExampleHostPalette =
-    if (useDarkTheme) {
-        ExampleHostPalette(
-            pageTop = Color(0xFF0C1018),
-            pageBottom = Color(0xFF06080D),
-            sectionBackground = Color.White.copy(alpha = 0.04f),
-            sectionStroke = Color.White.copy(alpha = 0.06f),
-            title = Color.White,
-            body = Color(0xFF94A0B5),
-            fieldBackground = Color.White.copy(alpha = 0.06f),
-            fieldText = Color.White,
-            primaryAction = Color(0xFF2A8BFF),
-        )
-    } else {
-        ExampleHostPalette(
-            pageTop = Color(0xFFF8F2EA),
-            pageBottom = Color(0xFFF2F4F9),
-            sectionBackground = Color.White.copy(alpha = 0.86f),
-            sectionStroke = Color(0x140B1220),
-            title = Color(0xFF101521),
-            body = Color(0xFF5C667A),
-            fieldBackground = Color(0xFFF6F7FA),
-            fieldText = Color(0xFF101521),
-            primaryAction = Color(0xFF256DFF),
-        )
-    }
+/**
+ * Maps the brand tokens onto the legacy section palette. Filled actions use the
+ * neutral ink color (as in the prototype) so the bright accent stays reserved for
+ * the navigation indicator and the extended FAB.
+ */
+internal fun exampleHostPalette(useDarkTheme: Boolean): ExampleHostPalette {
+    val t = exampleHostTokens(useDarkTheme)
+    return ExampleHostPalette(
+        pageTop = t.background,
+        pageBottom = t.background,
+        sectionBackground = t.surface,
+        sectionStroke = t.line,
+        title = t.ink,
+        body = t.ink2,
+        fieldBackground = t.surface2,
+        fieldText = t.ink,
+        primaryAction = t.ink,
+        onPrimaryAction = t.background,
+        accentInk = t.accentInk,
+        ok = t.ok,
+        warn = t.warn,
+        err = t.err,
+        info = t.info,
+    )
+}
 
 internal const val ANDROID_HLS_DEMO_URL: String =
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"

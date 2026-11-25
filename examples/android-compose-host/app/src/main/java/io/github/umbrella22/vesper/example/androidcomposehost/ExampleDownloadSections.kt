@@ -109,7 +109,7 @@ internal fun ExampleDownloadCreateSection(
                 onClick = onCreateRemote,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.primaryAction,
-                    contentColor = Color.White,
+                    contentColor = palette.onPrimaryAction,
                 ),
             ) {
                 Text(stringResource(R.string.example_download_create_remote_task))
@@ -286,7 +286,7 @@ private fun ExampleDownloadTaskRow(
         task.error?.message?.takeIf { it.isNotBlank() }?.let { message ->
             Text(
                 text = stringResource(R.string.example_download_error_message, message),
-                style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFFC13C36)),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.err),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -299,7 +299,7 @@ private fun ExampleDownloadTaskRow(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = palette.primaryAction,
-                        contentColor = Color.White,
+                        contentColor = palette.onPrimaryAction,
                     ),
                 ) {
                     Text(primaryActionLabel)

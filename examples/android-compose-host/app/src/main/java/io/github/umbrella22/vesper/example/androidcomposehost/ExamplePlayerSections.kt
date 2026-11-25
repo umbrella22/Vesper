@@ -195,7 +195,7 @@ internal fun ExampleSourceSection(
             onClick = onOpenRemote,
             colors = ButtonDefaults.buttonColors(
                 containerColor = palette.primaryAction,
-                contentColor = Color.White,
+                contentColor = palette.onPrimaryAction,
             ),
         ) {
             Text(stringResource(R.string.example_sources_open_remote_url))
@@ -281,7 +281,7 @@ internal fun ExampleQuickSourcePanel(
                 onClick = onOpenRemote,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.primaryAction,
-                    contentColor = Color.White,
+                    contentColor = palette.onPrimaryAction,
                 ),
             ) {
                 Text(stringResource(R.string.example_sources_open_remote_url))
@@ -345,7 +345,7 @@ internal fun ExampleExternalPlaybackSection(
                     onClick = onLoadCurrent,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = palette.primaryAction,
-                        contentColor = Color.White,
+                        contentColor = palette.onPrimaryAction,
                     ),
                 ) {
                     Text(stringResource(R.string.example_external_load_current))
@@ -591,7 +591,7 @@ private fun DolbyAcceptancePresetRow(
                 enabled = preset.isPlayable,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.primaryAction,
-                    contentColor = Color.White,
+                    contentColor = palette.onPrimaryAction,
                 ),
             ) {
                 Text(stringResource(R.string.example_dolby_acceptance_play_now))
@@ -646,13 +646,13 @@ private fun CastRoutePickerRow(
                 onClick = onOpen,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.primaryAction,
-                    contentColor = Color.White,
+                    contentColor = palette.onPrimaryAction,
                 ),
             ) {
                 if (opening) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
-                        color = Color.White,
+                        color = palette.onPrimaryAction,
                         strokeWidth = 2.dp,
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -713,7 +713,7 @@ private fun ExternalRouteRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyLarge.copy(
-                    color = if (active) Color.White else palette.title,
+                    color = if (active) palette.onPrimaryAction else palette.title,
                     fontWeight = FontWeight.SemiBold,
                 ),
             )
@@ -722,14 +722,14 @@ private fun ExternalRouteRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall.copy(
-                    color = if (active) Color.White.copy(alpha = 0.82f) else palette.body,
+                    color = if (active) palette.onPrimaryAction.copy(alpha = 0.82f) else palette.body,
                 ),
             )
         }
         TextButton(
             onClick = onConnect,
             colors = ButtonDefaults.textButtonColors(
-                contentColor = if (active) Color.White else palette.primaryAction,
+                contentColor = if (active) palette.onPrimaryAction else palette.primaryAction,
             ),
         ) {
             Text(stringResource(R.string.example_external_connect))
@@ -781,7 +781,7 @@ internal fun ExamplePictureInPictureSection(
                 enabled = enabled,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.primaryAction,
-                    contentColor = Color.White,
+                    contentColor = palette.onPrimaryAction,
                 ),
             ) {
                 Text(
@@ -1020,7 +1020,7 @@ private fun PlaylistQueueRow(
     TextButton(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(
-            contentColor = if (active) Color.White else palette.title,
+            contentColor = if (active) palette.onPrimaryAction else palette.title,
         ),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         modifier = Modifier
@@ -1056,7 +1056,7 @@ private fun PlaylistQueueRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelMedium.copy(
-                    color = if (active) Color.White.copy(alpha = 0.88f) else palette.body,
+                    color = if (active) palette.onPrimaryAction.copy(alpha = 0.88f) else palette.body,
                 ),
             )
         }
@@ -1257,7 +1257,7 @@ internal fun ExamplePluginDiagnosticsSection(
                     enabled = !isCapturingHdrEvidence,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = palette.primaryAction,
-                        contentColor = Color.White,
+                        contentColor = palette.onPrimaryAction,
                     ),
                 ) {
                     Text(
@@ -1483,9 +1483,9 @@ private fun eventSeverityColor(
     palette: ExampleHostPalette,
 ): Color =
     when (severity) {
-        ExampleHostLogSeverity.Info -> palette.primaryAction
-        ExampleHostLogSeverity.Warning -> Color(0xFFC77B00)
-        ExampleHostLogSeverity.Error -> Color(0xFFD64242)
+        ExampleHostLogSeverity.Info -> palette.info
+        ExampleHostLogSeverity.Warning -> palette.warn
+        ExampleHostLogSeverity.Error -> palette.err
     }
 
 @Composable
@@ -1722,7 +1722,7 @@ internal fun ThemeModeChip(
     TextButton(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(
-            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
         ),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         modifier = Modifier
@@ -1755,7 +1755,7 @@ private fun SelectionChip(
     TextButton(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(
-            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+            contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
         ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
         modifier = Modifier
@@ -1881,7 +1881,7 @@ internal fun ExampleSectionShell(
             modifier = Modifier
                 .width(42.dp)
                 .height(4.dp)
-                .background(Color(0xFF172033), RoundedCornerShape(999.dp)),
+                .background(palette.sectionStroke, RoundedCornerShape(999.dp)),
         )
         Spacer(modifier = Modifier.size(16.dp))
         content()

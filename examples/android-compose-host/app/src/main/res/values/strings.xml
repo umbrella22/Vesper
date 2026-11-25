@@ -22,9 +22,6 @@
     <string name="example_theme_system">System</string>
     <string name="example_theme_light">Light</string>
     <string name="example_theme_dark">Dark</string>
-    <string name="example_tab_player">Player</string>
-    <string name="example_tab_diagnostics">Diagnostics</string>
-    <string name="example_tab_downloads">Downloads</string>
 
     <string name="example_sources_title">Sources</string>
     <string name="example_sources_subtitle">Use these demo actions to switch among local files, HLS, DASH, and custom remote URLs.</string>
@@ -269,21 +266,13 @@
     <string name="example_sheet_speed_currently_active">Currently active.</string>
     <string name="example_sheet_speed_apply_immediately">Apply this speed immediately.</string>
 
-    <string name="example_stage_more">More</string>
-    <string name="example_stage_replay_10">Replay 10</string>
-    <string name="example_stage_forward_10">Forward 10</string>
-    <string name="example_stage_fullscreen">Fullscreen</string>
-    <string name="example_stage_exit_fullscreen">Exit Fullscreen</string>
-    <string name="example_stage_buffering">Buffering</string>
-    <string name="example_stage_play">Play</string>
-    <string name="example_stage_pause">Pause</string>
     <string name="example_stage_live_stream">Live stream</string>
     <string name="example_stage_live_with_dvr_window">Live with DVR window</string>
     <string name="example_stage_video_on_demand">Video on demand</string>
-    <string name="example_stage_go_live">Go Live</string>
+    <string name="example_stage_go_live">Go live</string>
     <string name="example_stage_live">LIVE</string>
     <string name="example_stage_live_behind">LIVE -%1$s</string>
-    <string name="example_stage_live_edge">LIVE • Edge %1$s</string>
+    <string name="example_stage_live_edge">LIVE · Edge %1$s</string>
 
     <string name="example_source_custom_remote_label">Custom Remote Stream</string>
     <string name="example_source_hls_demo_label">HLS Demo (BipBop)</string>
@@ -296,4 +285,33 @@
     <string name="example_unit_bitrate_kbps">%1$.0f kbps</string>
     <string name="example_unit_bitrate_bps">%1$d bps</string>
     <string name="example_unit_playback_rate">%1$sx</string>
+    <string name="example_app_title">Vesper</string>
+    <string name="example_nav_play">Play</string>
+    <string name="example_nav_library">Library</string>
+    <string name="example_nav_downloads">Downloads</string>
+    <string name="example_nav_lab">Lab</string>
+    <string name="example_action_settings">Settings</string>
+    <string name="example_action_open_media">Open media</string>
+    <string name="example_action_back">Back</string>
+    <string name="example_action_pip">Picture-in-picture</string>
+    <string name="example_action_cast">Cast</string>
+    <string name="example_action_tracks">Audio &amp; subtitles</string>
+    <string name="example_common_undo">Undo</string>
+    <string name="example_library_streams_title">Adaptive streams</string>
+    <string name="example_library_streams_desc">HLS and DASH demos for startup, seeking, and ABR switching.</string>
+    <string name="example_library_live_title">Live &amp; DVR</string>
+    <string name="example_library_live_desc">Live edge, DVR window, and SCTE-35 acceptance stream.</string>
+    <string name="example_library_dolby_title">Dolby acceptance</string>
+    <string name="example_library_dolby_desc">Dolby Vision presets filtered by profile and fps. Direct native playback only.</string>
+    <plurals name="example_library_item_count">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
+    <string name="example_library_play">Play</string>
+    <string name="example_lab_rtsp_title">RTSP Lab</string>
+    <string name="example_lab_rtsp_subtitle">Debug builds only · pull, handshake, and RTP timing</string>
+    <string name="example_lab_rtsp_badge">debug</string>
+    <string name="example_settings_appearance">Appearance</string>
+    <string name="example_settings_about">Vesper player host demo · Android</string>
+    <string name="example_download_removed">Download task removed</string>
 </resources>

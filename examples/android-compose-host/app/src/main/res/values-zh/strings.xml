@@ -22,9 +22,6 @@
     <string name="example_theme_system">跟随系统</string>
     <string name="example_theme_light">浅色</string>
     <string name="example_theme_dark">深色</string>
-    <string name="example_tab_player">播放器</string>
-    <string name="example_tab_diagnostics">诊断</string>
-    <string name="example_tab_downloads">下载</string>
 
     <string name="example_sources_title">媒体源</string>
     <string name="example_sources_subtitle">使用这些演示操作在本地文件、HLS、DASH 和自定义远程 URL 之间切换。</string>
@@ -269,21 +266,13 @@
     <string name="example_sheet_speed_currently_active">当前已生效。</string>
     <string name="example_sheet_speed_apply_immediately">立即应用这个速度。</string>
 
-    <string name="example_stage_more">更多</string>
-    <string name="example_stage_replay_10">后退 10 秒</string>
-    <string name="example_stage_forward_10">前进 10 秒</string>
-    <string name="example_stage_fullscreen">全屏</string>
-    <string name="example_stage_exit_fullscreen">退出全屏</string>
-    <string name="example_stage_buffering">缓冲中</string>
-    <string name="example_stage_play">播放</string>
-    <string name="example_stage_pause">暂停</string>
     <string name="example_stage_live_stream">直播流</string>
     <string name="example_stage_live_with_dvr_window">带 DVR 窗口的直播</string>
     <string name="example_stage_video_on_demand">点播视频</string>
     <string name="example_stage_go_live">回到直播</string>
     <string name="example_stage_live">直播</string>
     <string name="example_stage_live_behind">直播 -%1$s</string>
-    <string name="example_stage_live_edge">直播 • 实时点 %1$s</string>
+    <string name="example_stage_live_edge">直播 · 实时点 %1$s</string>
 
     <string name="example_source_custom_remote_label">自定义远程流</string>
     <string name="example_source_hls_demo_label">HLS 演示（BipBop）</string>
@@ -296,4 +285,32 @@
     <string name="example_unit_bitrate_kbps">%1$.0f kbps</string>
     <string name="example_unit_bitrate_bps">%1$d bps</string>
     <string name="example_unit_playback_rate">%1$sx</string>
+    <string name="example_app_title">Vesper</string>
+    <string name="example_nav_play">播放</string>
+    <string name="example_nav_library">媒体库</string>
+    <string name="example_nav_downloads">下载</string>
+    <string name="example_nav_lab">实验室</string>
+    <string name="example_action_settings">设置</string>
+    <string name="example_action_open_media">打开媒体</string>
+    <string name="example_action_back">返回</string>
+    <string name="example_action_pip">画中画</string>
+    <string name="example_action_cast">投屏</string>
+    <string name="example_action_tracks">音轨与字幕</string>
+    <string name="example_common_undo">撤销</string>
+    <string name="example_library_streams_title">自适应流</string>
+    <string name="example_library_streams_desc">HLS 与 DASH 演示，验证起播、拖动与码率切换。</string>
+    <string name="example_library_live_title">直播与 DVR</string>
+    <string name="example_library_live_desc">直播边缘、DVR 窗口与 SCTE-35 验收流。</string>
+    <string name="example_library_dolby_title">Dolby 验收</string>
+    <string name="example_library_dolby_desc">按 profile 与 fps 筛选 Dolby Vision 预设，只走 direct native 播放。</string>
+    <plurals name="example_library_item_count">
+        <item quantity="other">%1$d 个条目</item>
+    </plurals>
+    <string name="example_library_play">播放</string>
+    <string name="example_lab_rtsp_title">RTSP Lab</string>
+    <string name="example_lab_rtsp_subtitle">仅 debug 构建 · 拉流、握手与 RTP 时序</string>
+    <string name="example_lab_rtsp_badge">debug</string>
+    <string name="example_settings_appearance">外观</string>
+    <string name="example_settings_about">Vesper 播放器宿主演示 · Android</string>
+    <string name="example_download_removed">已移除下载任务</string>
 </resources>

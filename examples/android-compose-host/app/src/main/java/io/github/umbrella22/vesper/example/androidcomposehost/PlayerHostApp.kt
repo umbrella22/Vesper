@@ -1,5 +1,11 @@
 package io.github.umbrella22.vesper.example.androidcomposehost
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.derivedStateOf
 import io.github.umbrella22.vesper.player.android.compose.ui.VesperStageControlLayout
 
 import android.Manifest
@@ -16,32 +22,15 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,10 +43,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.withFrameNanos
@@ -68,7 +58,6 @@ import androidx.core.content.ContextCompat
 import io.github.umbrella22.vesper.player.android.PlaybackStateUi
 import io.github.umbrella22.vesper.player.android.VesperDownloadManager
 import io.github.umbrella22.vesper.player.android.VesperDownloadContentFormat
-import io.github.umbrella22.vesper.player.android.VesperDownloadSource
 import io.github.umbrella22.vesper.player.android.VesperDownloadPublicCollection
 import io.github.umbrella22.vesper.player.android.VesperDownloadState
 import io.github.umbrella22.vesper.player.android.VesperDownloadTaskSnapshot
@@ -137,7 +126,17 @@ internal fun PlayerHostApp(
     }
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var selectedTab by rememberSaveable { mutableStateOf(ExampleHostTab.Play) }
+    // Window size class inputs come from the window container rather than
+    // Configuration.screenWidthDp/screenHeightDp, which lint flags as stale.
+    val windowContainerSize = LocalWindowInfo.current.containerSize
+    val windowWidthDp = with(LocalDensity.current) { windowContainerSize.width.toDp().value.toInt() }
+    val windowHeightDp = with(LocalDensity.current) { windowContainerSize.height.toDp().value.toInt() }
+    var navState by rememberSaveable(stateSaver = ExampleHostNavState.Saver) {
+        mutableStateOf(ExampleHostNavState())
+    }
+    var stageFullscreen by rememberSaveable { mutableStateOf(false) }
+    var pendingRemovals by remember { mutableStateOf(ExamplePendingRemovals()) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     var themeMode by rememberSaveable { mutableStateOf(ExampleThemeMode.System) }
     var selectedResilienceProfile by rememberSaveable {
@@ -173,7 +172,9 @@ internal fun PlayerHostApp(
             ExampleThemeMode.Dark -> true
         }
 
-    val immersivePlayer = isLandscape && selectedTab == ExampleHostTab.Play
+    val immersivePlayer =
+        navState.destination == ExampleHostDestination.Play &&
+            (stageFullscreen || (isLandscape && exampleIsCompactHeight(windowHeightDp)))
 
     LaunchedEffect(activity, immersivePlayer, useDarkTheme) {
         val window = activity?.window ?: return@LaunchedEffect
@@ -1607,24 +1608,62 @@ internal fun PlayerHostApp(
         }
     }
 
-    val colorScheme =
-        if (useDarkTheme) {
-            darkColorScheme(
-                primary = palette.primaryAction,
-                surface = palette.sectionBackground,
-                background = palette.pageBottom,
-                onBackground = palette.title,
-                onSurface = palette.title,
-            )
-        } else {
-            lightColorScheme(
-                primary = palette.primaryAction,
-                surface = palette.sectionBackground,
-                background = palette.pageBottom,
-                onBackground = palette.title,
-                onSurface = palette.title,
-            )
+    val colorScheme = exampleHostColorScheme(useDarkTheme)
+    val useRail = exampleUsesNavigationRail(windowWidthDp)
+    val rtspLabIntent = remember(context) { context.exampleRtspLabIntent() }
+    val playListState = rememberLazyListState()
+    val libraryListState = rememberLazyListState()
+    val downloadsListState = rememberLazyListState()
+    val labListState = rememberLazyListState()
+    val currentListState =
+        when (navState.destination) {
+            ExampleHostDestination.Play -> playListState
+            ExampleHostDestination.Library -> libraryListState
+            ExampleHostDestination.Downloads -> downloadsListState
+            ExampleHostDestination.Lab -> labListState
         }
+    val openMediaExpanded by remember(currentListState) {
+        derivedStateOf { !currentListState.canScrollBackward }
+    }
+
+    fun removeDownloadWithUndo(task: VesperDownloadTaskSnapshot) {
+        val taskId = task.taskId
+        pendingRemovals = pendingRemovals.stage(taskId)
+        scope.launch {
+            val result =
+                snackbarHostState.showSnackbar(
+                    message = resources.getString(R.string.example_download_removed),
+                    actionLabel = resources.getString(R.string.example_common_undo),
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short,
+                )
+            if (result == SnackbarResult.ActionPerformed) {
+                pendingRemovals = pendingRemovals.undo(taskId)
+            } else {
+                downloadManager.removeTask(taskId)
+                pendingRemovals = pendingRemovals.commit(taskId)
+            }
+        }
+    }
+
+    fun playLibraryItem(itemId: String) {
+        val nextPlaylistItems =
+            enqueuePlaylistItem(playlistItemIds = playlistItemIds, itemId = itemId)
+        applyPlaylistQueue(focusItemId = itemId, playlistItems = nextPlaylistItems)
+        controlsVisible = true
+        navState = navState.select(ExampleHostDestination.Play)
+    }
+
+    BackHandler(enabled = navState.canHandleBack && !immersivePlayer && !pictureInPicturePresentation) {
+        navState.back()?.let { navState = it }
+    }
+
+    // Back from the explicit fullscreen stage returns to the portrait shell
+    // instead of finishing the activity, mirroring the exit-fullscreen button.
+    BackHandler(enabled = stageFullscreen && !pictureInPicturePresentation) {
+        stageFullscreen = false
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
 
     MaterialTheme(colorScheme = colorScheme) {
         if (pictureInPicturePresentation) {
@@ -1652,73 +1691,8 @@ internal fun PlayerHostApp(
                     playbackRateControlsEnabled = false,
                 )
             }
-        } else {
-            Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            containerColor = palette.pageBottom,
-            bottomBar = {
-                if (!immersivePlayer) {
-                    NavigationBar {
-                        NavigationBarItem(
-                            selected = selectedTab == ExampleHostTab.Play,
-                            onClick = { selectedTab = ExampleHostTab.Play },
-                            icon = {
-                                androidx.compose.material3.Icon(
-                                    imageVector = Icons.Rounded.VideoLibrary,
-                                    contentDescription = null,
-                                )
-                            },
-                            label = { Text(stringResource(R.string.example_tab_player)) },
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == ExampleHostTab.Diagnostics,
-                            onClick = { selectedTab = ExampleHostTab.Diagnostics },
-                            icon = {
-                                androidx.compose.material3.Icon(
-                                    imageVector = Icons.Rounded.Settings,
-                                    contentDescription = null,
-                                )
-                            },
-                            label = { Text(stringResource(R.string.example_tab_diagnostics)) },
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == ExampleHostTab.Downloads,
-                            onClick = { selectedTab = ExampleHostTab.Downloads },
-                            icon = {
-                                androidx.compose.material3.Icon(
-                                    imageVector = Icons.Rounded.Download,
-                                    contentDescription = null,
-                                )
-                            },
-                            label = { Text(stringResource(R.string.example_tab_downloads)) },
-                        )
-                    }
-                }
-            },
-        ) { innerPadding ->
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = palette.pageBottom,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(palette.pageTop, palette.pageBottom),
-                            ),
-                        )
-                        .padding(innerPadding)
-                        .then(
-                            if (immersivePlayer) {
-                                Modifier
-                            } else {
-                                Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
-                            }
-                        ),
-                ) {
-                    when {
-                        immersivePlayer -> {
+        } else if (immersivePlayer) {
+            Surface(modifier = Modifier.fillMaxSize(), color = ExampleStageColor) {
                             ExamplePlayerStageWithTracks(
                                 controller = controller,
                                 uiState = displayedUiState,
@@ -1732,6 +1706,7 @@ internal fun PlayerHostApp(
                                 onPendingSeekRatioChange = { pendingSeekRatio = it },
                                 onOpenSheet = { activeSheet = it },
                                 onToggleFullscreen = {
+                                    stageFullscreen = false
                                     activity?.requestedOrientation =
                                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                                 },
@@ -1760,20 +1735,32 @@ internal fun PlayerHostApp(
                                 currentVolumeRatio = deviceControls::currentVolumeRatio,
                                 onSetVolumeRatio = deviceControls::setVolumeRatio,
                             )
-                        }
-
-                        selectedTab == ExampleHostTab.Play -> {
-                            ExamplePlayScreen(
-                                palette = palette,
-                                sourceLabel = displayedUiState.sourceLabel,
-                                subtitle = displayedUiState.subtitle,
-                                themeSelector = {
-                                    ExampleThemeModeSelector(
-                                        themeMode = themeMode,
-                                        onThemeModeChange = { themeMode = it },
-                                    )
-                                },
-                                playerStage = {
+            }
+        } else {
+            ExampleHostShell(
+                navState = navState,
+                useRail = useRail,
+                showOpenMedia =
+                    navState.destination == ExampleHostDestination.Play ||
+                        navState.destination == ExampleHostDestination.Library,
+                openMediaExpanded = openMediaExpanded,
+                snackbarHostState = snackbarHostState,
+                onSelectDestination = { navState = navState.select(it) },
+                onBack = { navState.back()?.let { navState = it } },
+                onOpenSettings = { navState = navState.openSheet(ExampleHostSheet.Settings) },
+                onOpenMedia = { navState = navState.openSheet(ExampleHostSheet.OpenMedia) },
+            ) { innerPadding ->
+                Box(modifier = Modifier.fillMaxSize().padding(innerPadding.exampleWithoutBottom())) {
+                    when (navState.destination) {
+                        ExampleHostDestination.Play -> ExampleHostList(playListState, innerPadding) {
+                            item {
+                                ExamplePlayerHeader(
+                                    sourceLabel = displayedUiState.sourceLabel,
+                                    subtitle = displayedUiState.subtitle,
+                                    palette = palette,
+                                )
+                            }
+                            item {
                                     ExamplePlayerStageWithTracks(
                                         controller = controller,
                                         uiState = displayedUiState,
@@ -1789,6 +1776,7 @@ internal fun PlayerHostApp(
                                         onPendingSeekRatioChange = { pendingSeekRatio = it },
                                         onOpenSheet = { activeSheet = it },
                                         onToggleFullscreen = {
+                                            stageFullscreen = true
                                             activity?.requestedOrientation =
                                                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                                         },
@@ -1817,77 +1805,14 @@ internal fun PlayerHostApp(
                                         currentVolumeRatio = deviceControls::currentVolumeRatio,
                                         onSetVolumeRatio = deviceControls::setVolumeRatio,
                                     )
-                                },
-                            ) {
-                                    item {
-                                        ExampleQuickSourcePanel(
-                                            palette = palette,
-                                            remoteStreamUrl = remoteStreamUrl,
-                                            onRemoteStreamUrlChange = { remoteStreamUrl = it },
-                                            onPickVideo = {
-                                                pickVideoLauncher.launch(arrayOf("video/*"))
-                                            },
-                                            onUseHlsDemo = {
-                                                val nextPlaylistItems =
-                                                    enqueuePlaylistItem(
-                                                        playlistItemIds = playlistItemIds,
-                                                        itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                                    )
-                                                applyPlaylistQueue(
-                                                    focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                                    playlistItems = nextPlaylistItems,
-                                                )
-                                                controlsVisible = true
-                                            },
-                                            onUseDashDemo = {
-                                                val nextPlaylistItems =
-                                                    enqueuePlaylistItem(
-                                                        playlistItemIds = playlistItemIds,
-                                                        itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                                    )
-                                                applyPlaylistQueue(
-                                                    focusItemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                                    playlistItems = nextPlaylistItems,
-                                                )
-                                                controlsVisible = true
-                                            },
-                                            onUseLiveDvrAcceptance = {
-                                                val nextPlaylistItems =
-                                                    enqueuePlaylistItem(
-                                                        playlistItemIds = playlistItemIds,
-                                                        itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
-                                                    )
-                                                applyPlaylistQueue(
-                                                    focusItemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
-                                                    playlistItems = nextPlaylistItems,
-                                                )
-                                                controlsVisible = true
-                                            },
-                                            onOpenRemote = {
-                                                val url = remoteStreamUrl.trim()
-                                                if (url.isNotEmpty()) {
-                                                    val remoteSource =
-                                                        VesperPlayerSource.remote(
-                                                            uri = url,
-                                                            label = resources.getString(R.string.example_source_custom_remote_label),
-                                                        )
-                                                    queuedRemoteSource = remoteSource
-                                                    val nextPlaylistItems =
-                                                        enqueuePlaylistItem(
-                                                            playlistItemIds = playlistItemIds,
-                                                            itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
-                                                        )
-                                                    applyPlaylistQueue(
-                                                        focusItemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
-                                                        playlistItems = nextPlaylistItems,
-                                                        remoteSource = remoteSource,
-                                                    )
-                                                    controlsVisible = true
-                                                }
-                                            },
-                                        )
-                                    }
-
+                            }
+                            item {
+                                ExamplePlayQuickActions(
+                                    onPictureInPicture = ::requestExamplePictureInPicture,
+                                    onCast = ::openCastRoutePicker,
+                                    onTracks = { activeSheet = ExamplePlayerSheet.Menu },
+                                )
+                            }
                                     item {
                                         ExampleExternalPlaybackSectionState(
                                             externalPlaybackController = externalPlaybackController,
@@ -1945,12 +1870,106 @@ internal fun PlayerHostApp(
                                             },
                                         )
                                     }
+                        }
 
+                        ExampleHostDestination.Library -> ExampleHostList(libraryListState, innerPadding) {
+                            val collection = navState.libraryCollection
+                            when {
+                                collection == null ->
+                                    exampleLibraryHome(
+                                        dolbyPresetCount = exampleDolbyAcceptanceCatalog.size,
+                                        onOpenCollection = { navState = navState.openCollection(it) },
+                                    )
+                                collection == ExampleLibraryCollection.DolbyAcceptance -> {
+                                item {
+                                    ExampleDolbyCatalogPanel(
+                                        palette = palette,
+                                        presets = exampleDolbyAcceptanceCatalog,
+                                        selectedDrmKind = selectedDolbyDrmKind,
+                                        selectedProfile = selectedDolbyProfile,
+                                        selectedFps = selectedDolbyFps,
+                                        onDrmKindChange = { drmKind ->
+                                            selectedDolbyDrmKind = drmKind
+                                        },
+                                        onProfileChange = { profile ->
+                                            selectedDolbyProfile = profile
+                                        },
+                                        onFpsChange = { fps ->
+                                            selectedDolbyFps = fps
+                                        },
+                                        onPresetPlayNow = { preset ->
+                                            activateDolbyAcceptancePreset(
+                                                preset,
+                                                ExamplePlaybackOrigin.DolbyAdHoc(preset.id),
+                                            )
+                                        },
+                                        onPresetAddToQueue = ::addDolbyPresetToQueue,
+                                    )
+                                }
+                                }
+                                else ->
+                                    exampleLibraryCollectionEntries(collection) { entry ->
+                                        playLibraryItem(entry.itemId)
+                                    }
                             }
                         }
 
-                        selectedTab == ExampleHostTab.Diagnostics -> {
-                            ExampleDiagnosticsScreen {
+                        ExampleHostDestination.Downloads -> ExampleHostList(downloadsListState, innerPadding) {
+                                item {
+                                    ExampleDownloadHeader(
+                                        palette = palette,
+                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
+                                    )
+                                }
+                                item {
+                                    ExampleDownloadCreateSection(
+                                        palette = palette,
+                                        remoteUrl = downloadRemoteUrl,
+                                        onRemoteUrlChange = { downloadRemoteUrl = it },
+                                        onUseHlsDemo = {
+                                            createDownloadTask(
+                                                assetIdPrefix = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                source = androidHlsDemoSource(context),
+                                            )
+                                        },
+                                        onUseDashDemo = {
+                                            createDownloadTask(
+                                                assetIdPrefix = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                source = androidDashDemoSource(context),
+                                            )
+                                        },
+                                        onCreateRemote = {
+                                            val url = downloadRemoteUrl.trim()
+                                            if (url.isNotEmpty()) {
+                                                createDownloadTask(
+                                                    assetIdPrefix = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                    source =
+                                                        VesperPlayerSource.remote(
+                                                            uri = url,
+                                                            label = exampleDraftDownloadLabel(url),
+                                                        ),
+                                                )
+                                            }
+                                        },
+                                    )
+                                }
+                                item {
+                                    ExampleDownloadTasksSectionState(
+                                        downloadManager = downloadManager,
+                                        palette = palette,
+                                        pendingTasks = pendingDownloadTasks,
+                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
+                                        savingTaskIds = savingTaskIds,
+                                        exportProgressByTaskId = exportProgressByTaskId,
+                                        onPrimaryAction = ::handleDownloadPrimaryAction,
+                                        onSaveToGallery = ::handleSaveDownloadToGallery,
+                                        onRemoveTask = ::removeDownloadWithUndo,
+                                        hiddenTaskIds = pendingRemovals.pendingIds,
+                                    )
+                                }
+                        }
+
+                        ExampleHostDestination.Lab -> ExampleHostList(labListState, innerPadding) {
                                 item {
                                     ExampleDiagnosticsSummarySection(
                                         palette = palette,
@@ -1984,31 +2003,6 @@ internal fun PlayerHostApp(
                                                 frameMetricsSnapshot = null
                                             }
                                         },
-                                    )
-                                }
-                                item {
-                                    ExampleDolbyCatalogPanel(
-                                        palette = palette,
-                                        presets = exampleDolbyAcceptanceCatalog,
-                                        selectedDrmKind = selectedDolbyDrmKind,
-                                        selectedProfile = selectedDolbyProfile,
-                                        selectedFps = selectedDolbyFps,
-                                        onDrmKindChange = { drmKind ->
-                                            selectedDolbyDrmKind = drmKind
-                                        },
-                                        onProfileChange = { profile ->
-                                            selectedDolbyProfile = profile
-                                        },
-                                        onFpsChange = { fps ->
-                                            selectedDolbyFps = fps
-                                        },
-                                        onPresetPlayNow = { preset ->
-                                            activateDolbyAcceptancePreset(
-                                                preset,
-                                                ExamplePlaybackOrigin.DolbyAdHoc(preset.id),
-                                            )
-                                        },
-                                        onPresetAddToQueue = ::addDolbyPresetToQueue,
                                     )
                                 }
                                 item {
@@ -2077,68 +2071,18 @@ internal fun PlayerHostApp(
                                         },
                                     )
                                 }
-                            }
-                        }
-
-                        else -> {
-                            ExampleDownloadsScreen {
-                                item {
-                                    ExampleDownloadHeader(
-                                        palette = palette,
-                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
-                                    )
-                                }
-                                item {
-                                    ExampleDownloadCreateSection(
-                                        palette = palette,
-                                        remoteUrl = downloadRemoteUrl,
-                                        onRemoteUrlChange = { downloadRemoteUrl = it },
-                                        onUseHlsDemo = {
-                                            createDownloadTask(
-                                                assetIdPrefix = ANDROID_HLS_PLAYLIST_ITEM_ID,
-                                                source = androidHlsDemoSource(context),
-                                            )
-                                        },
-                                        onUseDashDemo = {
-                                            createDownloadTask(
-                                                assetIdPrefix = ANDROID_DASH_PLAYLIST_ITEM_ID,
-                                                source = androidDashDemoSource(context),
-                                            )
-                                        },
-                                        onCreateRemote = {
-                                            val url = downloadRemoteUrl.trim()
-                                            if (url.isNotEmpty()) {
-                                                createDownloadTask(
-                                                    assetIdPrefix = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
-                                                    source =
-                                                        VesperPlayerSource.remote(
-                                                            uri = url,
-                                                            label = exampleDraftDownloadLabel(url),
-                                                        ),
-                                                )
-                                            }
-                                        },
-                                    )
-                                }
-                                item {
-                                    ExampleDownloadTasksSectionState(
-                                        downloadManager = downloadManager,
-                                        palette = palette,
-                                        pendingTasks = pendingDownloadTasks,
-                                        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
-                                        savingTaskIds = savingTaskIds,
-                                        exportProgressByTaskId = exportProgressByTaskId,
-                                        onPrimaryAction = ::handleDownloadPrimaryAction,
-                                        onSaveToGallery = ::handleSaveDownloadToGallery,
-                                        onRemoveTask = { task ->
-                                            downloadManager.removeTask(task.taskId)
-                                        },
-                                    )
-                                }
+                            item {
+                                ExampleRtspLabEntry(
+                                    available = rtspLabIntent != null,
+                                    onOpen = { rtspLabIntent?.let { runCatching { context.startActivity(it) } } },
+                                )
                             }
                         }
                     }
-
+                }
+            }
+        }
+        if (!pictureInPicturePresentation) {
                     activeSheet?.let { sheet ->
                         ExampleSelectionSheetWithTracks(
                             sheet = sheet,
@@ -2180,9 +2124,92 @@ internal fun PlayerHostApp(
                             },
                         )
                     }
-                }
+            when (navState.sheet) {
+                ExampleHostSheet.OpenMedia ->
+                    ExampleHostBottomSheet(
+                        title = stringResource(R.string.example_action_open_media),
+                        onDismiss = { navState = navState.dismissSheet() },
+                    ) {
+                                        ExampleQuickSourcePanel(
+                                            palette = palette,
+                                            remoteStreamUrl = remoteStreamUrl,
+                                            onRemoteStreamUrlChange = { remoteStreamUrl = it },
+                                            onPickVideo = {
+                                                pickVideoLauncher.launch(arrayOf("video/*"))
+navState = navState.select(ExampleHostDestination.Play)
+                                            },
+                                            onUseHlsDemo = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
+                                                )
+                                                controlsVisible = true
+navState = navState.select(ExampleHostDestination.Play)
+                                            },
+                                            onUseDashDemo = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_DASH_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
+                                                )
+                                                controlsVisible = true
+navState = navState.select(ExampleHostDestination.Play)
+                                            },
+                                            onUseLiveDvrAcceptance = {
+                                                val nextPlaylistItems =
+                                                    enqueuePlaylistItem(
+                                                        playlistItemIds = playlistItemIds,
+                                                        itemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                                    )
+                                                applyPlaylistQueue(
+                                                    focusItemId = ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID,
+                                                    playlistItems = nextPlaylistItems,
+                                                )
+                                                controlsVisible = true
+navState = navState.select(ExampleHostDestination.Play)
+                                            },
+                                            onOpenRemote = {
+                                                val url = remoteStreamUrl.trim()
+                                                if (url.isNotEmpty()) {
+                                                    val remoteSource =
+                                                        VesperPlayerSource.remote(
+                                                            uri = url,
+                                                            label = resources.getString(R.string.example_source_custom_remote_label),
+                                                        )
+                                                    queuedRemoteSource = remoteSource
+                                                    val nextPlaylistItems =
+                                                        enqueuePlaylistItem(
+                                                            playlistItemIds = playlistItemIds,
+                                                            itemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                        )
+                                                    applyPlaylistQueue(
+                                                        focusItemId = ANDROID_REMOTE_PLAYLIST_ITEM_ID,
+                                                        playlistItems = nextPlaylistItems,
+                                                        remoteSource = remoteSource,
+                                                    )
+                                                    controlsVisible = true
+navState = navState.select(ExampleHostDestination.Play)
+                                                }
+                                            },
+                                        )
+                    }
+                ExampleHostSheet.Settings ->
+                    ExampleSettingsSheet(
+                        themeMode = themeMode,
+                        onThemeModeChange = { themeMode = it },
+                        onDismiss = { navState = navState.dismissSheet() },
+                    )
+                null -> Unit
             }
-        }
         }
     }
 }
@@ -2190,61 +2217,6 @@ internal fun PlayerHostApp(
 private fun Activity.supportsExamplePictureInPicture(): Boolean =
     Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
         packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
-
-@Composable
-private fun ExamplePlayScreen(
-    palette: ExampleHostPalette,
-    sourceLabel: String,
-    subtitle: String,
-    themeSelector: @Composable () -> Unit,
-    playerStage: @Composable () -> Unit,
-    content: LazyListScope.() -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        item {
-            ExamplePlayerHeader(
-                sourceLabel = sourceLabel,
-                subtitle = subtitle,
-                palette = palette,
-            )
-        }
-        item {
-            themeSelector()
-        }
-        item {
-            playerStage()
-        }
-        content()
-    }
-}
-
-@Composable
-private fun ExampleDiagnosticsScreen(
-    content: LazyListScope.() -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-        content = content,
-    )
-}
-
-@Composable
-private fun ExampleDownloadsScreen(
-    content: LazyListScope.() -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-        content = content,
-    )
-}
 
 @Composable
 private fun ExamplePlayerStageWithTracks(
@@ -2376,11 +2348,12 @@ private fun ExampleDownloadTasksSectionState(
     onPrimaryAction: (VesperDownloadTaskSnapshot) -> Unit,
     onSaveToGallery: (VesperDownloadTaskSnapshot) -> Unit,
     onRemoveTask: (VesperDownloadTaskSnapshot) -> Unit,
+    hiddenTaskIds: Set<Long> = emptySet(),
 ) {
     val downloadSnapshot by downloadManager.snapshot.collectAsState()
     ExampleDownloadTasksSection(
         palette = palette,
-        tasks = downloadSnapshot.tasks,
+        tasks = ExamplePendingRemovals(hiddenTaskIds).visible(downloadSnapshot.tasks) { it.taskId },
         pendingTasks = pendingTasks,
         isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
         savingTaskIds = savingTaskIds,
@@ -2447,11 +2420,5 @@ private fun Context.hasNearbyWifiPermission(): Boolean =
             this,
             Manifest.permission.NEARBY_WIFI_DEVICES,
         ) == PackageManager.PERMISSION_GRANTED
-
-private enum class ExampleHostTab {
-    Play,
-    Diagnostics,
-    Downloads,
-}
 
 private const val PLAYER_HOST_EXAMPLE_TAG = "VesperPlayerExample"
