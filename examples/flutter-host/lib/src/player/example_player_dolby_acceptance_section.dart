@@ -43,12 +43,12 @@ class ExampleDolbyCatalogPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filteredPresets = _filteredPresets;
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: 'Dolby 验收',
-      subtitle:
-          'Dolby Vision Online Delivery Kit 公开信号，只走 direct native 播放；不进入下载、预加载、外部投放或插件处理。',
-      accent: const Color(0xFF7A4DFF),
+      title: strings[ExampleHostText.dolbyTitle],
+      subtitle: strings[ExampleHostText.dolbySubtitle],
+      accent: palette.accentInk,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -225,14 +225,20 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
                       onPressed: onPlayNow,
                       style: FilledButton.styleFrom(
                         backgroundColor: palette.primaryAction,
-                        foregroundColor: Colors.white,
+                        foregroundColor: palette.onPrimaryAction,
                       ),
-                      child: const Text('立即播放'),
+                      child: Text(
+                        ExampleHostStrings.of(context)[ExampleHostText.playNow],
+                      ),
                     ),
                     const SizedBox(width: 10),
                     OutlinedButton(
                       onPressed: onAddToQueue,
-                      child: const Text('加入队列'),
+                      child: Text(
+                        ExampleHostStrings.of(
+                          context,
+                        )[ExampleHostText.addToQueue],
+                      ),
                     ),
                   ],
                 ),

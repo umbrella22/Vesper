@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vesper_player/vesper_player.dart';
 
+import '../shell/example_host_strings.dart';
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
 
@@ -89,7 +90,10 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            sheetTitle(_activeSheet),
+                            sheetTitle(
+                              _activeSheet,
+                              strings: ExampleHostStrings.of(context),
+                            ),
                             style: Theme.of(context).textTheme.headlineSmall
                                 ?.copyWith(
                                   color: Colors.white,
@@ -98,7 +102,10 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            sheetSubtitle(_activeSheet),
+                            sheetSubtitle(
+                              _activeSheet,
+                              strings: ExampleHostStrings.of(context),
+                            ),
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(
                                   color: const Color(0xFF98A1B3),
@@ -125,43 +132,47 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
   }
 
   List<Widget> _buildRows(VesperPlayerSnapshot snapshot) {
+    final strings = ExampleHostStrings.of(context);
     switch (_activeSheet) {
       case ExamplePlayerSheet.menu:
         return <Widget>[
           ExampleSelectionRow(
-            title: '播放速度',
+            title: strings[ExampleHostText.sheetSpeedTitle],
             subtitle: speedBadge(snapshot.playbackRate),
             onTap: () => setState(() {
               _activeSheet = ExamplePlayerSheet.speed;
             }),
           ),
           ExampleSelectionRow(
-            title: '音频',
+            title: strings[ExampleHostText.sheetAudioTitle],
             subtitle: audioButtonLabel(
               snapshot.trackCatalog,
               snapshot.trackSelection,
+              strings: strings,
             ),
             onTap: () => setState(() {
               _activeSheet = ExamplePlayerSheet.audio;
             }),
           ),
           ExampleSelectionRow(
-            title: '字幕',
+            title: strings[ExampleHostText.sheetSubtitleTitle],
             subtitle: subtitleButtonLabel(
               snapshot.trackCatalog,
               snapshot.trackSelection,
+              strings: strings,
             ),
             onTap: () => setState(() {
               _activeSheet = ExamplePlayerSheet.subtitle;
             }),
           ),
           ExampleSelectionRow(
-            title: '画质',
+            title: strings[ExampleHostText.sheetQualityTitle],
             subtitle: qualityButtonLabel(
               snapshot.trackCatalog,
               snapshot.trackSelection,
               snapshot.effectiveVideoTrackId,
               snapshot.fixedTrackStatus,
+              strings: strings,
             ),
             onTap: () => setState(() {
               _activeSheet = ExamplePlayerSheet.quality;
@@ -177,12 +188,18 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
         final supportsFixedTrackAbr = snapshot.capabilities.supportsAbrMode(
           VesperAbrMode.fixedTrack,
         );
-        final qualityNotice = qualityCapabilityNotice(snapshot.capabilities);
-        final qualityRuntimeNoticeModel = qualityRuntimeNotice(snapshot);
+        final qualityNotice = qualityCapabilityNotice(
+          snapshot.capabilities,
+          strings: strings,
+        );
+        final qualityRuntimeNoticeModel = qualityRuntimeNotice(
+          snapshot,
+          strings: strings,
+        );
         return <Widget>[
           ExampleSelectionRow(
-            title: qualityAutoRowTitle(abrPolicy),
-            badgeLabel: qualityAutoRowBadgeLabel(abrPolicy),
+            title: qualityAutoRowTitle(abrPolicy, strings: strings),
+            badgeLabel: qualityAutoRowBadgeLabel(abrPolicy, strings: strings),
             badgeTone: ExampleSelectionBadgeTone.accent,
             subtitle: snapshot.trackCatalog.adaptiveVideo
                 ? qualityAutoRowSubtitle(
@@ -191,8 +208,9 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
                     snapshot.effectiveVideoTrackId,
                     snapshot.fixedTrackStatus,
                     snapshot.videoVariantObservation,
+                    strings: strings,
                   )
-                : '当前路径没有暴露自适应视频切换能力。',
+                : strings[ExampleHostText.sheetNoAdaptiveVideo],
             selected:
                 abrPolicy.mode == VesperAbrMode.auto ||
                 abrPolicy.mode == VesperAbrMode.constrained,
@@ -210,9 +228,13 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
           if (qualityNotice case final message?)
             ExampleSheetNote(message: message),
           if (tracks.isEmpty)
-            const ExampleEmptySheetState(message: '当前媒体没有暴露可选视频轨。')
+            ExampleEmptySheetState(
+              message: strings[ExampleHostText.sheetNoVideoTracks],
+            )
           else if (!supportsFixedTrackAbr)
-            const ExampleEmptySheetState(message: '当前平台只支持自动或受限 ABR，暂不支持固定视频轨。')
+            ExampleEmptySheetState(
+              message: strings[ExampleHostText.sheetNoFixedTrack],
+            )
           else
             ...tracks.map((track) {
               final badgeLabel = qualityOptionBadgeLabel(
@@ -221,14 +243,12 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
                 trackSelection: snapshot.trackSelection,
                 effectiveVideoTrackId: snapshot.effectiveVideoTrackId,
                 fixedTrackStatus: snapshot.fixedTrackStatus,
+                strings: strings,
               );
               return ExampleSelectionRow(
-                title: qualityLabel(track),
+                title: qualityLabel(track, strings: strings),
                 badgeLabel: badgeLabel,
-                badgeTone:
-                    badgeLabel == '等待' ||
-                        badgeLabel == '锁定' ||
-                        badgeLabel == '锁定中'
+                badgeTone: isQualityBadgeWarm(badgeLabel, strings: strings)
                     ? ExampleSelectionBadgeTone.warm
                     : ExampleSelectionBadgeTone.accent,
                 subtitle: qualityOptionSubtitle(
@@ -237,6 +257,7 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
                   snapshot.effectiveVideoTrackId,
                   snapshot.fixedTrackStatus,
                   trackCatalog: snapshot.trackCatalog,
+                  strings: strings,
                 ),
                 selected:
                     abrPolicy.mode == VesperAbrMode.fixedTrack &&
@@ -253,8 +274,8 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
         final tracks = snapshot.trackCatalog.audioTracks;
         return <Widget>[
           ExampleSelectionRow(
-            title: '自动',
-            subtitle: '使用播放器默认的音频选择。',
+            title: strings[ExampleHostText.auto],
+            subtitle: strings[ExampleHostText.sheetAudioAutoSubtitle],
             selected:
                 snapshot.trackSelection.audio.mode ==
                 VesperTrackSelectionMode.auto,
@@ -265,12 +286,14 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
             ),
           ),
           if (tracks.isEmpty)
-            const ExampleEmptySheetState(message: '当前媒体没有暴露可选音频节目。')
+            ExampleEmptySheetState(
+              message: strings[ExampleHostText.sheetNoAudioTracks],
+            )
           else
             ...tracks.map((track) {
               return ExampleSelectionRow(
-                title: audioLabel(track),
-                subtitle: audioSubtitle(track),
+                title: audioLabel(track, strings: strings),
+                subtitle: audioSubtitle(track, strings: strings),
                 selected:
                     snapshot.trackSelection.audio.mode ==
                         VesperTrackSelectionMode.track &&
@@ -287,8 +310,8 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
         final tracks = snapshot.trackCatalog.subtitleTracks;
         return <Widget>[
           ExampleSelectionRow(
-            title: '关闭',
-            subtitle: '隐藏字幕渲染。',
+            title: strings[ExampleHostText.sheetSubtitleOff],
+            subtitle: strings[ExampleHostText.sheetSubtitleOffSubtitle],
             selected:
                 snapshot.trackSelection.subtitle.mode ==
                 VesperTrackSelectionMode.disabled,
@@ -299,8 +322,8 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
             ),
           ),
           ExampleSelectionRow(
-            title: '自动',
-            subtitle: '使用流的默认字幕行为。',
+            title: strings[ExampleHostText.auto],
+            subtitle: strings[ExampleHostText.sheetSubtitleAutoSubtitle],
             selected:
                 snapshot.trackSelection.subtitle.mode ==
                 VesperTrackSelectionMode.auto,
@@ -311,12 +334,14 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
             ),
           ),
           if (tracks.isEmpty)
-            const ExampleEmptySheetState(message: '当前媒体没有暴露可选字幕轨。')
+            ExampleEmptySheetState(
+              message: strings[ExampleHostText.sheetNoSubtitleTracks],
+            )
           else
             ...tracks.map((track) {
               return ExampleSelectionRow(
-                title: subtitleLabel(track),
-                subtitle: subtitleSubtitle(track),
+                title: subtitleLabel(track, strings: strings),
+                subtitle: subtitleSubtitle(track, strings: strings),
                 selected:
                     snapshot.trackSelection.subtitle.mode ==
                         VesperTrackSelectionMode.track &&
@@ -339,7 +364,9 @@ class _ExampleSelectionSheetState extends State<ExampleSelectionSheet> {
               final selected = (snapshot.playbackRate - rate).abs() < 0.01;
               return ExampleSelectionRow(
                 title: speedBadge(rate),
-                subtitle: selected ? '当前已生效。' : '立即应用这个速度。',
+                subtitle: selected
+                    ? strings[ExampleHostText.sheetSpeedActive]
+                    : strings[ExampleHostText.sheetSpeedApply],
                 selected: selected,
                 onTap: () =>
                     _applyAndClose(widget.controller.setPlaybackRate(rate)),

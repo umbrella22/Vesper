@@ -1,5 +1,5 @@
 import 'package:flutter/services.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_host/src/player/example_dolby_acceptance_catalog.dart';
 import 'package:flutter_host/src/player/example_player_models.dart';
@@ -8,6 +8,14 @@ import 'package:flutter_host/src/hdr_evidence/hdr_evidence_capture.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 import 'package:flutter_host/main.dart';
+import 'package:flutter_host/src/shell/example_host_strings.dart';
+
+Widget _zhStringsBuilder(BuildContext context, Widget? child) {
+  return ExampleHostStringsScope(
+    strings: ExampleHostStrings.zh,
+    child: child ?? const SizedBox.shrink(),
+  );
+}
 
 void main() {
   testWidgets('shows loading then unsupported error in widget test env', (
@@ -25,17 +33,18 @@ void main() {
 
     await tester.pumpWidget(const VesperFlutterHostApp());
 
-    expect(find.text('正在初始化 Vesper Flutter Host...'), findsOneWidget);
+    // The app resolves copy from the test locale (en-US).
+    expect(find.text('Initializing Vesper Flutter Host...'), findsOneWidget);
     expect(find.text('HDR10 4K60 PQ'), findsNothing);
 
     for (var i = 0; i < 10; i += 1) {
       await tester.pump(const Duration(milliseconds: 20));
-      if (find.text('控制器初始化失败').evaluate().isNotEmpty) {
+      if (find.text('Controller initialization failed').evaluate().isNotEmpty) {
         break;
       }
     }
 
-    expect(find.text('控制器初始化失败'), findsOneWidget);
+    expect(find.text('Controller initialization failed'), findsOneWidget);
   });
 
   testWidgets('plugin diagnostics section exposes HDR P0 presets', (
@@ -43,6 +52,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        builder: _zhStringsBuilder,
         home: Scaffold(
           body: SingleChildScrollView(
             child: ExamplePluginDiagnosticsSection(
@@ -75,6 +85,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        builder: _zhStringsBuilder,
         home: Scaffold(
           body: SingleChildScrollView(
             child: ExamplePluginDiagnosticsSection(
@@ -115,6 +126,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        builder: _zhStringsBuilder,
         home: Scaffold(
           body: SingleChildScrollView(
             child: ExampleDolbyCatalogPanel(
@@ -145,6 +157,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        builder: _zhStringsBuilder,
         home: Scaffold(
           body: SingleChildScrollView(
             child: ExampleDolbyCatalogPanel(
@@ -182,6 +195,7 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          builder: _zhStringsBuilder,
           home: Scaffold(
             body: SingleChildScrollView(
               child: ExampleDolbyCatalogPanel(
@@ -228,6 +242,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        builder: _zhStringsBuilder,
         home: Scaffold(
           body: SingleChildScrollView(
             child: ExampleDolbyCatalogPanel(
@@ -266,6 +281,7 @@ void main() {
     (WidgetTester tester) async {
       await tester.pumpWidget(
         MaterialApp(
+          builder: _zhStringsBuilder,
           home: Scaffold(
             body: ExampleRecentErrorSection(
               palette: exampleHostPalette(false),
@@ -298,6 +314,7 @@ void main() {
     (WidgetTester tester) async {
       await tester.pumpWidget(
         MaterialApp(
+          builder: _zhStringsBuilder,
           home: Scaffold(
             body: ExampleRecentErrorSection(
               palette: exampleHostPalette(false),
@@ -336,6 +353,7 @@ void main() {
     (WidgetTester tester) async {
       await tester.pumpWidget(
         MaterialApp(
+          builder: _zhStringsBuilder,
           home: Scaffold(
             body: ExampleRecentErrorSection(
               palette: exampleHostPalette(false),

@@ -5,7 +5,9 @@ extension _PlayerHostLayout on _PlayerHostPageState {
     BuildContext context, {
     required bool immersivePlayer,
     required ExampleHostPalette palette,
+    double bottomPadding = 18,
   }) {
+    final strings = ExampleHostStrings.of(context);
     return FutureBuilder<VesperPlayerController>(
       future: _controllerFuture,
       builder: (context, asyncSnapshot) {
@@ -27,22 +29,27 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 playlistItems,
                 palette,
                 asyncSnapshot,
+                bottomPadding,
               );
 
         return Stack(
           children: <Widget>[
             Positioned.fill(child: content),
             if (_isApplyingResilienceProfile)
-              const Positioned(
+              Positioned(
                 top: 18,
                 right: 18,
-                child: ExampleBusyPill(label: '正在应用策略'),
+                child: ExampleBusyPill(
+                  label: strings[ExampleHostText.busyApplyingPolicy],
+                ),
               ),
             if (_isRebuildingController)
-              const Positioned(
+              Positioned(
                 top: 18,
                 left: 18,
-                child: ExampleBusyPill(label: '正在切换插件'),
+                child: ExampleBusyPill(
+                  label: strings[ExampleHostText.busySwitchingPlugin],
+                ),
               ),
           ],
         );
@@ -118,148 +125,90 @@ extension _PlayerHostLayout on _PlayerHostPageState {
     VesperPlayerController controller,
     List<ExamplePlaylistItemViewData> playlistItems,
     ExampleHostPalette palette,
-    AsyncSnapshot<VesperPlayerController> asyncSnapshot,
-  ) {
+    AsyncSnapshot<VesperPlayerController> asyncSnapshot, [
+    double bottomPadding = 18,
+  ]) {
     final transientError = asyncSnapshot.hasError ? asyncSnapshot.error : null;
+    final strings = ExampleHostStrings.of(context);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          _SnapshotSelector<({String sourceLabel, String subtitle})>(
-            listenable: controller.snapshotListenable,
-            selector: (snapshot) => (
-              sourceLabel: snapshot.sourceLabel.isEmpty
-                  ? snapshot.title
-                  : snapshot.sourceLabel,
-              subtitle: snapshot.subtitle,
+    return NotificationListener<ScrollUpdateNotification>(
+      onNotification: _handlePlayScroll,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(18, 8, 18, bottomPadding),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (transientError != null) ...<Widget>[
+              ExampleInlineControllerError(error: transientError),
+              const SizedBox(height: 18),
+            ],
+            SizedBox(
+              width: double.infinity,
+              height: 248,
+              child: ValueListenableBuilder<VesperPlayerSnapshot>(
+                valueListenable: controller.snapshotListenable,
+                builder: (context, snapshot, _) {
+                  return ExamplePlayerStage(
+                    controller: controller,
+                    snapshot: snapshot,
+                    controlLayout: ui.VesperStageControlLayout.compact,
+                    isFullscreen: false,
+                    sheetOpen: _sheetOpen,
+                    deviceControls: _deviceControls,
+                    topBarPrimaryAction: _buildStageRouteAction(controller),
+                    onOpenSheet: (sheet) =>
+                        unawaited(_openToolSheet(controller, sheet)),
+                    onToggleFullscreen: () =>
+                        unawaited(_toggleFullscreen(Orientation.portrait)),
+                    pictureInPicturePresentation: _pictureInPicturePresentation,
+                  );
+                },
+              ),
             ),
-            builder: (context, header) => ExamplePlayerHeader(
-              sourceLabel: header.sourceLabel,
-              subtitle: header.subtitle,
+            const SizedBox(height: 16),
+            _SnapshotSelector<({String title, String subtitle})>(
+              listenable: controller.snapshotListenable,
+              selector: (snapshot) => (
+                title: snapshot.sourceLabel.isEmpty
+                    ? snapshot.title
+                    : snapshot.sourceLabel,
+                subtitle: snapshot.subtitle,
+              ),
+              builder: (context, header) => ExampleNowPlayingCard(
+                title: header.title,
+                subtitle: header.subtitle,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ExampleQuickActionsRow(
+              actions: _buildPlayQuickActions(
+                context,
+                controller,
+                palette,
+                strings,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ExampleQueuePanel(
               palette: palette,
-            ),
-          ),
-          const SizedBox(height: 14),
-          ExampleThemeModeControl(
-            palette: palette,
-            themeMode: widget.themeMode,
-            onThemeModeChange: widget.onThemeModeChange,
-          ),
-          if (transientError != null) ...<Widget>[
-            const SizedBox(height: 18),
-            ExampleInlineControllerError(error: transientError),
-          ],
-          const SizedBox(height: 18),
-          SizedBox(
-            width: double.infinity,
-            height: 248,
-            child: ValueListenableBuilder<VesperPlayerSnapshot>(
-              valueListenable: controller.snapshotListenable,
-              builder: (context, snapshot, _) {
-                return ExamplePlayerStage(
-                  controller: controller,
-                  snapshot: snapshot,
-                  controlLayout: ui.VesperStageControlLayout.compact,
-                  isFullscreen: false,
-                  sheetOpen: _sheetOpen,
-                  deviceControls: _deviceControls,
-                  topBarPrimaryAction: _buildStageRouteAction(controller),
-                  onOpenSheet: (sheet) =>
-                      unawaited(_openToolSheet(controller, sheet)),
-                  onToggleFullscreen: () =>
-                      unawaited(_toggleFullscreen(Orientation.portrait)),
-                  pictureInPicturePresentation: _pictureInPicturePresentation,
+              playlistItems: playlistItems,
+              onSelectItem: (itemId) =>
+                  unawaited(_focusPlaylistItem(controller, itemId)),
+              onManageQueue: () {
+                showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (context) => ExampleQueueSheet(
+                    palette: palette,
+                    playlistItems: playlistItems,
+                    onSelectItem: (itemId) =>
+                        unawaited(_focusPlaylistItem(controller, itemId)),
+                  ),
                 );
               },
             ),
-          ),
-          const SizedBox(height: 18),
-          _SnapshotSelector<({bool localFilesEnabled, bool dashEnabled})>(
-            listenable: controller.snapshotListenable,
-            selector: (snapshot) => (
-              localFilesEnabled: snapshot.capabilities.supportsLocalFiles,
-              dashEnabled: snapshot.capabilities.supportsDash,
-            ),
-            builder: (context, capabilities) => ExampleQuickSourcePanel(
-              palette: palette,
-              remoteUrlController: _remoteUrlController,
-              localFilesEnabled: capabilities.localFilesEnabled,
-              dashEnabled: capabilities.dashEnabled,
-              dashUnavailableMessage: capabilities.dashEnabled
-                  ? null
-                  : '当前平台宿主暂不支持 DASH 演示。',
-              onPickVideo: () => unawaited(_pickLocalVideo(controller)),
-              onUseHlsDemo: () => unawaited(
-                _activatePlaylistSource(
-                  controller,
-                  itemId: flutterHlsPlaylistItemId,
-                  source: flutterHlsDemoSource(),
-                ),
-              ),
-              onUseDashDemo: () => unawaited(
-                _activatePlaylistSource(
-                  controller,
-                  itemId: flutterDashPlaylistItemId,
-                  source: flutterDashDemoSource(),
-                ),
-              ),
-              onUseLiveDvrAcceptance: () => unawaited(
-                _activatePlaylistSource(
-                  controller,
-                  itemId: flutterLiveDvrPlaylistItemId,
-                  source: flutterLiveDvrAcceptanceSource(),
-                ),
-              ),
-              onOpenRemote: () => unawaited(_playCustomUrl(controller)),
-            ),
-          ),
-          const SizedBox(height: 18),
-          ExampleQueuePanel(
-            palette: palette,
-            playlistItems: playlistItems,
-            onSelectItem: (itemId) =>
-                unawaited(_focusPlaylistItem(controller, itemId)),
-            onManageQueue: () {
-              showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                builder: (context) => ExampleQueueSheet(
-                  palette: palette,
-                  playlistItems: playlistItems,
-                  onSelectItem: (itemId) =>
-                      unawaited(_focusPlaylistItem(controller, itemId)),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 18),
-          ExampleSystemPlaybackSection(
-            palette: palette,
-            controller: controller,
-            permissionStatus: _systemPlaybackPermissionStatus,
-            onRefreshExternalRoutes: () => unawaited(_refreshExternalRoutes()),
-            onExternalRoutePickerResult: _handleExternalRoutePickerResult,
-            externalRoutes: _externalRoutes
-                .where(
-                  (route) => route.kind == VesperExternalPlaybackRouteKind.dlna,
-                )
-                .toList(growable: false),
-            externalPlaybackMessage: _externalPlaybackMessage,
-            onExternalRouteSelected: (route) =>
-                unawaited(_loadExternalRoute(route)),
-            onRequestPermission: () =>
-                unawaited(_requestSystemPlaybackPermissions(controller)),
-            pictureInPictureAvailability: _pictureInPictureAvailability,
-            pictureInPictureStatus: _pictureInPictureStatus,
-            pictureInPictureEnabled: _pictureInPictureEnabled,
-            onPictureInPictureEnabledChanged: (enabled) =>
-                unawaited(_setPictureInPictureEnabled(controller, enabled)),
-            onRequestPictureInPicture: () =>
-                unawaited(_requestPictureInPicture(controller)),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -281,7 +230,9 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             sourceLabel: snapshot.sourceLabel.isEmpty
                 ? snapshot.title
                 : snapshot.sourceLabel,
-            sourceProtocol: activeSource?.protocol.name ?? '无',
+            sourceProtocol:
+                activeSource?.protocol.name ??
+                ExampleHostStrings.of(context)[ExampleHostText.none],
             routeLabel: _diagnosticsRouteLabel(),
             playbackOrigin: _playbackOrigin,
             sourceNormalizerSetting: _sourceNormalizerSetting,
@@ -289,38 +240,13 @@ extension _PlayerHostLayout on _PlayerHostPageState {
           const SizedBox(height: 18),
           ExampleEventLogSection(palette: palette, entries: _hostLogEntries),
           const SizedBox(height: 18),
-          ExampleDolbyCatalogPanel(
-            palette: palette,
-            presets: exampleDolbyAcceptanceCatalog,
-            selectedDrmKind: _selectedDolbyDrmKind,
-            selectedProfile: _selectedDolbyProfile,
-            selectedFps: _selectedDolbyFps,
-            isPresetPlayable: _isDolbyAcceptancePresetPlayableOnCurrentPlatform,
-            disabledReasonForPreset: _dolbyAcceptancePresetUnavailableReason,
-            onDrmKindChanged: (value) {
-              _updateState(() {
-                _selectedDolbyDrmKind = value;
-              });
-            },
-            onProfileChanged: (value) {
-              _updateState(() {
-                _selectedDolbyProfile = value;
-              });
-            },
-            onFpsChanged: (value) {
-              _updateState(() {
-                _selectedDolbyFps = value;
-              });
-            },
-            onPresetPlayNow: (preset) => unawaited(
-              _activateDolbyAcceptancePreset(
-                controller,
-                preset,
-                origin: ExampleDolbyAdHocPlaybackOrigin(preset.id),
-              ),
-            ),
-            onPresetAddToQueue: _addDolbyPresetToQueue,
+          ExampleShellSectionHeader(
+            title: ExampleHostStrings.of(
+              context,
+            )[ExampleHostText.labSystemPlayback],
           ),
+          const SizedBox(height: 8),
+          _buildSystemPlaybackSection(controller, palette),
           const SizedBox(height: 18),
           ExamplePluginDiagnosticsSection(
             palette: palette,
@@ -376,7 +302,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             ExampleSourceNormalizerSetting.diagnosticsOnly) {
       return 'direct native';
     }
-    return _sourceNormalizerSetting.title;
+    return _sourceNormalizerSetting.title(ExampleHostStrings.of(context));
   }
 
   Widget _buildLandscapeLayout(
@@ -428,6 +354,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
   }
 
   Widget _buildDownloadFutureContent(ExampleHostPalette palette) {
+    final strings = ExampleHostStrings.of(context);
     final downloadManagerFuture = _ensureDownloadManagerFuture();
     return FutureBuilder<VesperDownloadManager>(
       future: downloadManagerFuture,
@@ -458,32 +385,33 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                     const SizedBox(height: 18),
                     ExampleInlineControllerError(error: asyncSnapshot.error),
                   ],
+                  if (_downloadMessage != null) ...<Widget>[
+                    const SizedBox(height: 12),
+                    Text(
+                      _downloadMessage!,
+                      style: TextStyle(color: palette.error),
+                    ),
+                  ],
                   const SizedBox(height: 18),
-                  ExampleDownloadCreateSection(
-                    palette: palette,
-                    remoteUrlController: _downloadUrlController,
-                    message: _downloadMessage,
-                    onUseHlsDemo: () => unawaited(
-                      _createDownloadTask(
-                        manager,
-                        assetIdPrefix: flutterHlsPlaylistItemId,
-                        source: flutterHlsDemoSource(),
-                      ),
+                  ExampleShellSectionHeader(
+                    title: strings[ExampleHostText.downloadsTasks],
+                    trailing: FilledButton.icon(
+                      key: const ValueKey<String>('downloads-new'),
+                      onPressed: () =>
+                          unawaited(_openDownloadCreateSheet(manager, palette)),
+                      icon: const Icon(Icons.add_rounded),
+                      label: Text(strings[ExampleHostText.downloadsNew]),
                     ),
-                    onUseDashDemo: () => unawaited(
-                      _createDownloadTask(
-                        manager,
-                        assetIdPrefix: flutterDashPlaylistItemId,
-                        source: flutterDashDemoSource(),
-                      ),
-                    ),
-                    onCreateRemote: () =>
-                        unawaited(_createRemoteDownloadTask(manager)),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 8),
                   ExampleDownloadTasksSection(
                     palette: palette,
-                    tasks: snapshot.tasks,
+                    tasks: snapshot.tasks
+                        .where(
+                          (task) =>
+                              !_pendingRemovalTaskIds.contains(task.taskId),
+                        )
+                        .toList(growable: false),
                     pendingTasks: _pendingDownloadTasks,
                     isDownloadExportPluginInstalled:
                         _isDownloadExportPluginInstalled,
@@ -494,7 +422,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                     onSaveToGallery: (task) =>
                         unawaited(_saveDownloadToGallery(manager, task)),
                     onRemoveTask: (task) =>
-                        unawaited(manager.removeTask(task.taskId)),
+                        _removeDownloadWithUndo(manager, task),
                   ),
                 ],
               ),

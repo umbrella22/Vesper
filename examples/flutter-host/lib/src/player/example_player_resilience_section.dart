@@ -20,11 +20,11 @@ class ExampleResilienceSection extends StatelessWidget {
         ExampleResilienceProfileLabels.fromPolicy(activePolicy) ??
         selectedProfile;
     final policy = activePolicy;
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '恢复策略',
-      subtitle:
-          '这里演示 resilience policy 的 Flutter API。切换 profile 时会直接下发到播放器，并尽量保留当前媒体与播放进度。',
+      title: strings[ExampleHostText.resilienceTitle],
+      subtitle: strings[ExampleHostText.resilienceSubtitle],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -45,7 +45,7 @@ class ExampleResilienceSection extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            activeProfile.subtitle,
+            activeProfile.subtitle(strings),
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: palette.body, height: 1.45),
@@ -58,8 +58,11 @@ class ExampleResilienceSection extends StatelessWidget {
           ),
           ExampleFactRow(
             label: 'retry',
-            value:
-                '${policy.retry.maxAttempts ?? '-'} 次 · ${policy.retry.backoff.name}',
+            value: strings
+                .format(ExampleHostText.resilienceRetryValue, <String, Object?>{
+                  'count': policy.retry.maxAttempts ?? '-',
+                  'backoff': policy.retry.backoff.name,
+                }),
           ),
           ExampleFactRow(
             label: 'cache',

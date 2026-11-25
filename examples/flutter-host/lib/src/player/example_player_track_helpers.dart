@@ -1,12 +1,18 @@
 part of 'example_player_helpers.dart';
 
-String qualityAutoRowTitle(VesperAbrPolicy _) {
-  return '自动';
+String qualityAutoRowTitle(
+  VesperAbrPolicy _, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
+  return strings[ExampleHostText.auto];
 }
 
-String? qualityAutoRowBadgeLabel(VesperAbrPolicy abrPolicy) {
+String? qualityAutoRowBadgeLabel(
+  VesperAbrPolicy abrPolicy, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   return switch (abrPolicy.mode) {
-    VesperAbrMode.constrained => '受限',
+    VesperAbrMode.constrained => strings[ExampleHostText.qualityLimited],
     _ => null,
   };
 }
@@ -16,8 +22,9 @@ String qualityAutoRowSubtitle(
   VesperTrackSelectionSnapshot trackSelection,
   String? effectiveVideoTrackId,
   VesperFixedTrackStatus? fixedTrackStatus,
-  VesperVideoVariantObservation? videoVariantObservation,
-) {
+  VesperVideoVariantObservation? videoVariantObservation, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final abrPolicy = trackSelection.abrPolicy;
   final effectiveTrack = effectiveVideoTrack(
     trackCatalog,
@@ -30,48 +37,60 @@ String qualityAutoRowSubtitle(
     effectiveVideoTrackId,
     fixedTrackStatus,
   );
-  final constraintSummary = abrConstraintSummary(abrPolicy);
+  final constraintSummary = abrConstraintSummary(abrPolicy, strings: strings);
   final observationSummary = videoVariantObservationSummary(
     videoVariantObservation,
   );
 
   final lead = switch (abrPolicy.mode) {
-    VesperAbrMode.auto => '让播放器自动调整画质。',
-    VesperAbrMode.constrained when constraintSummary != null =>
-      '当前在$constraintSummary约束内自动调整画质。点按恢复完全自动。',
-    VesperAbrMode.constrained => '当前在受限 ABR 策略内自动调整画质。点按恢复完全自动。',
+    VesperAbrMode.auto => strings[ExampleHostText.qualityLeadAuto],
+    VesperAbrMode.constrained when constraintSummary != null => strings.format(
+      ExampleHostText.qualityLeadConstrainedWithin,
+      <String, Object?>{'constraints': constraintSummary},
+    ),
+    VesperAbrMode.constrained =>
+      strings[ExampleHostText.qualityLeadConstrained],
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback &&
             effectiveTrack != null =>
-      '当前请求锁定到${qualityLabel(requestedTrack)}，播放器实际仍在${qualityLabel(effectiveTrack)}。点按切回自动。',
+      strings.format(ExampleHostText.qualityLeadFallback, <String, Object?>{
+        'requested': qualityLabel(requestedTrack, strings: strings),
+        'effective': qualityLabel(effectiveTrack, strings: strings),
+      }),
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
             resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
-      '当前请求锁定到${qualityLabel(requestedTrack)}，正在等待播放器确认实际档位。点按切回自动。',
+      strings.format(ExampleHostText.qualityLeadPending, <String, Object?>{
+        'requested': qualityLabel(requestedTrack, strings: strings),
+      }),
     VesperAbrMode.fixedTrack
         when requestedTrack != null && effectiveTrack != null =>
-      '当前已锁定到${qualityLabel(requestedTrack)}。点按切回自动。',
-    VesperAbrMode.fixedTrack when requestedTrack != null =>
-      '当前请求锁定到${qualityLabel(requestedTrack)}。点按切回自动。',
-    VesperAbrMode.fixedTrack => '切回让播放器自动调整画质。',
+      strings.format(ExampleHostText.qualityLeadLocked, <String, Object?>{
+        'requested': qualityLabel(requestedTrack, strings: strings),
+      }),
+    VesperAbrMode.fixedTrack when requestedTrack != null => strings.format(
+      ExampleHostText.qualityLeadRequested,
+      <String, Object?>{
+        'requested': qualityLabel(requestedTrack, strings: strings),
+      },
+    ),
+    VesperAbrMode.fixedTrack =>
+      strings[ExampleHostText.qualityLeadSwitchToAuto],
   };
-  if (abrPolicy.mode == VesperAbrMode.fixedTrack) {
-    if (observationSummary == null) {
-      return lead;
-    }
-    return '$lead当前观测：$observationSummary。';
+  final observed = observationSummary == null
+      ? ''
+      : strings.format(ExampleHostText.qualityObserved, <String, Object?>{
+          'value': observationSummary,
+        });
+  if (abrPolicy.mode == VesperAbrMode.fixedTrack || effectiveTrack == null) {
+    return '$lead$observed';
   }
-  if (effectiveTrack == null) {
-    if (observationSummary == null) {
-      return lead;
-    }
-    return '$lead当前观测：$observationSummary。';
-  }
-  if (observationSummary == null) {
-    return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。';
-  }
-  return '$lead当前实际档位：${qualityLabel(effectiveTrack)}。当前观测：$observationSummary。';
+  final effective = strings.format(
+    ExampleHostText.qualityEffective,
+    <String, Object?>{'value': qualityLabel(effectiveTrack, strings: strings)},
+  );
+  return '$lead$effective$observed';
 }
 
 String qualityOptionSubtitle(
@@ -80,8 +99,9 @@ String qualityOptionSubtitle(
   String? effectiveVideoTrackId,
   VesperFixedTrackStatus? fixedTrackStatus, {
   required VesperTrackCatalog trackCatalog,
+  ExampleHostStrings strings = ExampleHostStrings.zh,
 }) {
-  final base = qualitySubtitle(track);
+  final base = qualitySubtitle(track, strings: strings);
   final isFixedTrack =
       trackSelection.abrPolicy.mode == VesperAbrMode.fixedTrack;
   final isRequestedTrack =
@@ -94,19 +114,19 @@ String qualityOptionSubtitle(
     fixedTrackStatus,
   );
 
-  final stateDescription = switch ((isRequestedTrack, isEffectiveTrack)) {
-    (true, true) => '当前已锁定到这个画质',
+  final stateKey = switch ((isRequestedTrack, isEffectiveTrack)) {
+    (true, true) => ExampleHostText.qualityStateLocked,
     (true, false)
         when resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
-      '正在等待播放器确认这个画质',
-    (true, false) => '已请求锁定到这个画质',
-    (false, true) when isFixedTrack => '播放器当前仍在这个档位',
+      ExampleHostText.qualityStatePending,
+    (true, false) => ExampleHostText.qualityStateRequested,
+    (false, true) when isFixedTrack => ExampleHostText.qualityStateStillHere,
     _ => null,
   };
-  if (stateDescription == null) {
+  if (stateKey == null) {
     return base;
   }
-  return '$base · $stateDescription';
+  return '$base · ${strings[stateKey]}';
 }
 
 String? qualityOptionBadgeLabel(
@@ -115,6 +135,7 @@ String? qualityOptionBadgeLabel(
   required VesperTrackSelectionSnapshot trackSelection,
   required String? effectiveVideoTrackId,
   VesperFixedTrackStatus? fixedTrackStatus,
+  ExampleHostStrings strings = ExampleHostStrings.zh,
 }) {
   final isFixedTrack =
       trackSelection.abrPolicy.mode == VesperAbrMode.fixedTrack;
@@ -128,37 +149,58 @@ String? qualityOptionBadgeLabel(
 
   if (isFixedTrack && trackId == requestedTrackId) {
     if (resolvedFixedTrackStatus == VesperFixedTrackStatus.locked) {
-      return '当前';
+      return strings[ExampleHostText.qualityBadgeCurrent];
     }
     if (resolvedFixedTrackStatus == VesperFixedTrackStatus.pending) {
-      return '等待';
+      return strings[ExampleHostText.qualityBadgeWaiting];
     }
-    return '锁定中';
+    return strings[ExampleHostText.qualityBadgeLocking];
   }
 
   if (isFixedTrack &&
       resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback &&
       effectiveVideoTrackId == trackId) {
-    return '实际';
+    return strings[ExampleHostText.qualityBadgeActual];
   }
 
   if (trackId == effectiveVideoTrackId) {
-    return '当前';
+    return strings[ExampleHostText.qualityBadgeCurrent];
   }
   return null;
 }
 
-String? abrConstraintSummary(VesperAbrPolicy abrPolicy) {
+/// Whether [badgeLabel] marks a fixed-track lock that has not settled yet.
+bool isQualityBadgeWarm(
+  String? badgeLabel, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
+  return badgeLabel != null &&
+      (badgeLabel == strings[ExampleHostText.qualityBadgeWaiting] ||
+          badgeLabel == strings[ExampleHostText.qualityBadgeLocking]);
+}
+
+String? abrConstraintSummary(
+  VesperAbrPolicy abrPolicy, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final constraints = <String>[
-    if (abrPolicy.maxHeight case final height?) '最高 ${height}p',
-    if (abrPolicy.maxWidth case final width?) '最大宽度 $width',
+    if (abrPolicy.maxHeight case final height?)
+      strings.format(ExampleHostText.abrMaxHeight, <String, Object?>{
+        'value': height,
+      }),
+    if (abrPolicy.maxWidth case final width?)
+      strings.format(ExampleHostText.abrMaxWidth, <String, Object?>{
+        'value': width,
+      }),
     if (abrPolicy.maxBitRate case final bitRate?)
-      '最高 ${formatBitRate(bitRate)}',
+      strings.format(ExampleHostText.abrMaxBitRate, <String, Object?>{
+        'value': formatBitRate(bitRate),
+      }),
   ];
   if (constraints.isEmpty) {
     return null;
   }
-  return constraints.join('，');
+  return constraints.join(strings[ExampleHostText.listSeparator]);
 }
 
 String? videoVariantObservationSummary(
@@ -178,19 +220,25 @@ String? videoVariantObservationSummary(
   return parts.join(' · ');
 }
 
-String? qualityCapabilityNotice(VesperPlayerCapabilities capabilities) {
+String? qualityCapabilityNotice(
+  VesperPlayerCapabilities capabilities, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final supportsFixedTrackAbr = capabilities.supportsAbrMode(
     VesperAbrMode.fixedTrack,
   );
   final supportsExactVideoTrackSelection = capabilities
       .supportsTrackSelectionFor(VesperMediaTrackKind.video);
   if (supportsFixedTrackAbr && !supportsExactVideoTrackSelection) {
-    return '当前平台按 HLS variant 做 best-effort 固定画质，不保证精确切到单一视频轨。';
+    return strings[ExampleHostText.qualityBestEffortNotice];
   }
   return null;
 }
 
-ExampleSheetNoticeModel? qualityRuntimeNotice(VesperPlayerSnapshot snapshot) {
+ExampleSheetNoticeModel? qualityRuntimeNotice(
+  VesperPlayerSnapshot snapshot, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final lastError = snapshot.lastError;
   if (lastError == null ||
       lastError.category != VesperPlayerErrorCategory.playback) {
@@ -200,17 +248,17 @@ ExampleSheetNoticeModel? qualityRuntimeNotice(VesperPlayerSnapshot snapshot) {
     return null;
   }
 
-  final title = switch (snapshot.trackSelection.abrPolicy.mode) {
-    VesperAbrMode.constrained => '已回退为受限自动',
-    VesperAbrMode.auto => '已回退为自动画质',
+  final titleKey = switch (snapshot.trackSelection.abrPolicy.mode) {
+    VesperAbrMode.constrained => ExampleHostText.qualityFellBackConstrained,
+    VesperAbrMode.auto => ExampleHostText.qualityFellBackAuto,
     VesperAbrMode.fixedTrack
         when snapshot.fixedTrackStatus == VesperFixedTrackStatus.fallback =>
-      '锁定画质仍未收敛',
-    VesperAbrMode.fixedTrack => '画质锁定提示',
+      ExampleHostText.qualityLockNotConverged,
+    VesperAbrMode.fixedTrack => ExampleHostText.qualityLockNotice,
   };
 
   return ExampleSheetNoticeModel(
-    title: title,
+    title: strings[titleKey],
     message: lastError.message,
     tone: ExampleSheetNoteTone.warm,
   );
@@ -218,8 +266,9 @@ ExampleSheetNoticeModel? qualityRuntimeNotice(VesperPlayerSnapshot snapshot) {
 
 String audioButtonLabel(
   VesperTrackCatalog trackCatalog,
-  VesperTrackSelectionSnapshot trackSelection,
-) {
+  VesperTrackSelectionSnapshot trackSelection, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final selectedTrack = firstWhereOrNull<VesperMediaTrack>(
     trackCatalog.audioTracks,
     (track) => track.id == trackSelection.audio.trackId,
@@ -228,95 +277,118 @@ String audioButtonLabel(
   return switch (trackSelection.audio.mode) {
     VesperTrackSelectionMode.track when selectedTrack != null => audioLabel(
       selectedTrack,
+      strings: strings,
     ),
-    _ => '音频',
+    _ => strings[ExampleHostText.sheetAudioTitle],
   };
 }
 
 String subtitleButtonLabel(
   VesperTrackCatalog trackCatalog,
-  VesperTrackSelectionSnapshot trackSelection,
-) {
+  VesperTrackSelectionSnapshot trackSelection, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final selectedTrack = firstWhereOrNull<VesperMediaTrack>(
     trackCatalog.subtitleTracks,
     (track) => track.id == trackSelection.subtitle.trackId,
   );
 
   return switch (trackSelection.subtitle.mode) {
-    VesperTrackSelectionMode.disabled => '字幕关',
+    VesperTrackSelectionMode.disabled =>
+      strings[ExampleHostText.subtitleOffValue],
     VesperTrackSelectionMode.track when selectedTrack != null => subtitleLabel(
       selectedTrack,
+      strings: strings,
     ),
-    VesperTrackSelectionMode.track => '字幕',
-    VesperTrackSelectionMode.auto => '字幕自动',
+    VesperTrackSelectionMode.track =>
+      strings[ExampleHostText.sheetSubtitleTitle],
+    VesperTrackSelectionMode.auto => strings[ExampleHostText.subtitleAutoValue],
   };
 }
 
-String qualityLabel(VesperMediaTrack track) {
+String qualityLabel(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   if (track.height != null) {
     return '${track.height}p';
-  }
-  if (track.width != null && track.height != null) {
-    return '${track.width}×${track.height}';
   }
   if (track.label case final label?) {
     return label;
   }
-  return '视频轨';
+  return strings[ExampleHostText.trackVideoFallback];
 }
 
-String qualitySubtitle(VesperMediaTrack track) {
+String qualitySubtitle(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final values = <String?>[
     track.codec,
     if (track.bitRate case final bitRate?) formatBitRate(bitRate),
   ].whereType<String>().toList(growable: false);
   if (values.isEmpty) {
-    return '固定视频变体';
+    return strings[ExampleHostText.trackVideoVariantFallback];
   }
   return values.join(' • ');
 }
 
-String audioLabel(VesperMediaTrack track) {
+String audioLabel(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   if (track.label case final label?) {
     return label;
   }
   if (track.language case final language?) {
     return language.toUpperCase();
   }
-  return '音轨';
+  return strings[ExampleHostText.trackAudioFallback];
 }
 
-String audioSubtitle(VesperMediaTrack track) {
+String audioSubtitle(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final values = <String?>[
     track.language?.toUpperCase(),
-    if (track.channels case final channels?) '$channels 声道',
+    if (track.channels case final channels?)
+      strings.format(ExampleHostText.trackAudioChannels, <String, Object?>{
+        'count': channels,
+      }),
     if (track.sampleRate case final sampleRate?) '${sampleRate ~/ 1000} kHz',
     track.codec,
   ].whereType<String>().toList(growable: false);
   if (values.isEmpty) {
-    return '音频节目';
+    return strings[ExampleHostText.trackAudioProgramFallback];
   }
   return values.join(' • ');
 }
 
-String subtitleLabel(VesperMediaTrack track) {
+String subtitleLabel(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   if (track.label case final label?) {
     return label;
   }
   if (track.language case final language?) {
     return language.toUpperCase();
   }
-  return '字幕轨';
+  return strings[ExampleHostText.trackSubtitleFallback];
 }
 
-String subtitleSubtitle(VesperMediaTrack track) {
+String subtitleSubtitle(
+  VesperMediaTrack track, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final values = <String>[
     if (track.language case final language?) language.toUpperCase(),
-    if (track.isForced) '强制',
-    if (track.isDefault) '默认',
+    if (track.isForced) strings[ExampleHostText.trackSubtitleForced],
+    if (track.isDefault) strings[ExampleHostText.trackSubtitleDefault],
   ];
   if (values.isEmpty) {
-    return '字幕选项';
+    return strings[ExampleHostText.trackSubtitleOptionFallback];
   }
   return values.join(' • ');
 }

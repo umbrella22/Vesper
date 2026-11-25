@@ -20,13 +20,14 @@ class ExampleQueuePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '待播放队列',
-      subtitle: '这里只显示明确准备连续播放的媒体源。Dolby 预设默认留在诊断页，除非手动加入。',
+      title: strings[ExampleHostText.queuePanelTitle],
+      subtitle: strings[ExampleHostText.queuePanelSubtitle],
       child: playlistItems.isEmpty
           ? Text(
-              '队列里还没有媒体源。',
+              strings[ExampleHostText.queueNoSources],
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.body),
@@ -47,7 +48,7 @@ class ExampleQueuePanel extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onManageQueue,
                   icon: const Icon(Icons.list_rounded, size: 18),
-                  label: const Text('管理队列'),
+                  label: Text(strings[ExampleHostText.manageQueue]),
                 ),
               ],
             ),
@@ -69,6 +70,7 @@ class ExampleQueueSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
@@ -76,7 +78,7 @@ class ExampleQueueSheet extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              '管理队列',
+              strings[ExampleHostText.manageQueue],
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 color: palette.title,
                 fontWeight: FontWeight.w700,
@@ -86,7 +88,7 @@ class ExampleQueueSheet extends StatelessWidget {
             Expanded(
               child: playlistItems.isEmpty
                   ? Text(
-                      '队列里还没有媒体源。',
+                      strings[ExampleHostText.queueNoSources],
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: palette.body),
@@ -155,12 +157,16 @@ class ExampleRecentErrorSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final message = _exampleRecentErrorMessage(error);
-    final diagnostics = _exampleRecentErrorDiagnostics(error).take(4).toList();
+    final strings = ExampleHostStrings.of(context);
+    final message = _exampleRecentErrorMessage(error, strings);
+    final diagnostics = _exampleRecentErrorDiagnostics(
+      error,
+      strings,
+    ).take(4).toList();
     return ExampleSectionShell(
       palette: palette,
-      title: '最近错误',
-      subtitle: '平台层错误会同时进入 snapshot 和 event stream。',
+      title: strings[ExampleHostText.recentErrorTitle],
+      subtitle: strings[ExampleHostText.recentErrorSubtitle],
       accent: const Color(0xFFC13C36),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -192,42 +198,58 @@ class ExampleRecentErrorSection extends StatelessWidget {
   }
 }
 
-String _exampleRecentErrorMessage(VesperPlayerError error) {
+String _exampleRecentErrorMessage(
+  VesperPlayerError error,
+  ExampleHostStrings strings,
+) {
   if (_isDolbyVisionP5CapabilityFailure(error)) {
-    return '当前设备不支持这个 Dolby Vision P5 / Widevine 播放组合。';
+    return strings[ExampleHostText.recentErrorDolbyP5];
   }
+  final attempts = error.details['maxAttempts']?.toString();
+  final attemptCount = attempts?.isNotEmpty == true ? attempts : '3';
   if (_isWidevineNetworkExhausted(error)) {
-    final attempts = error.details['maxAttempts']?.toString();
-    return 'Widevine license 或 provisioning 请求失败，已重试 ${attempts?.isNotEmpty == true ? attempts : '3'} 次。';
+    return strings.format(
+      ExampleHostText.recentErrorWidevine,
+      <String, Object?>{'count': attemptCount},
+    );
   }
   if (_isFairPlayNetworkExhausted(error)) {
-    final attempts = error.details['maxAttempts']?.toString();
-    return 'FairPlay license 或 certificate 请求失败，已重试 ${attempts?.isNotEmpty == true ? attempts : '3'} 次。';
+    return strings.format(
+      ExampleHostText.recentErrorFairPlay,
+      <String, Object?>{'count': attemptCount},
+    );
   }
   return error.message;
 }
 
-Iterable<String> _exampleRecentErrorDiagnostics(VesperPlayerError error) sync* {
+Iterable<String> _exampleRecentErrorDiagnostics(
+  VesperPlayerError error,
+  ExampleHostStrings strings,
+) sync* {
+  String line(String label, String value) => strings.format(
+    ExampleHostText.detailLine,
+    <String, Object?>{'label': label, 'value': value},
+  );
   final details = error.details;
   final licenseHost = details['licenseUriHost']?.toString();
   if (licenseHost != null && licenseHost.isNotEmpty) {
-    yield 'license host：$licenseHost';
+    yield line('license host', licenseHost);
   }
   final certificateHost = details['certificateUriHost']?.toString();
   if (certificateHost != null && certificateHost.isNotEmpty) {
-    yield 'certificate host：$certificateHost';
+    yield line('certificate host', certificateHost);
   }
   final httpStatusCode = details['httpStatusCode']?.toString();
   if (httpStatusCode != null && httpStatusCode.isNotEmpty) {
-    yield 'HTTP status：$httpStatusCode';
+    yield line('HTTP status', httpStatusCode);
   }
   final errorCode = details['errorCodeName']?.toString();
   if (errorCode != null && errorCode.isNotEmpty) {
-    yield '错误码：$errorCode';
+    yield line(strings[ExampleHostText.recentErrorCode], errorCode);
   }
   final codec = details['codec']?.toString();
   if (codec != null && codec.isNotEmpty) {
-    yield 'codec：$codec';
+    yield line('codec', codec);
   }
   final decoderName = details['decoderName']?.toString();
   if (decoderName != null && decoderName.isNotEmpty) {

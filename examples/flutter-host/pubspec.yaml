@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  material_ui: ^1.11.1
   vesper_player:
     path: ../../lib/flutter/vesper_player
   vesper_player_external_playback:

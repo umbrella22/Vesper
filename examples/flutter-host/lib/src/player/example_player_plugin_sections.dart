@@ -55,11 +55,11 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '插件诊断',
-      subtitle:
-          'SourceNormalizer 可从 diagnostics/preflight 切到 normalized playback 路线；FrameProcessor 仅记录 debug 能力诊断。',
+      title: strings[ExampleHostText.pluginDiagnosticsTitle],
+      subtitle: strings[ExampleHostText.pluginDiagnosticsSubtitle],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -71,7 +71,7 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
                     (setting) => Padding(
                       padding: const EdgeInsets.only(right: 10),
                       child: ChoiceChip(
-                        label: Text(setting.title),
+                        label: Text(setting.title(strings)),
                         selected: setting == sourceNormalizerSetting,
                         onSelected: setting == sourceNormalizerSetting
                             ? null
@@ -84,7 +84,7 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            sourceNormalizerSetting.subtitle,
+            sourceNormalizerSetting.subtitle(strings),
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: palette.body, height: 1.45),
@@ -92,23 +92,30 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
           const SizedBox(height: 14),
           ExampleFactRow(
             label: 'source',
-            value: _pluginReferenceLabel(sourceNormalizerPluginReferences),
+            value: _pluginReferenceLabel(
+              sourceNormalizerPluginReferences,
+              strings,
+            ),
           ),
           ExampleFactRow(
             label: 'frame',
-            value: _pluginReferenceLabel(frameProcessorPluginReferences),
+            value: _pluginReferenceLabel(
+              frameProcessorPluginReferences,
+              strings,
+            ),
           ),
           const SizedBox(height: 14),
           PluginDiagnosticGroup(
             title: 'SourceNormalizer',
-            emptyLabel: '暂无 SourceNormalizer 诊断。',
+            emptyLabel: strings[ExampleHostText.pluginNoNormalizerDiagnostics],
             diagnostics: sourceNormalizerDiagnostics,
             palette: palette,
           ),
           const SizedBox(height: 14),
           PluginDiagnosticGroup(
             title: 'FrameProcessor Debug',
-            emptyLabel: '暂无 FrameProcessor debug 诊断。',
+            emptyLabel:
+                strings[ExampleHostText.pluginNoFrameProcessorDiagnostics],
             diagnostics: frameProcessorDiagnostics,
             palette: palette,
           ),
@@ -169,7 +176,9 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
                   )
                 : const Icon(Icons.fact_check_rounded, size: 18),
             label: Text(
-              isCapturingHdrEvidence ? '正在采集 HDR evidence' : '采集 HDR evidence',
+              strings[isCapturingHdrEvidence
+                  ? ExampleHostText.hdrEvidenceCapturing
+                  : ExampleHostText.hdrEvidenceCapture],
             ),
           ),
         ],
@@ -270,7 +279,11 @@ class PluginDiagnosticRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            title.isEmpty ? '插件诊断' : title,
+            title.isEmpty
+                ? ExampleHostStrings.of(
+                    context,
+                  )[ExampleHostText.pluginDiagnosticsTitle]
+                : title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -366,8 +379,11 @@ class PluginDiagnosticRow extends StatelessWidget {
   }
 }
 
-String _pluginReferenceLabel(List<VesperPluginReference> references) {
+String _pluginReferenceLabel(
+  List<VesperPluginReference> references,
+  ExampleHostStrings strings,
+) {
   return references.isEmpty
-      ? '未选择'
+      ? strings[ExampleHostText.notSelected]
       : references.map((reference) => reference.pluginId).join(', ');
 }

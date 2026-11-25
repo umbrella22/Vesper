@@ -1,7 +1,8 @@
 part of 'player_host_page.dart';
 
 extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
-  static const String _pictureInPictureUnavailableMessage = '当前播放无法启用小窗';
+  String get _pictureInPictureUnavailableMessage =>
+      _hostStrings[ExampleHostText.pipUnavailable];
 
   Future<void> _bindPictureInPicture(VesperPlayerController controller) async {
     final generation = ++_pictureInPictureBindingGeneration;

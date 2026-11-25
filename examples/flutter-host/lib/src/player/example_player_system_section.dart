@@ -36,10 +36,11 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '系统播放',
-      subtitle: '后台音频、锁屏控制、AirPlay、Android Cast 和 DLNA 的宿主集成入口。',
+      title: strings[ExampleHostText.labSystemPlayback],
+      subtitle: strings[ExampleHostText.systemPlaybackSubtitle],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -58,7 +59,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
                     value: pictureInPictureEnabled,
                     onChanged: onPictureInPictureEnabledChanged,
                     title: Text(
-                      '启用小窗播放',
+                      strings[ExampleHostText.pipEnable],
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: palette.title,
                         fontWeight: FontWeight.w600,
@@ -83,12 +84,17 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
               ),
               OutlinedButton(
                 onPressed: onRequestPermission,
-                child: Text('通知权限：${permissionStatus.name}'),
+                child: Text(
+                  strings.format(
+                    ExampleHostText.notificationPermission,
+                    <String, Object?>{'status': permissionStatus.name},
+                  ),
+                ),
               ),
               OutlinedButton.icon(
                 onPressed: onRefreshExternalRoutes,
                 icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('重新扫描 DLNA'),
+                label: Text(strings[ExampleHostText.rescanDlna]),
               ),
               OutlinedButton.icon(
                 onPressed: _canRequestPictureInPicture
@@ -98,7 +104,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
                   Icons.picture_in_picture_alt_rounded,
                   size: 18,
                 ),
-                label: Text(_pictureInPictureLabel),
+                label: Text(_pictureInPictureLabel(strings)),
               ),
             ],
           ),
@@ -143,20 +149,20 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
         pictureInPictureStatus != VesperPictureInPictureStatus.exiting;
   }
 
-  String get _pictureInPictureLabel {
+  String _pictureInPictureLabel(ExampleHostStrings strings) {
     if (pictureInPictureStatus == VesperPictureInPictureStatus.active) {
-      return '小窗已启用';
+      return strings[ExampleHostText.pipActive];
     }
     if (pictureInPictureStatus == VesperPictureInPictureStatus.entering) {
-      return '正在启用小窗';
+      return strings[ExampleHostText.pipEntering];
     }
     if (!pictureInPictureEnabled) {
-      return '小窗未开启';
+      return strings[ExampleHostText.pipOff];
     }
     if (pictureInPictureAvailability?.isAvailable == false) {
-      return '当前播放无法启用小窗';
+      return strings[ExampleHostText.pipUnavailable];
     }
-    return '小窗播放';
+    return strings[ExampleHostText.pipRequest];
   }
 }
 

@@ -141,15 +141,15 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
           activeSource,
         ) &&
         setting != ExampleSourceNormalizerSetting.disabled) {
-      _showMessage('Dolby Vision 验收流需要 direct native playback，已保持插件关闭。');
+      final strings = _hostStrings;
+      _showMessage(strings[ExampleHostText.dolbyPluginsKeptOff]);
       if (mounted) {
         _updateState(() {
           _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
           _appendHostLog(
             severity: ExampleHostLogSeverity.warning,
-            title: '插件模式保持关闭',
-            detail:
-                'Dolby Vision 验收流不经过 SourceNormalizer、FFmpeg 或 FrameProcessor。',
+            title: strings[ExampleHostText.logPluginsKeptOff],
+            detail: strings[ExampleHostText.logPluginsKeptOffDetail],
           );
         });
       }
@@ -160,10 +160,14 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     final shouldResumePlayback =
         previousSnapshot.playbackState == VesperPlaybackState.playing;
 
+    final strings = _hostStrings;
     _updateState(() {
       _sourceNormalizerSetting = setting;
       _isRebuildingController = true;
-      _appendHostLog(title: '插件模式已切换', detail: setting.title);
+      _appendHostLog(
+        title: strings[ExampleHostText.logPluginModeChanged],
+        detail: setting.title(strings),
+      );
       _controllerFuture = _createController(
         source: activeSource,
         activationOptions: VesperSourceActivationOptions(
@@ -180,7 +184,12 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       await rebuilding;
     } catch (error) {
       if (mounted) {
-        _showMessage('SourceNormalizer 配置切换失败：$error');
+        _showMessage(
+          strings.format(
+            ExampleHostText.normalizerSwitchFailed,
+            <String, Object?>{'error': error},
+          ),
+        );
       }
     } finally {
       if (mounted && identical(_controllerFuture, rebuilding)) {
@@ -263,7 +272,10 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     _updateState(() {
       _selectedResilienceProfile = profile;
       _isApplyingResilienceProfile = true;
-      _appendHostLog(title: '插件模式已切换', detail: profile.title);
+      _appendHostLog(
+        title: _hostStrings[ExampleHostText.logResilienceChanged],
+        detail: profile.title,
+      );
     });
     try {
       await controller.setResiliencePolicy(profile.policy);
@@ -306,14 +318,15 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       final wasPluginRoute =
           _sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled ||
           _frameProcessorPluginReferences.isNotEmpty;
+      final strings = _hostStrings;
       if (wasPluginRoute && mounted) {
-        _showMessage('Dolby Vision 验收已切回 direct native playback，插件选择已关闭。');
+        _showMessage(strings[ExampleHostText.dolbyPluginsTurnedOff]);
       }
       _updateState(() {
         _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
         _appendHostLog(
           title: 'Dolby direct native playback',
-          detail: 'SourceNormalizer、FFmpeg 与 FrameProcessor 已关闭。',
+          detail: strings[ExampleHostText.logDolbyDirectDetail],
         );
       });
       await _rebuildControllerForSource(

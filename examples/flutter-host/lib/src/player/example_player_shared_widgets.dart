@@ -212,13 +212,14 @@ class ExampleLoadingState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    final strings = ExampleHostStrings.of(context);
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          CircularProgressIndicator(),
-          SizedBox(height: 18),
-          Text('正在初始化 Vesper Flutter Host...'),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 18),
+          Text(strings[ExampleHostText.loadingController]),
         ],
       ),
     );
@@ -245,7 +246,9 @@ class ExampleErrorState extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              '控制器初始化失败',
+              ExampleHostStrings.of(
+                context,
+              )[ExampleHostText.controllerInitFailed],
               style: Theme.of(
                 context,
               ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
@@ -285,31 +288,38 @@ class ExampleDiagnosticsSummarySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: 'Session 概览',
-      subtitle: '当前播放路线、source、队列来源和宿主侧诊断模式。',
+      title: strings[ExampleHostText.sessionOverviewTitle],
+      subtitle: strings[ExampleHostText.sessionOverviewSubtitle],
       child: Column(
         children: <Widget>[
           ExampleFactRow(label: 'Source', value: sourceLabel),
           ExampleFactRow(label: 'Protocol', value: sourceProtocol),
           ExampleFactRow(label: 'Route', value: routeLabel),
-          ExampleFactRow(label: 'Origin', value: _playbackOriginLabel()),
+          ExampleFactRow(label: 'Origin', value: _playbackOriginLabel(strings)),
           ExampleFactRow(
             label: 'SourceNormalizer',
-            value: sourceNormalizerSetting.title,
+            value: sourceNormalizerSetting.title(strings),
           ),
         ],
       ),
     );
   }
 
-  String _playbackOriginLabel() {
+  String _playbackOriginLabel(ExampleHostStrings strings) {
     final origin = playbackOrigin;
     return switch (origin) {
-      ExampleQueuePlaybackOrigin() => '队列：${origin.itemId}',
-      ExampleDolbyAdHocPlaybackOrigin() => 'Dolby 临时播放：${origin.presetId}',
-      null => '无',
+      ExampleQueuePlaybackOrigin() => strings.format(
+        ExampleHostText.originQueue,
+        <String, Object?>{'id': origin.itemId},
+      ),
+      ExampleDolbyAdHocPlaybackOrigin() => strings.format(
+        ExampleHostText.originDolby,
+        <String, Object?>{'id': origin.presetId},
+      ),
+      null => strings[ExampleHostText.none],
     };
   }
 }
@@ -326,13 +336,14 @@ class ExampleEventLogSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '事件日志',
-      subtitle: '只记录这个示例 app 的宿主操作事件；不读取 Logcat 或 native log。',
+      title: strings[ExampleHostText.eventLogTitle],
+      subtitle: strings[ExampleHostText.eventLogSubtitle],
       child: entries.isEmpty
           ? Text(
-              '还没有宿主事件。',
+              strings[ExampleHostText.eventLogEmpty],
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.body),

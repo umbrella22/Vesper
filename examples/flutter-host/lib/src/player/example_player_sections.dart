@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
+import '../shell/example_host_strings.dart';
 import 'example_dolby_acceptance_catalog.dart';
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
@@ -86,7 +87,9 @@ class ExampleThemeModeControl extends StatelessWidget {
         children: <Widget>[
           ExampleThemeModeChip(
             icon: Icons.brightness_auto_rounded,
-            label: ExampleThemeMode.system.title,
+            label: ExampleThemeMode.system.title(
+              ExampleHostStrings.of(context),
+            ),
             selected: themeMode == ExampleThemeMode.system,
             palette: palette,
             onTap: () => onThemeModeChange(ExampleThemeMode.system),
@@ -94,7 +97,7 @@ class ExampleThemeModeControl extends StatelessWidget {
           const SizedBox(width: 10),
           ExampleThemeModeChip(
             icon: Icons.light_mode_rounded,
-            label: ExampleThemeMode.light.title,
+            label: ExampleThemeMode.light.title(ExampleHostStrings.of(context)),
             selected: themeMode == ExampleThemeMode.light,
             palette: palette,
             onTap: () => onThemeModeChange(ExampleThemeMode.light),
@@ -102,7 +105,7 @@ class ExampleThemeModeControl extends StatelessWidget {
           const SizedBox(width: 10),
           ExampleThemeModeChip(
             icon: Icons.dark_mode_rounded,
-            label: ExampleThemeMode.dark.title,
+            label: ExampleThemeMode.dark.title(ExampleHostStrings.of(context)),
             selected: themeMode == ExampleThemeMode.dark,
             palette: palette,
             onTap: () => onThemeModeChange(ExampleThemeMode.dark),
@@ -141,6 +144,7 @@ class ExampleQuickSourcePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -153,7 +157,7 @@ class ExampleQuickSourcePanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            '媒体源',
+            strings[ExampleHostText.sourceSectionTitle],
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: palette.title,
               fontWeight: FontWeight.bold,
@@ -161,7 +165,7 @@ class ExampleQuickSourcePanel extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            '使用这些演示操作在本地文件、HLS、DASH 和自定义远程 URL 之间切换。',
+            strings[ExampleHostText.sourceSectionSubtitle],
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: palette.body),
@@ -173,22 +177,22 @@ class ExampleQuickSourcePanel extends StatelessWidget {
               children: <Widget>[
                 OutlinedButton(
                   onPressed: localFilesEnabled ? onPickVideo : null,
-                  child: const Text('选择视频'),
+                  child: Text(strings[ExampleHostText.openMediaPickLocal]),
                 ),
                 const SizedBox(width: 10),
                 OutlinedButton(
                   onPressed: onUseHlsDemo,
-                  child: const Text('HLS 演示'),
+                  child: Text(strings[ExampleHostText.sampleHlsTitle]),
                 ),
                 const SizedBox(width: 10),
                 OutlinedButton(
                   onPressed: onUseLiveDvrAcceptance,
-                  child: const Text('Live DVR 验收'),
+                  child: Text(strings[ExampleHostText.sampleLiveDvrTitle]),
                 ),
                 const SizedBox(width: 10),
                 OutlinedButton(
                   onPressed: dashEnabled ? onUseDashDemo : null,
-                  child: const Text('DASH 演示'),
+                  child: Text(strings[ExampleHostText.sampleDashTitle]),
                 ),
               ],
             ),
@@ -207,16 +211,18 @@ class ExampleQuickSourcePanel extends StatelessWidget {
             controller: remoteUrlController,
             keyboardType: TextInputType.url,
             maxLines: 1,
-            decoration: const InputDecoration(labelText: '远程流 URL'),
+            decoration: InputDecoration(
+              labelText: strings[ExampleHostText.openMediaStreamUrl],
+            ),
           ),
           const SizedBox(height: 14),
           FilledButton(
             onPressed: onOpenRemote,
             style: FilledButton.styleFrom(
               backgroundColor: palette.primaryAction,
-              foregroundColor: Colors.white,
+              foregroundColor: palette.onPrimaryAction,
             ),
-            child: const Text('打开远程 URL'),
+            child: Text(strings[ExampleHostText.openMediaOpenUrl]),
           ),
         ],
       ),

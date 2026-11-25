@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
@@ -21,8 +21,19 @@ import 'example_player_sheet.dart';
 import 'example_player_stage.dart';
 import '../hdr_evidence/hdr_evidence_capture.dart';
 import '../hdr_evidence/hdr_evidence_capture_output.dart';
+import '../shell/example_host_navigation.dart';
+import '../shell/example_host_shell.dart';
+import '../shell/example_host_strings.dart';
+import '../shell/example_library_catalog.dart';
+import '../shell/example_library_pages.dart';
+import '../shell/example_open_media_sheet.dart';
+import '../shell/example_play_widgets.dart';
+import '../shell/example_settings_sheet.dart';
 
 part 'player_host_source.dart';
+part 'player_host_shell_actions.dart';
+part 'player_host_shell_pages.dart';
+part 'player_host_shell_downloads.dart';
 part 'player_host_external_playback.dart';
 part 'player_host_playlist.dart';
 part 'player_host_hdr_evidence.dart';
@@ -69,7 +80,10 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   _externalRoutesSubscription;
   StreamSubscription<VesperExternalPlaybackSessionEvent>?
   _externalEventsSubscription;
-  ExampleHostTab _selectedTab = ExampleHostTab.play;
+  ExampleHostNavigationState _navigation = const ExampleHostNavigationState();
+  double _fabHeight = 0;
+  bool _fabExtended = true;
+  Set<int> _pendingRemovalTaskIds = <int>{};
   ExampleResilienceProfile _selectedResilienceProfile =
       ExampleResilienceProfile.balanced;
   ExampleSourceNormalizerSetting _sourceNormalizerSetting =
@@ -237,11 +251,16 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
-    final immersivePlayer =
-        mediaQuery.orientation == Orientation.landscape &&
-        _selectedTab == ExampleHostTab.play;
+    final autoFullscreen = exampleShouldAutoFullscreen(
+      isLandscape: mediaQuery.orientation == Orientation.landscape,
+      windowHeight: mediaQuery.size.height,
+    );
+    final isFullscreen = _navigation.isFullscreen(
+      autoFullscreen: autoFullscreen,
+    );
     final useDarkTheme = Theme.of(context).brightness == Brightness.dark;
     final palette = exampleHostPalette(useDarkTheme);
+    final strings = ExampleHostStrings.of(context);
 
     if (_pictureInPicturePresentation && Platform.isAndroid) {
       return Scaffold(
@@ -250,54 +269,51 @@ class _PlayerHostPageState extends State<PlayerHostPage>
       );
     }
 
-    final body = switch (_selectedTab) {
+    final listBottomPadding = exampleFabAwareBottomPadding(
+      fabHeight: _navigation.tab == ExampleHostTab.play ? _fabHeight : 0,
+    );
+    final body = switch (_navigation.tab) {
       ExampleHostTab.play => _buildPlayerFutureContent(
         context,
-        immersivePlayer: immersivePlayer,
+        immersivePlayer: isFullscreen,
         palette: palette,
+        bottomPadding: listBottomPadding,
       ),
-      ExampleHostTab.diagnostics => _buildDiagnosticsFutureContent(
+      ExampleHostTab.library => _buildLibraryContent(listBottomPadding),
+      ExampleHostTab.downloads => _buildDownloadFutureContent(palette),
+      ExampleHostTab.lab => _buildDiagnosticsFutureContent(
         context,
         palette: palette,
       ),
-      ExampleHostTab.downloads => _buildDownloadFutureContent(palette),
     };
+    final openCollection = _navigation.isCollectionVisible
+        ? exampleLibraryCollectionById(_navigation.openCollection!)
+        : null;
 
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[palette.pageTop, palette.pageBottom],
-          ),
-        ),
-        child: immersivePlayer ? body : SafeArea(child: body),
-      ),
-      bottomNavigationBar: immersivePlayer
+    return ExampleHostShell(
+      navigation: _navigation,
+      isFullscreen: isFullscreen,
+      title: openCollection != null
+          ? strings[openCollection.titleKey]
+          : _navigation.tab == ExampleHostTab.play
+          ? strings[ExampleHostText.appTitle]
+          : strings[_navigation.tab.textKey],
+      body: body,
+      fabExtended: _fabExtended,
+      onFabSize: _handleFabSize,
+      onSelectTab: _selectShellTab,
+      onSystemBack: _handleSystemBack,
+      onTitleBack: openCollection == null
           ? null
-          : NavigationBar(
-              selectedIndex: _selectedTab.index,
-              onDestinationSelected: (index) {
-                setState(() {
-                  _selectedTab = ExampleHostTab.values[index];
-                });
-              },
-              destinations: const <Widget>[
-                NavigationDestination(
-                  icon: Icon(Icons.video_library_rounded),
-                  label: '播放',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.troubleshoot_rounded),
-                  label: '诊断',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.download_rounded),
-                  label: '下载',
-                ),
-              ],
-            ),
+          : () => _setNavigation(_navigation.closeCollection()),
+      onOpenSettings: () => unawaited(
+        showExampleSettingsSheet(
+          context,
+          themeMode: widget.themeMode,
+          onThemeModeChange: widget.onThemeModeChange,
+        ),
+      ),
+      onOpenMedia: () => unawaited(_openMediaSheet()),
     );
   }
 

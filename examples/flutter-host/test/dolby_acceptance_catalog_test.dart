@@ -241,37 +241,37 @@ void main() {
     );
   });
 
-  test('all Dolby acceptance profiles and DRM variants require direct native playback', () {
-    final profileSet = <ExampleDolbyAcceptanceProfile>{};
-    final drmSet = <ExampleDolbyAcceptanceDrmKind>{};
-    final protocolSet = <VesperPlayerSourceProtocol>{};
+  test(
+    'all Dolby acceptance profiles and DRM variants require direct native playback',
+    () {
+      final profileSet = <ExampleDolbyAcceptanceProfile>{};
+      final drmSet = <ExampleDolbyAcceptanceDrmKind>{};
+      final protocolSet = <VesperPlayerSourceProtocol>{};
 
-    for (final preset in exampleDolbyAcceptanceCatalog) {
-      profileSet.add(preset.profile);
-      drmSet.add(preset.drmKind);
-      protocolSet.add(preset.protocol);
-      expect(
-        exampleDolbyAcceptancePresetForSource(preset.source),
-        same(preset),
-        reason: preset.id,
-      );
-      expect(
-        exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
-          preset.source,
-        ),
-        isTrue,
-        reason: preset.id,
-      );
-    }
+      for (final preset in exampleDolbyAcceptanceCatalog) {
+        profileSet.add(preset.profile);
+        drmSet.add(preset.drmKind);
+        protocolSet.add(preset.protocol);
+        expect(
+          exampleDolbyAcceptancePresetForSource(preset.source),
+          same(preset),
+          reason: preset.id,
+        );
+        expect(
+          exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
+            preset.source,
+          ),
+          isTrue,
+          reason: preset.id,
+        );
+      }
 
-    expect(profileSet, ExampleDolbyAcceptanceProfile.values.toSet());
-    expect(drmSet, ExampleDolbyAcceptanceDrmKind.values.toSet());
-    expect(
-      protocolSet,
-      <VesperPlayerSourceProtocol>{
+      expect(profileSet, ExampleDolbyAcceptanceProfile.values.toSet());
+      expect(drmSet, ExampleDolbyAcceptanceDrmKind.values.toSet());
+      expect(protocolSet, <VesperPlayerSourceProtocol>{
         VesperPlayerSourceProtocol.dash,
         VesperPlayerSourceProtocol.hls,
-      },
-    );
-  });
+      });
+    },
+  );
 }

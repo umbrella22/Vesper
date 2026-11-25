@@ -7,10 +7,11 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
     if (_isCapturingHdrEvidence) {
       return;
     }
+    final strings = _hostStrings;
     final preset = _selectedHdrEvidencePreset;
     final source = _sourceForHdrEvidencePreset(preset);
     if (source == null) {
-      _showMessage('请先选择本地文件或远程 URL，再采集该 HDR evidence 样本。');
+      _showMessage(strings[ExampleHostText.hdrEvidenceNeedsSource]);
       return;
     }
 
@@ -63,17 +64,28 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
       if (!mounted) {
         return;
       }
-      _showMessage('HDR evidence bundle 已写入：${directory.path}');
+      _showMessage(
+        strings.format(ExampleHostText.hdrEvidenceWritten, <String, Object?>{
+          'path': directory.path,
+        }),
+      );
       _updateState(() {
-        _appendHostLog(title: 'HDR evidence 结果', detail: directory.path);
+        _appendHostLog(
+          title: strings[ExampleHostText.logHdrEvidenceResult],
+          detail: directory.path,
+        );
       });
     } catch (error) {
       if (mounted) {
-        _showMessage('HDR evidence capture 失败：$error');
+        _showMessage(
+          strings.format(ExampleHostText.hdrEvidenceFailed, <String, Object?>{
+            'error': error,
+          }),
+        );
         _updateState(() {
           _appendHostLog(
             severity: ExampleHostLogSeverity.error,
-            title: 'HDR evidence 结果',
+            title: strings[ExampleHostText.logHdrEvidenceResult],
             detail: '$error',
           );
         });
@@ -135,8 +147,14 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
       final result = await showDialog<Map<String, Object?>?>(
         context: context,
         builder: (context) {
+          final strings = ExampleHostStrings.of(context);
           return AlertDialog(
-            title: Text('确认 ${preset.label} evidence metadata'),
+            title: Text(
+              strings.format(
+                ExampleHostText.hdrEvidenceConfirm,
+                <String, Object?>{'label': preset.label},
+              ),
+            ),
             content: SizedBox(
               width: 520,
               child: SingleChildScrollView(
@@ -162,7 +180,7 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
             actions: <Widget>[
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('取消'),
+                child: Text(strings[ExampleHostText.cancel]),
               ),
               FilledButton(
                 onPressed: () {
@@ -172,7 +190,7 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
                       entry.key: _metadataValue(entry.key, entry.value.text),
                   });
                 },
-                child: const Text('开始采集'),
+                child: Text(strings[ExampleHostText.hdrEvidenceStart]),
               ),
             ],
           );

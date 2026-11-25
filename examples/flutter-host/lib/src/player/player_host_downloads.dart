@@ -39,19 +39,23 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
     if (!mounted) {
       return;
     }
+    final strings = _hostStrings;
     _updateState(() {
       _pendingDownloadTasks = _pendingDownloadTasks
           .where((task) => task.requestId != assetId)
           .toList(growable: false);
       _downloadMessage = error != null
-          ? '准备下载任务失败：$error'
+          ? strings.format(
+              ExampleHostText.downloadPrepareFailed,
+              <String, Object?>{'error': error},
+            )
           : taskId == null
-          ? '创建下载任务失败。'
+          ? strings[ExampleHostText.downloadCreateFailed]
           : null;
       if (_downloadMessage != null) {
         _appendHostLog(
           severity: ExampleHostLogSeverity.error,
-          title: '下载任务创建失败',
+          title: strings[ExampleHostText.logDownloadCreateFailed],
           detail: _downloadMessage,
         );
       }
@@ -62,7 +66,7 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
     final uri = _downloadUrlController.text.trim();
     if (uri.isEmpty) {
       _updateState(() {
-        _downloadMessage = '请输入下载 URL。';
+        _downloadMessage = _hostStrings[ExampleHostText.downloadUrlEmpty];
       });
       return;
     }
@@ -96,7 +100,7 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
     if (!mounted || succeeded) {
       return;
     }
-    _showMessage('下载任务操作失败。');
+    _showMessage(_hostStrings[ExampleHostText.downloadActionFailed]);
   }
 
   Future<File> _createDownloadExportFile(
@@ -119,9 +123,10 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
     VesperDownloadManager manager,
     VesperDownloadTaskSnapshot task,
   ) async {
+    final strings = _hostStrings;
     final completedPath = task.assetIndex.completedPath?.trim();
     if (completedPath == null || completedPath.isEmpty) {
-      _showMessage('找不到已完成任务的输出文件。');
+      _showMessage(strings[ExampleHostText.downloadOutputMissing]);
       return;
     }
     if (_savingTaskIds.contains(task.taskId)) {
@@ -133,7 +138,7 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
         task.source.contentFormat == VesperDownloadContentFormat.dashSegments ||
         task.source.contentFormat == VesperDownloadContentFormat.flvSegments;
     if (needsExport && !_isDownloadExportPluginInstalled) {
-      _showMessage('MP4 合成库未安装。');
+      _showMessage(strings[ExampleHostText.downloadExportMissing]);
       return;
     }
     _updateState(() {
@@ -163,14 +168,16 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
       if (!mounted) {
         return;
       }
-      _showMessage('已转存到系统相册。');
+      _showMessage(strings[ExampleHostText.downloadSavedToGallery]);
     } on MissingPluginException {
       if (mounted) {
-        _showMessage('当前宿主暂未接入相册导出能力。');
+        _showMessage(strings[ExampleHostText.downloadGalleryUnsupported]);
       }
     } on PlatformException catch (error) {
       if (mounted) {
-        _showMessage(error.message ?? '转存到系统相册失败。');
+        _showMessage(
+          error.message ?? strings[ExampleHostText.downloadGalleryFailed],
+        );
       }
     } finally {
       if (exportFile != null && await exportFile!.exists()) {

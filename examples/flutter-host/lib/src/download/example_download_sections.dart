@@ -1,9 +1,10 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 import '../player/example_player_helpers.dart';
 import '../player/example_player_models.dart';
 import '../player/example_player_sections.dart';
+import '../shell/example_host_strings.dart';
 
 final class ExamplePendingDownloadTask {
   const ExamplePendingDownloadTask({
@@ -32,6 +33,7 @@ class ExampleDownloadHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final strings = ExampleHostStrings.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -45,7 +47,7 @@ class ExampleDownloadHeader extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          '这个页面专门用于下载会话回归，重点验证共享下载状态机和宿主桥接，不把它包装成完整离线产品流程。',
+          strings[ExampleHostText.downloadHeaderSubtitle],
           style: theme.textTheme.bodyMedium?.copyWith(
             color: palette.body,
             height: 1.45,
@@ -53,7 +55,9 @@ class ExampleDownloadHeader extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          isDownloadExportPluginInstalled ? 'MP4 合成库：已安装' : 'MP4 合成库未安装。',
+          strings[isDownloadExportPluginInstalled
+              ? ExampleHostText.downloadExportInstalled
+              : ExampleHostText.downloadExportMissing],
           style: theme.textTheme.bodySmall?.copyWith(
             color: palette.body,
             height: 1.45,
@@ -84,10 +88,11 @@ class ExampleDownloadCreateSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '创建下载任务',
-      subtitle: '用 HLS 和 DASH 演示按钮快速回归，或者粘贴远程 URL 创建一个前台下载任务。',
+      title: strings[ExampleHostText.downloadCreateTitle],
+      subtitle: strings[ExampleHostText.downloadCreateSubtitle],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -97,11 +102,11 @@ class ExampleDownloadCreateSection extends StatelessWidget {
             children: <Widget>[
               OutlinedButton(
                 onPressed: onUseHlsDemo,
-                child: const Text('下载 HLS 演示'),
+                child: Text(strings[ExampleHostText.downloadHlsDemo]),
               ),
               OutlinedButton(
                 onPressed: onUseDashDemo,
-                child: const Text('下载 DASH 演示'),
+                child: Text(strings[ExampleHostText.downloadDashDemo]),
               ),
             ],
           ),
@@ -120,16 +125,18 @@ class ExampleDownloadCreateSection extends StatelessWidget {
             controller: remoteUrlController,
             keyboardType: TextInputType.url,
             maxLines: 1,
-            decoration: const InputDecoration(labelText: '下载 URL'),
+            decoration: InputDecoration(
+              labelText: strings[ExampleHostText.downloadUrlLabel],
+            ),
           ),
           const SizedBox(height: 14),
           FilledButton(
             onPressed: onCreateRemote,
             style: FilledButton.styleFrom(
               backgroundColor: palette.primaryAction,
-              foregroundColor: Colors.white,
+              foregroundColor: palette.onPrimaryAction,
             ),
-            child: const Text('创建远程任务'),
+            child: Text(strings[ExampleHostText.downloadCreateRemote]),
           ),
         ],
       ),
@@ -189,13 +196,14 @@ class ExampleDownloadTasksSection extends StatelessWidget {
         ),
       ),
     ];
+    final strings = ExampleHostStrings.of(context);
     return ExampleSectionShell(
       palette: palette,
-      title: '任务列表',
-      subtitle: '这个示例保持在前台执行和任务生命周期回归层面，不宣称后台恢复、离线 DRM 或完整打包式 HLS/DASH 产品能力。',
+      title: strings[ExampleHostText.downloadTasksTitle],
+      subtitle: strings[ExampleHostText.downloadTasksSubtitle],
       child: visibleTasks.isEmpty && pendingTasks.isEmpty
           ? Text(
-              '还没有创建任何下载任务。',
+              strings[ExampleHostText.downloadTasksEmpty],
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: palette.body),
@@ -217,6 +225,7 @@ class _ExamplePendingDownloadTaskRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final strings = ExampleHostStrings.of(context);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -239,7 +248,8 @@ class _ExamplePendingDownloadTaskRow extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'assetId: ${task.assetId} · 准备中',
+            'assetId: ${task.assetId} · '
+            '${strings[ExampleHostText.downloadStatePreparing]}',
             style: theme.textTheme.bodySmall?.copyWith(
               color: palette.body,
               height: 1.45,
@@ -249,7 +259,7 @@ class _ExamplePendingDownloadTaskRow extends StatelessWidget {
           const LinearProgressIndicator(),
           const SizedBox(height: 10),
           Text(
-            '正在读取远程清单并生成下载计划…',
+            strings[ExampleHostText.downloadPlanning],
             style: theme.textTheme.bodySmall?.copyWith(
               color: palette.body,
               height: 1.45,
@@ -257,7 +267,10 @@ class _ExamplePendingDownloadTaskRow extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '远程地址：${task.sourceUri}',
+            strings.format(
+              ExampleHostText.downloadRemoteAddress,
+              <String, Object?>{'uri': task.sourceUri},
+            ),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.bodySmall?.copyWith(
@@ -295,7 +308,8 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final primaryActionLabel = _downloadPrimaryActionLabel(task.state);
+    final strings = ExampleHostStrings.of(context);
+    final primaryActionLabel = _downloadPrimaryActionLabel(task.state, strings);
     final canSaveToGallery =
         task.assetIndex.completedPath?.trim().isNotEmpty ?? false;
     final requiresExport =
@@ -327,7 +341,8 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'assetId: ${task.assetId} · ${_downloadStateLabel(task.state)}',
+            'assetId: ${task.assetId} · '
+            '${_downloadStateLabel(task.state, strings)}',
             style: theme.textTheme.bodySmall?.copyWith(
               color: palette.body,
               height: 1.45,
@@ -335,7 +350,7 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            _downloadProgressSummary(task),
+            _downloadProgressSummary(task, strings),
             style: theme.textTheme.bodySmall?.copyWith(
               color: palette.body,
               height: 1.45,
@@ -349,7 +364,12 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '正在合成 MP4… ${(normalizedExportProgress * 100).toInt()}%',
+              strings.format(
+                ExampleHostText.downloadExporting,
+                <String, Object?>{
+                  'percent': (normalizedExportProgress * 100).toInt(),
+                },
+              ),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: palette.body,
                 height: 1.45,
@@ -359,7 +379,10 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
           if (task.assetIndex.completedPath case final path?) ...<Widget>[
             const SizedBox(height: 6),
             Text(
-              '输出位置: $path',
+              strings.format(
+                ExampleHostText.downloadOutputPath,
+                <String, Object?>{'path': path},
+              ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -371,7 +394,9 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
           if (task.error?.message case final message?) ...<Widget>[
             const SizedBox(height: 6),
             Text(
-              '错误: $message',
+              strings.format(ExampleHostText.downloadError, <String, Object?>{
+                'message': message,
+              }),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -390,7 +415,7 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
                   onPressed: isSaving ? null : onPrimaryAction,
                   style: FilledButton.styleFrom(
                     backgroundColor: palette.primaryAction,
-                    foregroundColor: Colors.white,
+                    foregroundColor: palette.onPrimaryAction,
                   ),
                   child: Text(primaryActionLabel),
                 ),
@@ -403,14 +428,14 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
                         : palette.title,
                   ),
                   child: Text(
-                    isSaving && normalizedExportProgress != null
-                        ? '正在合成 MP4'
-                        : '转存到相册',
+                    strings[isSaving && normalizedExportProgress != null
+                        ? ExampleHostText.downloadExportingShort
+                        : ExampleHostText.downloadSaveToGallery],
                   ),
                 ),
               TextButton(
                 onPressed: isSaving ? null : onRemoveTask,
-                child: const Text('移除'),
+                child: Text(strings[ExampleHostText.downloadRemove]),
               ),
             ],
           ),
@@ -420,33 +445,47 @@ class _ExampleDownloadTaskRow extends StatelessWidget {
   }
 }
 
-String _downloadStateLabel(VesperDownloadState state) {
-  return switch (state) {
-    VesperDownloadState.queued => '排队中',
-    VesperDownloadState.preparing => '准备中',
-    VesperDownloadState.downloading => '下载中',
-    VesperDownloadState.paused => '已暂停',
-    VesperDownloadState.completed => '已完成',
-    VesperDownloadState.failed => '失败',
-    VesperDownloadState.removed => '已移除',
-    VesperDownloadState.unknown => '未知状态',
-  };
+String _downloadStateLabel(
+  VesperDownloadState state,
+  ExampleHostStrings strings,
+) {
+  return strings[switch (state) {
+    VesperDownloadState.queued => ExampleHostText.downloadStateQueued,
+    VesperDownloadState.preparing => ExampleHostText.downloadStatePreparing,
+    VesperDownloadState.downloading => ExampleHostText.downloadStateDownloading,
+    VesperDownloadState.paused => ExampleHostText.downloadStatePaused,
+    VesperDownloadState.completed => ExampleHostText.downloadStateCompleted,
+    VesperDownloadState.failed => ExampleHostText.downloadStateFailed,
+    VesperDownloadState.removed => ExampleHostText.downloadStateRemoved,
+    VesperDownloadState.unknown => ExampleHostText.downloadStateUnknown,
+  }];
 }
 
-String? _downloadPrimaryActionLabel(VesperDownloadState state) {
-  return switch (state) {
-    VesperDownloadState.queued || VesperDownloadState.failed => '开始',
-    VesperDownloadState.preparing || VesperDownloadState.downloading => '暂停',
-    VesperDownloadState.paused => '恢复',
+String? _downloadPrimaryActionLabel(
+  VesperDownloadState state,
+  ExampleHostStrings strings,
+) {
+  final key = switch (state) {
+    VesperDownloadState.queued ||
+    VesperDownloadState.failed => ExampleHostText.downloadActionStart,
+    VesperDownloadState.preparing ||
+    VesperDownloadState.downloading => ExampleHostText.downloadActionPause,
+    VesperDownloadState.paused => ExampleHostText.downloadActionResume,
     VesperDownloadState.completed ||
     VesperDownloadState.removed ||
     VesperDownloadState.unknown => null,
   };
+  return key == null ? null : strings[key];
 }
 
-String _downloadProgressSummary(VesperDownloadTaskSnapshot task) {
+String _downloadProgressSummary(
+  VesperDownloadTaskSnapshot task,
+  ExampleHostStrings strings,
+) {
   final ratio = task.progress.completionRatio;
-  final ratioText = ratio == null ? '进度未知' : '${(ratio * 100).toInt()}%';
+  final ratioText = ratio == null
+      ? strings[ExampleHostText.downloadProgressUnknown]
+      : '${(ratio * 100).toInt()}%';
   final bytesText =
       '${formatDownloadBytes(task.progress.receivedBytes)} / ${formatDownloadBytes(task.progress.totalBytes)}';
   return '$ratioText · $bytesText';

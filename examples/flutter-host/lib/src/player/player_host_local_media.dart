@@ -1,11 +1,12 @@
 part of 'player_host_page.dart';
 
 extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
-  Future<void> _pickLocalVideo(VesperPlayerController controller) async {
+  /// Picks and plays a local video. Returns `true` when a source was opened.
+  Future<bool> _pickLocalVideo(VesperPlayerController controller) async {
     try {
       final pickedVideo = await ExampleLocalMediaPicker.pickVideo();
       if (!mounted || pickedVideo == null) {
-        return;
+        return false;
       }
       final source = VesperPlayerSource.local(
         uri: pickedVideo.uri,
@@ -17,43 +18,44 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
         source: source,
         localSource: source,
       );
-      return;
+      return true;
     } on MissingPluginException {
       // Fall back to manual input when the host picker is not wired, which keeps debugging simple.
     } on PlatformException catch (error) {
       if (!mounted || error.code == 'cancelled') {
-        return;
+        return false;
       }
     }
 
-    await _promptLocalVideoFallback(controller);
+    return _promptLocalVideoFallback(controller);
   }
 
-  Future<void> _promptLocalVideoFallback(
+  Future<bool> _promptLocalVideoFallback(
     VesperPlayerController controller,
   ) async {
     final localUri = await showDialog<String>(
       context: context,
       builder: (context) {
         final textController = TextEditingController();
+        final strings = ExampleHostStrings.of(context);
         return AlertDialog(
-          title: const Text('选择视频'),
+          title: Text(strings[ExampleHostText.openMediaPickLocal]),
           content: TextField(
             controller: textController,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: '本地路径或 URI',
+            decoration: InputDecoration(
+              labelText: strings[ExampleHostText.localPathLabel],
               hintText: 'file:///sdcard/Movies/demo.mp4',
             ),
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
+              child: Text(strings[ExampleHostText.cancel]),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(textController.text),
-              child: const Text('打开'),
+              child: Text(strings[ExampleHostText.open]),
             ),
           ],
         );
@@ -61,13 +63,16 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
     );
 
     if (!mounted || localUri == null || localUri.trim().isEmpty) {
-      return;
+      return false;
     }
 
     final normalizedUri = normalizeLocalUri(localUri);
     final source = VesperPlayerSource.local(
       uri: normalizedUri,
-      label: localSourceLabel(normalizedUri),
+      label: localSourceLabel(
+        normalizedUri,
+        strings: ExampleHostStrings.of(context),
+      ),
     );
     await _activatePlaylistSource(
       controller,
@@ -75,6 +80,7 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
       source: source,
       localSource: source,
     );
+    return true;
   }
 
   String _sourceKindForEvidenceSource(VesperPlayerSource source) {
@@ -169,6 +175,13 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
   }
 
   Future<void> _toggleFullscreen(Orientation orientation) async {
+    if (mounted) {
+      _updateState(() {
+        _navigation = orientation == Orientation.portrait
+            ? _navigation.enterFullscreen()
+            : _navigation.exitFullscreen();
+      });
+    }
     if (orientation == Orientation.portrait) {
       await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
         DeviceOrientation.landscapeLeft,

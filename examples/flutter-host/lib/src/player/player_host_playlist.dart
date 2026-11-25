@@ -38,6 +38,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
             status: playlistItemStatusLabel(
               index: index,
               activeIndex: activeIndex,
+              strings: ExampleHostStrings.of(context),
             ),
             isActive: isActive,
           );
@@ -70,7 +71,10 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       }
       _playlistItemIds = enqueuePlaylistItem(_playlistItemIds, itemId);
       _activePlaylistItemId = itemId;
-      _appendHostLog(title: '已选择 source', detail: source.label);
+      _appendHostLog(
+        title: _hostStrings[ExampleHostText.logSourceSelected],
+        detail: source.label,
+      );
     });
   }
 
@@ -107,22 +111,28 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     });
   }
 
-  Future<void> _playCustomUrl(VesperPlayerController controller) async {
+  /// Plays the URL in [_remoteUrlController]. Returns `null` on success or
+  /// the error copy to show in the open-media sheet.
+  Future<String?> _playCustomUrl(VesperPlayerController controller) async {
+    final strings = ExampleHostStrings.of(context);
     final uri = _remoteUrlController.text.trim();
-    if (uri.isEmpty) {
-      return;
+    final errorKey = exampleValidateStreamUrl(
+      uri,
+      dashSupported: controller.capabilities.supportsDash,
+    );
+    if (errorKey != null) {
+      return strings[errorKey];
     }
 
     final protocol = inferProtocol(uri);
     if (protocol == VesperPlayerSourceProtocol.dash &&
         !controller.capabilities.supportsDash) {
-      _showMessage('当前平台宿主暂不支持 DASH 流。');
-      return;
+      return strings[ExampleHostText.urlErrorDashUnsupported];
     }
 
     final source = VesperPlayerSource.remote(
       uri: uri,
-      label: '自定义远程流',
+      label: strings[ExampleHostText.sourceLabelCustomRemote],
       protocol: protocol,
     );
     await _activatePlaylistSource(
@@ -131,6 +141,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       source: source,
       remoteSource: source,
     );
+    return null;
   }
 
   Future<void> _activateDolbyAcceptancePreset(
@@ -138,6 +149,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     ExampleDolbyAcceptancePreset preset, {
     required ExamplePlaybackOrigin origin,
   }) async {
+    final strings = _hostStrings;
     final unavailableReason = _dolbyAcceptancePresetUnavailableReason(preset);
     if (unavailableReason != null) {
       _showMessage(unavailableReason);
@@ -145,7 +157,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
         _updateState(() {
           _appendHostLog(
             severity: ExampleHostLogSeverity.warning,
-            title: '已选择 Dolby 预设',
+            title: strings[ExampleHostText.logDolbySelected],
             detail: unavailableReason,
           );
         });
@@ -154,7 +166,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     }
     if (preset.protocol == VesperPlayerSourceProtocol.dash &&
         !controller.capabilities.supportsDash) {
-      _showMessage('当前平台宿主暂不支持 DASH Dolby 验收流。');
+      _showMessage(strings[ExampleHostText.dolbyDashUnsupported]);
       return;
     }
     await _selectSource(controller, preset.source, origin: origin);
@@ -163,11 +175,15 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     }
     _updateState(() {
       _selectedHdrEvidencePreset = preset.toHdrEvidencePreset();
-      _appendHostLog(title: '已选择 Dolby 预设', detail: preset.label);
+      _appendHostLog(
+        title: strings[ExampleHostText.logDolbySelected],
+        detail: preset.label,
+      );
     });
   }
 
   void _addDolbyPresetToQueue(ExampleDolbyAcceptancePreset preset) {
+    final strings = _hostStrings;
     if (!canQueueDolbyAcceptancePresetOnHost(
       preset,
       isAndroid: Platform.isAndroid,
@@ -175,12 +191,12 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     )) {
       final reason =
           _dolbyAcceptancePresetUnavailableReason(preset) ??
-          '这个 Dolby 预设暂不能加入队列。';
+          strings[ExampleHostText.dolbyQueueUnavailable];
       _showMessage(reason);
       _updateState(() {
         _appendHostLog(
           severity: ExampleHostLogSeverity.warning,
-          title: 'Dolby 预设已加入队列',
+          title: strings[ExampleHostText.logDolbyQueued],
           detail: reason,
         );
       });
@@ -189,7 +205,10 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     final itemId = flutterDolbyPlaylistItemId(preset.id);
     _updateState(() {
       _playlistItemIds = enqueuePlaylistItem(_playlistItemIds, itemId);
-      _appendHostLog(title: 'Dolby 预设已加入队列', detail: preset.label);
+      _appendHostLog(
+        title: strings[ExampleHostText.logDolbyQueued],
+        detail: preset.label,
+      );
     });
   }
 

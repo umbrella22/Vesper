@@ -1,9 +1,12 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vesper_player/vesper_player.dart';
 
-enum ExamplePlayerSheet { menu, quality, audio, subtitle, speed }
+import '../shell/example_host_strings.dart';
 
-enum ExampleHostTab { play, diagnostics, downloads }
+export '../shell/example_host_navigation.dart'
+    show ExampleHostTab, ExampleLibraryCollectionId;
+
+enum ExamplePlayerSheet { menu, quality, audio, subtitle, speed }
 
 sealed class ExamplePlaybackOrigin {
   const ExamplePlaybackOrigin();
@@ -42,12 +45,12 @@ final class ExampleHostLogEntry {
 enum ExampleThemeMode { system, light, dark }
 
 extension ExampleThemeModeLabels on ExampleThemeMode {
-  String get title {
-    return switch (this) {
-      ExampleThemeMode.system => '跟随系统',
-      ExampleThemeMode.light => '浅色',
-      ExampleThemeMode.dark => '深色',
-    };
+  String title([ExampleHostStrings strings = ExampleHostStrings.zh]) {
+    return strings[switch (this) {
+      ExampleThemeMode.system => ExampleHostText.themeSystem,
+      ExampleThemeMode.light => ExampleHostText.themeLight,
+      ExampleThemeMode.dark => ExampleHostText.themeDark,
+    }];
   }
 }
 
@@ -63,9 +66,10 @@ enum ExampleSourceNormalizerSetting {
 
 extension ExampleSourceNormalizerSettingLabels
     on ExampleSourceNormalizerSetting {
-  String get title {
+  String title([ExampleHostStrings strings = ExampleHostStrings.zh]) {
     return switch (this) {
-      ExampleSourceNormalizerSetting.disabled => 'SourceNormalizer 关闭',
+      ExampleSourceNormalizerSetting.disabled =>
+        strings[ExampleHostText.normalizerOff],
       ExampleSourceNormalizerSetting.diagnosticsOnly => 'Diagnostics',
       ExampleSourceNormalizerSetting.preflightOnly => 'Preflight',
       ExampleSourceNormalizerSetting.preferNormalized => 'Prefer normalized',
@@ -73,19 +77,19 @@ extension ExampleSourceNormalizerSettingLabels
     };
   }
 
-  String get subtitle {
-    return switch (this) {
+  String subtitle([ExampleHostStrings strings = ExampleHostStrings.zh]) {
+    return strings[switch (this) {
       ExampleSourceNormalizerSetting.disabled =>
-        '不会为播放探测加载 SourceNormalizer 插件。',
+        ExampleHostText.normalizerDisabledSubtitle,
       ExampleSourceNormalizerSetting.diagnosticsOnly =>
-        '只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。',
+        ExampleHostText.normalizerDiagnosticsSubtitle,
       ExampleSourceNormalizerSetting.preflightOnly =>
-        '加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。',
+        ExampleHostText.normalizerPreflightSubtitle,
       ExampleSourceNormalizerSetting.preferNormalized =>
-        '尝试使用 disk-backed fMP4/HLS normalized playback，失败时回退原始 source。',
+        ExampleHostText.normalizerPreferSubtitle,
       ExampleSourceNormalizerSetting.requireNormalized =>
-        '要求使用 disk-backed normalized playback，失败时直接展示错误。',
-    };
+        ExampleHostText.normalizerRequireSubtitle,
+    }];
   }
 
   VesperSourceNormalizerMode get mode {
@@ -128,13 +132,17 @@ extension ExampleResilienceProfileLabels on ExampleResilienceProfile {
     };
   }
 
-  String get subtitle {
-    return switch (this) {
-      ExampleResilienceProfile.balanced => '通用默认，适合大多数远程流',
-      ExampleResilienceProfile.streaming => '拉大缓冲窗口，优先稳定播放',
-      ExampleResilienceProfile.resilient => '高重试与高缓存，适合弱网回放',
-      ExampleResilienceProfile.lowLatency => '缩短缓冲和缓存，优先追求时延',
-    };
+  String subtitle([ExampleHostStrings strings = ExampleHostStrings.zh]) {
+    return strings[switch (this) {
+      ExampleResilienceProfile.balanced =>
+        ExampleHostText.resilienceBalancedSubtitle,
+      ExampleResilienceProfile.streaming =>
+        ExampleHostText.resilienceStreamingSubtitle,
+      ExampleResilienceProfile.resilient =>
+        ExampleHostText.resilienceResilientSubtitle,
+      ExampleResilienceProfile.lowLatency =>
+        ExampleHostText.resilienceLowLatencySubtitle,
+    }];
   }
 
   VesperPlaybackResiliencePolicy get policy {
@@ -207,6 +215,15 @@ final class ExampleHostPalette {
     required this.fieldBackground,
     required this.fieldText,
     required this.primaryAction,
+    required this.onPrimaryAction,
+    required this.accent,
+    required this.onAccent,
+    required this.accentInk,
+    required this.surfaceVariant,
+    required this.outline,
+    required this.error,
+    required this.stage,
+    required this.stageForeground,
   });
 
   final Color pageTop;
@@ -217,34 +234,67 @@ final class ExampleHostPalette {
   final Color body;
   final Color fieldBackground;
   final Color fieldText;
+
+  /// Neutral filled-button color (prototype `--ink`). The amber [accent] is
+  /// reserved for the open-media FAB and the selected navigation indicator so
+  /// each screen keeps at most two prominent accents.
   final Color primaryAction;
+  final Color onPrimaryAction;
+  final Color accent;
+  final Color onAccent;
+  final Color accentInk;
+  final Color surfaceVariant;
+  final Color outline;
+  final Color error;
+  final Color stage;
+  final Color stageForeground;
 }
 
+/// Tokens taken from `Vesper示例-Android-可交互原型.html` (`:root` and
+/// `html[data-theme="dark"]`).
 ExampleHostPalette exampleHostPalette(bool useDarkTheme) {
   if (useDarkTheme) {
     return const ExampleHostPalette(
-      pageTop: Color(0xFF0C1018),
-      pageBottom: Color(0xFF06080D),
-      sectionBackground: Color(0x0AFFFFFF),
-      sectionStroke: Color(0x0FFFFFFF),
-      title: Colors.white,
-      body: Color(0xFF94A0B5),
-      fieldBackground: Color(0x0FFFFFFF),
-      fieldText: Colors.white,
-      primaryAction: Color(0xFF2A8BFF),
+      pageTop: Color(0xFF0E1017),
+      pageBottom: Color(0xFF0E1017),
+      sectionBackground: Color(0xFF171A23),
+      sectionStroke: Color(0x1AECEAE4),
+      title: Color(0xFFECEAE4),
+      body: Color(0xFF9B9EAA),
+      fieldBackground: Color(0xFF20242F),
+      fieldText: Color(0xFFECEAE4),
+      primaryAction: Color(0xFFECEAE4),
+      onPrimaryAction: Color(0xFF0E1017),
+      accent: Color(0xFFE8A93A),
+      onAccent: Color(0xFF1B1406),
+      accentInk: Color(0xFFF0BC5E),
+      surfaceVariant: Color(0xFF20242F),
+      outline: Color(0xFF6E7280),
+      error: Color(0xFFD2463C),
+      stage: Color(0xFF0B0D16),
+      stageForeground: Color(0xFFF4F2EC),
     );
   }
 
   return const ExampleHostPalette(
-    pageTop: Color(0xFFF8F2EA),
-    pageBottom: Color(0xFFF2F4F9),
-    sectionBackground: Color(0xDBFFFFFF),
-    sectionStroke: Color(0x140B1220),
-    title: Color(0xFF101521),
-    body: Color(0xFF5C667A),
-    fieldBackground: Color(0xFFF6F7FA),
-    fieldText: Color(0xFF101521),
-    primaryAction: Color(0xFF256DFF),
+    pageTop: Color(0xFFF5F3EE),
+    pageBottom: Color(0xFFF5F3EE),
+    sectionBackground: Color(0xFFFFFFFF),
+    sectionStroke: Color(0x1A17181E),
+    title: Color(0xFF17181E),
+    body: Color(0xFF5C5F6B),
+    fieldBackground: Color(0xFFECE9E2),
+    fieldText: Color(0xFF17181E),
+    primaryAction: Color(0xFF17181E),
+    onPrimaryAction: Color(0xFFF5F3EE),
+    accent: Color(0xFFE8A93A),
+    onAccent: Color(0xFF1B1406),
+    accentInk: Color(0xFF8C5B00),
+    surfaceVariant: Color(0xFFECE9E2),
+    outline: Color(0xFF8A8D98),
+    error: Color(0xFFD2463C),
+    stage: Color(0xFF0B0D16),
+    stageForeground: Color(0xFFF4F2EC),
   );
 }
 
@@ -277,20 +327,20 @@ String? flutterDolbyPresetIdFromPlaylistItemId(String itemId) {
 
 const List<ExampleSource> exampleSources = <ExampleSource>[
   ExampleSource(
-    title: 'HLS 演示',
-    subtitle: 'Apple BipBop，自适应码率',
+    titleKey: ExampleHostText.sampleHlsTitle,
+    subtitleKey: ExampleHostText.sampleHlsSubtitle,
     uri: flutterHlsDemoUrl,
     protocol: VesperPlayerSourceProtocol.hls,
   ),
   ExampleSource(
-    title: 'DASH 演示',
-    subtitle: 'Envivio，多清晰度清单',
+    titleKey: ExampleHostText.sampleDashTitle,
+    subtitleKey: ExampleHostText.sampleDashSubtitle,
     uri: flutterDashDemoUrl,
     protocol: VesperPlayerSourceProtocol.dash,
   ),
   ExampleSource(
-    title: 'Live DVR 验收',
-    subtitle: 'Unified SCTE-35 公开 HLS，手测 Go Live 与 DVR slider',
+    titleKey: ExampleHostText.sampleLiveDvrTitle,
+    subtitleKey: ExampleHostText.sampleLiveDvrSubtitle,
     uri: flutterLiveDvrAcceptanceUrl,
     protocol: VesperPlayerSourceProtocol.hls,
   ),
@@ -298,21 +348,31 @@ const List<ExampleSource> exampleSources = <ExampleSource>[
 
 final class ExampleSource {
   const ExampleSource({
-    required this.title,
-    required this.subtitle,
+    required this.titleKey,
+    required this.subtitleKey,
     required this.uri,
     required this.protocol,
   });
 
-  final String title;
-  final String subtitle;
+  final ExampleHostText titleKey;
+  final ExampleHostText subtitleKey;
   final String uri;
   final VesperPlayerSourceProtocol protocol;
 
-  VesperPlayerSource toPlayerSource() {
+  String title([ExampleHostStrings strings = ExampleHostStrings.zh]) {
+    return strings[titleKey];
+  }
+
+  String subtitle([ExampleHostStrings strings = ExampleHostStrings.zh]) {
+    return strings[subtitleKey];
+  }
+
+  VesperPlayerSource toPlayerSource([
+    ExampleHostStrings strings = ExampleHostStrings.zh,
+  ]) {
     return VesperPlayerSource.remote(
       uri: uri,
-      label: title,
+      label: title(strings),
       protocol: protocol,
     );
   }
@@ -373,23 +433,29 @@ String? nextPlaylistItemIdOnFinished({
   return playlistItemIds[activeIndex + 1];
 }
 
-VesperPlayerSource flutterHlsDemoSource() {
+VesperPlayerSource flutterHlsDemoSource([
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+]) {
   return VesperPlayerSource.hls(
     uri: flutterHlsDemoUrl,
-    label: 'HLS 演示（BipBop）',
+    label: strings[ExampleHostText.sourceLabelHls],
   );
 }
 
-VesperPlayerSource flutterDashDemoSource() {
+VesperPlayerSource flutterDashDemoSource([
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+]) {
   return VesperPlayerSource.dash(
     uri: flutterDashDemoUrl,
-    label: 'DASH 演示（Envivio）',
+    label: strings[ExampleHostText.sourceLabelDash],
   );
 }
 
-VesperPlayerSource flutterLiveDvrAcceptanceSource() {
+VesperPlayerSource flutterLiveDvrAcceptanceSource([
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+]) {
   return VesperPlayerSource.hls(
     uri: flutterLiveDvrAcceptanceUrl,
-    label: 'Live DVR 验收（Unified SCTE-35）',
+    label: strings[ExampleHostText.sourceLabelLiveDvr],
   );
 }

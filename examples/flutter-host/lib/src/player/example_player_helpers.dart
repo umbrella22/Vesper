@@ -1,5 +1,6 @@
 import 'package:vesper_player/vesper_player.dart';
 
+import '../shell/example_host_strings.dart';
 import 'example_player_models.dart';
 
 part 'example_player_track_helpers.dart';
@@ -31,72 +32,86 @@ String normalizeLocalUri(String raw) {
   return trimmed;
 }
 
-String localSourceLabel(String uri) {
+String localSourceLabel(
+  String uri, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final normalized = uri.split('?').first;
   final lastSegment = normalized.split('/').last;
   if (lastSegment.isNotEmpty) {
     return lastSegment;
   }
-  return '本地视频';
+  return strings[ExampleHostText.localVideo];
 }
 
-String sheetTitle(ExamplePlayerSheet sheet) {
-  return switch (sheet) {
-    ExamplePlayerSheet.menu => '播放工具',
-    ExamplePlayerSheet.quality => '画质',
-    ExamplePlayerSheet.audio => '音频',
-    ExamplePlayerSheet.subtitle => '字幕',
-    ExamplePlayerSheet.speed => '播放速度',
-  };
+String sheetTitle(
+  ExamplePlayerSheet sheet, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
+  return strings[switch (sheet) {
+    ExamplePlayerSheet.menu => ExampleHostText.sheetMenuTitle,
+    ExamplePlayerSheet.quality => ExampleHostText.sheetQualityTitle,
+    ExamplePlayerSheet.audio => ExampleHostText.sheetAudioTitle,
+    ExamplePlayerSheet.subtitle => ExampleHostText.sheetSubtitleTitle,
+    ExamplePlayerSheet.speed => ExampleHostText.sheetSpeedTitle,
+  }];
 }
 
-String sheetSubtitle(ExamplePlayerSheet sheet) {
-  return switch (sheet) {
-    ExamplePlayerSheet.menu => '打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。',
-    ExamplePlayerSheet.quality => '切换自适应视频，或将流固定到某个具体画质轨道。',
-    ExamplePlayerSheet.audio => '选择当前流暴露出来的音频节目。',
-    ExamplePlayerSheet.subtitle => '选择字幕，或将其关闭。',
-    ExamplePlayerSheet.speed => '预览不同倍速下的播放表现。',
-  };
+String sheetSubtitle(
+  ExamplePlayerSheet sheet, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
+  return strings[switch (sheet) {
+    ExamplePlayerSheet.menu => ExampleHostText.sheetMenuSubtitle,
+    ExamplePlayerSheet.quality => ExampleHostText.sheetQualitySubtitle,
+    ExamplePlayerSheet.audio => ExampleHostText.sheetAudioSubtitle,
+    ExamplePlayerSheet.subtitle => ExampleHostText.sheetSubtitleSubtitle,
+    ExamplePlayerSheet.speed => ExampleHostText.sheetSpeedSubtitle,
+  }];
 }
 
-String stageBadgeText(VesperTimeline timeline) {
-  return switch (timeline.kind) {
-    VesperTimelineKind.live => '直播流',
-    VesperTimelineKind.liveDvr => '带 DVR 窗口的直播',
-    VesperTimelineKind.vod => '点播视频',
-  };
-}
-
-String playlistItemStatusLabel({required int index, required int activeIndex}) {
+String playlistItemStatusLabel({
+  required int index,
+  required int activeIndex,
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   if (activeIndex < 0) {
-    return '隐藏';
+    return strings[ExampleHostText.playlistStatusHidden];
   }
   if (index == activeIndex) {
-    return '当前播放';
+    return strings[ExampleHostText.playlistStatusPlaying];
   }
 
   final distance = (index - activeIndex).abs();
   if (distance == 1) {
-    return '临近可见';
+    return strings[ExampleHostText.playlistStatusNearby];
   }
-  return '仅预取';
+  return strings[ExampleHostText.playlistStatusPrefetch];
 }
 
-String liveButtonLabel(VesperTimeline timeline) {
+String liveButtonLabel(
+  VesperTimeline timeline, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final liveEdge = timeline.goLivePositionMs;
   if (liveEdge == null) {
-    return '回到直播';
+    return strings[ExampleHostText.liveGoLive];
   }
   final behindMs = (liveEdge - timeline.clampedPosition(timeline.positionMs))
       .clamp(0, liveEdge);
   if (behindMs > 1500) {
-    return '直播 -${formatMillis(behindMs)}';
+    return strings.format(ExampleHostText.liveBehind, <String, Object?>{
+      'behind': formatMillis(behindMs),
+    });
   }
-  return '直播';
+  return strings[ExampleHostText.live];
 }
 
-String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
+String timelineSummary(
+  VesperTimeline timeline,
+  double? pendingSeekRatio, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final displayedPosition = pendingSeekRatio == null
       ? timeline.clampedPosition(timeline.positionMs)
       : timeline.positionForRatio(pendingSeekRatio);
@@ -105,9 +120,11 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
     case VesperTimelineKind.live:
       final liveEdge = timeline.goLivePositionMs;
       if (liveEdge == null) {
-        return '直播';
+        return strings[ExampleHostText.live];
       }
-      return '直播 • 实时点 ${formatMillis(liveEdge)}';
+      return strings.format(ExampleHostText.liveEdgeSummary, <String, Object?>{
+        'edge': formatMillis(liveEdge),
+      });
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -123,15 +140,16 @@ String timelineSummary(VesperTimeline timeline, double? pendingSeekRatio) {
 
 String compactTimelineSummary(
   VesperTimeline timeline,
-  double? pendingSeekRatio,
-) {
+  double? pendingSeekRatio, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final displayedPosition = pendingSeekRatio == null
       ? timeline.clampedPosition(timeline.positionMs)
       : timeline.positionForRatio(pendingSeekRatio);
 
   switch (timeline.kind) {
     case VesperTimelineKind.live:
-      return '直播';
+      return strings[ExampleHostText.live];
     case VesperTimelineKind.liveDvr:
       final liveEdge = timeline.goLivePositionMs ?? timeline.durationMs ?? 0;
       final rangeStart = timeline.seekableRange?.startMs ?? 0;
@@ -149,8 +167,9 @@ String qualityButtonLabel(
   VesperTrackCatalog trackCatalog,
   VesperTrackSelectionSnapshot trackSelection,
   String? effectiveVideoTrackId,
-  VesperFixedTrackStatus? fixedTrackStatus,
-) {
+  VesperFixedTrackStatus? fixedTrackStatus, {
+  ExampleHostStrings strings = ExampleHostStrings.zh,
+}) {
   final requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection);
   final effectiveTrack = effectiveVideoTrack(
     trackCatalog,
@@ -166,19 +185,23 @@ String qualityButtonLabel(
   return switch (trackSelection.abrPolicy.mode) {
     VesperAbrMode.fixedTrack
         when requestedTrack != null &&
-            resolvedFixedTrackStatus == VesperFixedTrackStatus.pending =>
-      '锁定中 · ${qualityLabel(requestedTrack)}',
-    VesperAbrMode.fixedTrack
-        when requestedTrack != null &&
-            resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback =>
-      '锁定中 · ${qualityLabel(requestedTrack)}',
-    VesperAbrMode.fixedTrack when requestedTrack != null =>
-      '锁定 · ${qualityLabel(requestedTrack)}',
-    VesperAbrMode.fixedTrack => '画质',
-    VesperAbrMode.constrained || VesperAbrMode.auto
-        when effectiveTrack != null =>
-      '自动 · ${qualityLabel(effectiveTrack)}',
-    VesperAbrMode.constrained || VesperAbrMode.auto => '自动',
+            (resolvedFixedTrackStatus == VesperFixedTrackStatus.pending ||
+                resolvedFixedTrackStatus == VesperFixedTrackStatus.fallback) =>
+      strings.format(ExampleHostText.qualityLockingValue, <String, Object?>{
+        'quality': qualityLabel(requestedTrack),
+      }),
+    VesperAbrMode.fixedTrack when requestedTrack != null => strings.format(
+      ExampleHostText.qualityLockedValue,
+      <String, Object?>{'quality': qualityLabel(requestedTrack)},
+    ),
+    VesperAbrMode.fixedTrack => strings[ExampleHostText.sheetQualityTitle],
+    VesperAbrMode.constrained ||
+    VesperAbrMode.auto when effectiveTrack != null => strings.format(
+      ExampleHostText.qualityAutoValue,
+      <String, Object?>{'quality': qualityLabel(effectiveTrack)},
+    ),
+    VesperAbrMode.constrained ||
+    VesperAbrMode.auto => strings[ExampleHostText.auto],
   };
 }
 
