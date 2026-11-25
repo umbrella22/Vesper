@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-private let vesperPlayerKitVersion: Version = "0.11.0"
+private let vesperPlayerKitVersion: Version = "0.12.0"
 
 // Repository development only: point VESPER_FLUTTER_IOS_LOCAL_KIT at a local
 // VesperPlayerKit package to build against the checkout's host kit. Published

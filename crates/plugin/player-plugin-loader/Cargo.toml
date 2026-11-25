@@ -20,8 +20,8 @@ name = "player_plugin_loader"
 [dependencies]
 hex.workspace = true
 libloading.workspace = true
-player-plugin = { package = "vesper-player-plugin", version = "0.11.0", path = "../player-plugin" }
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.11.0", path = "../player-plugin-abi" }
+player-plugin = { package = "vesper-player-plugin", version = "0.12.0", path = "../player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.12.0", path = "../player-plugin-abi" }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true

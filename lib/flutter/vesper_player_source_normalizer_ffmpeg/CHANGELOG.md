@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-25
+
 - Add an opt-in `VESPER_FLUTTER_IOS_LOCAL_KIT` environment variable for repository
   development. When set to a local `VesperPlayerKit` package path, the SwiftPM
   manifest resolves that package instead of the remote binary release; published

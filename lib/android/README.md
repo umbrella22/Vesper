@@ -59,21 +59,21 @@ Stable and prerelease tags publish these coordinates to Maven Central:
 
 ```kotlin
 dependencies {
-    implementation("io.github.umbrella22.vesper:vesper-player-kit:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit:0.12.0")
 
     // Optional Compose integration.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:0.11.0")
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:0.12.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:0.12.0")
 
     // Optional Cast, DLNA, and relay integration. The matching FFmpeg runtime
     // coordinate is resolved transitively for relay format adaptation.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:0.12.0")
 
     // Optional source normalization. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:0.12.0")
 
     // Optional post-download MP4 remux. Core and FFmpeg runtime resolve transitively.
-    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:0.11.0")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:0.12.0")
 
 }
 ```

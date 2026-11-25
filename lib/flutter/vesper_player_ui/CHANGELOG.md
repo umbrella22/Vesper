@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-25
+
 - Localize Stage copy: `VesperPlayerStage` now follows `Localizations.localeOf` and ships English and Simplified Chinese strings aligned with the Android and iOS host kits.
 - Add `VesperPlayerStageStrings.of`, `forLocale`, `en()` and `copyWith`, plus `VesperPlayerStageStringsScope` for app-wide overrides. Explicit `strings` arguments still take precedence.
 - English defaults changed to match the native SDKs: "Live with DVR window", "LIVE", "LIVE · Edge" and "Locked" (was "Pinned"). Pass custom strings to keep the previous wording.

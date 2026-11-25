@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-25
+
 - Localize `VesperPlayerStage` text from `VesperPlayerKitUI` resources. The
   Stage follows the system language and ships English and Simplified Chinese;
   existing callers keep their signatures and now show Chinese on Chinese

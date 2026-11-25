@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-25
+
 <!-- release-notes:en -->
 
 ### Added

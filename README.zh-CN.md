@@ -258,11 +258,11 @@ scripts/vesper ffi c-host-smoke
 
 ### 插件开发
 
-插件 CLI 和 Rust author SDK 使用统一的 `0.11.0` 版本。CLI 可直接从 crates.io
+插件 CLI 和 Rust author SDK 使用统一的 `0.12.0` 版本。CLI 可直接从 crates.io
 安装：
 
 ```sh
-cargo install vesper-player-cli --version 0.11.0 --locked
+cargo install vesper-player-cli --version 0.12.0 --locked
 vesper --version
 ```
 
@@ -270,7 +270,7 @@ Native 插件的 Cargo 依赖写法如下：
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.11.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.12.0" }
 ```
 
 其中 `vesper-player-plugin` 是 crates.io 上的分发包名，依赖 key
@@ -507,7 +507,7 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 
 ## 当前状态
 
-当前源码与包元数据对应 `0.11.0`。Android、iOS、Flutter、plugin archive 与可选
+当前源码与包元数据对应 `0.12.0`。Android、iOS、Flutter、plugin archive 与可选
 FFmpeg-backed 产物均具备面向现代 arm64 平台的受检发布路径；当前发布证据由
 `CURRENT-CHECKLIST.md` 维护。
 

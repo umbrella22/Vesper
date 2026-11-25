@@ -30,9 +30,9 @@ getrandom.workspace = true
 hex.workspace = true
 indexmap.workspace = true
 md-5 = "0.11.0"
-player-plugin = { package = "vesper-player-plugin", version = "0.11.0", path = "../../plugin/player-plugin" }
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.11.0", path = "../../plugin/player-plugin-abi" }
-player-plugin-loader = { package = "vesper-player-plugin-loader", version = "0.11.0", path = "../../plugin/player-plugin-loader" }
+player-plugin = { package = "vesper-player-plugin", version = "0.12.0", path = "../../plugin/player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.12.0", path = "../../plugin/player-plugin-abi" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", version = "0.12.0", path = "../../plugin/player-plugin-loader" }
 quick-xml.workspace = true
 regex.workspace = true
 semver.workspace = true
@@ -56,9 +56,9 @@ zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["fs"] }
-player-platform-process = { package = "vesper-player-platform-process", version = "0.11.0", path = "../../platform/common/player-platform-process" }
+player-platform-process = { package = "vesper-player-platform-process", version = "0.12.0", path = "../../platform/common/player-platform-process" }
 rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-player-platform-process = { package = "vesper-player-platform-process", version = "0.11.0", path = "../../platform/common/player-platform-process" }
+player-platform-process = { package = "vesper-player-platform-process", version = "0.12.0", path = "../../platform/common/player-platform-process" }
 winapi-util = "0.1.11"

@@ -300,11 +300,11 @@ host capabilities.
 The package coordinates use the workspace release version.
 
 ```sh
-cargo install vesper-player-cli --version 0.11.0 --locked
+cargo install vesper-player-cli --version 0.12.0 --locked
 ```
 
 ```toml
-player-plugin = { package = "vesper-player-plugin", version = "=0.11.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.12.0" }
 ```
 
 Native libraries built against earlier plugin interfaces require a rebuild and
@@ -670,7 +670,7 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The workspace and package metadata identify the `0.11.0` product version.
+The workspace and package metadata identify the `0.12.0` product version.
 This checkout contains the native plugin candidate. The [changelog](CHANGELOG.md)
 records released behavior. The
 [current checklist](CURRENT-CHECKLIST.md) tracks candidate verification, and the
