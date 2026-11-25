@@ -23,7 +23,7 @@
     },
     {
       "name": "vesper_fullscreen",
-      "value": "Enter fullscreen"
+      "value": "Fullscreen"
     },
     {
       "name": "vesper_exit_fullscreen",
@@ -35,7 +35,7 @@
     },
     {
       "name": "vesper_more",
-      "value": "Playback settings"
+      "value": "More"
     },
     {
       "name": "vesper_lock",
@@ -59,7 +59,7 @@
     },
     {
       "name": "vesper_on_demand",
-      "value": "On demand"
+      "value": "Video on demand"
     },
     {
       "name": "vesper_timeline_unknown",
@@ -79,7 +79,7 @@
     },
     {
       "name": "vesper_quality",
-      "value": "Video quality"
+      "value": "Quality"
     },
     {
       "name": "vesper_quality_locked",
@@ -95,7 +95,7 @@
     },
     {
       "name": "vesper_auto",
-      "value": "Automatic"
+      "value": "Auto"
     },
     {
       "name": "vesper_off",

@@ -23,7 +23,7 @@
     },
     {
       "name": "vesper_fullscreen",
-      "value": "进入全屏"
+      "value": "全屏"
     },
     {
       "name": "vesper_exit_fullscreen",
@@ -35,7 +35,7 @@
     },
     {
       "name": "vesper_more",
-      "value": "播放设置"
+      "value": "更多"
     },
     {
       "name": "vesper_lock",
@@ -59,7 +59,7 @@
     },
     {
       "name": "vesper_on_demand",
-      "value": "点播"
+      "value": "点播视频"
     },
     {
       "name": "vesper_timeline_unknown",
@@ -71,7 +71,7 @@
     },
     {
       "name": "vesper_position",
-      "value": "播放位置"
+      "value": "播放进度"
     },
     {
       "name": "vesper_speed",
