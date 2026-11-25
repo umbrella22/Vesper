@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+<!-- release-notes:en -->
+
+### Added
+
+- Localize the Stage UI on iOS and Flutter. `VesperPlayerKitUI` follows the
+  system language and `vesper_player_ui` follows `Localizations.localeOf`; both
+  ship English and Simplified Chinese, matching Android and HarmonyOS.
+- Override Stage text on iOS with `VesperPlayerStageStrings.localized()`, the
+  Stage `strings:` argument or the `vesperPlayerStageStrings(_:)` modifier, and
+  on Flutter with `VesperPlayerStageStrings.of`, `forLocale`, `copyWith` or
+  `VesperPlayerStageStringsScope`. Existing call sites keep their signatures.
+- Add the opt-in `VESPER_FLUTTER_IOS_LOCAL_KIT` variable so repository builds
+  of the Flutter iOS plugins can resolve a local `VesperPlayerKit` package.
+  Published packages still resolve the remote binary release.
+
+### Changed
+
+- Use the same Stage wording on Android, iOS, HarmonyOS, and Flutter. English
+  defaults now read `LIVE`, `Live with DVR window`, `Locked`, `Video on demand`,
+  `Fullscreen`, `More`, and `Quality`, and live summaries use `·` as the
+  separator. Pass custom strings to keep the previous wording.
+- Rebuild the Android, iOS, HarmonyOS, and Flutter example hosts around Play,
+  Library, Downloads, and Lab tabs, with an Open media sheet, a settings sheet,
+  and amber light and dark themes.
+- Raise the Flutter `material_ui` dependency to `^1.11.1`.
+
+<!-- release-notes:zh-CN -->
+
+### 新增
+
+- iOS 和 Flutter 的舞台 UI 支持本地化。`VesperPlayerKitUI` 跟随系统语言，
+  `vesper_player_ui` 跟随 `Localizations.localeOf`，均内置英文和简体中文，与 Android、HarmonyOS 一致。
+- iOS 可通过 `VesperPlayerStageStrings.localized()`、舞台的 `strings:` 参数或
+  `vesperPlayerStageStrings(_:)` 修饰符覆盖舞台文案；Flutter 可通过
+  `VesperPlayerStageStrings.of`、`forLocale`、`copyWith` 或 `VesperPlayerStageStringsScope` 覆盖。现有调用方式不变。
+- 新增可选环境变量 `VESPER_FLUTTER_IOS_LOCAL_KIT`，仓库内构建 Flutter iOS 插件时可改用本地
+  `VesperPlayerKit` 包。已发布的包仍使用远程二进制版本。
+
+### 变更
+
+- Android、iOS、HarmonyOS 和 Flutter 的舞台文案统一说法。英文默认文案改为 `LIVE`、
+  `Live with DVR window`、`Locked`、`Video on demand`、`Fullscreen`、`More` 和 `Quality`，
+  直播摘要分隔符统一为 `·`。如需保留旧文案，可传入自定义 strings。
+- Android、iOS、HarmonyOS 和 Flutter 示例宿主改为播放、媒体库、下载、实验室四个标签，
+  新增「打开媒体」和设置面板，以及琥珀色浅色和深色主题。
+- Flutter 的 `material_ui` 依赖升级至 `^1.11.1`。
+
 ## 0.11.0 - 2026-11-23
 
 <!-- release-notes:en -->
