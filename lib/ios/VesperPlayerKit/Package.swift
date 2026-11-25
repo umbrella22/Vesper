@@ -65,7 +65,10 @@ let package = Package(
         .target(
             name: "VesperPlayerKitUI",
             dependencies: ["VesperPlayerKit"],
-            path: "Sources/VesperPlayerKitUI"
+            path: "Sources/VesperPlayerKitUI",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "VesperPlayerKitTests",

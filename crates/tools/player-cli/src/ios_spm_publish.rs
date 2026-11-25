@@ -344,6 +344,7 @@ import PackageDescription
 
 let package = Package(
     name: "VesperPlayerKit",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
     ],
@@ -374,7 +375,10 @@ let package = Package(
         .target(
             name: "VesperPlayerKitUI",
             dependencies: ["VesperPlayerKit"],
-            path: "{UI_SOURCE_PATH}"
+            path: "{UI_SOURCE_PATH}",
+            resources: [
+                .process("Resources"),
+            ]
         ),
     ]
 )
@@ -1105,6 +1109,11 @@ mod tests {
         fs::create_dir_all(&ui).expect("create fixture UI sources");
         fs::write(ui.join("Controls.swift"), "public struct Controls {}\n")
             .expect("write fixture UI source");
+        let strings = ui.join("Resources/en.lproj/VesperPlayerStage.strings");
+        fs::create_dir_all(strings.parent().expect("fixture strings parent"))
+            .expect("create fixture UI resources");
+        fs::write(&strings, "\"vesper.stage.auto\" = \"Auto\";\n")
+            .expect("write fixture UI strings");
         let targets = std::iter::once("VesperPlayerKit")
             .chain(OPTIONAL_BINARY_TARGETS)
             .collect::<Vec<_>>();
@@ -1131,6 +1140,15 @@ mod tests {
         ] {
             assert!(manifest.contains(&format!("name: \"{product}\"")));
         }
+        // VesperPlayerKitUI loads Stage text through Bundle.module.
+        assert!(manifest.contains("defaultLocalization: \"en\""));
+        assert!(manifest.contains(".process(\"Resources\")"));
+        assert!(
+            candidate
+                .join(UI_SOURCE_PATH)
+                .join("Resources/en.lproj/VesperPlayerStage.strings")
+                .is_file()
+        );
         for excluded in [
             "VesperPlayerDecoderVideoToolboxPlugin",
             "VesperPlayerFrameProcessorDiagnosticPlugin",

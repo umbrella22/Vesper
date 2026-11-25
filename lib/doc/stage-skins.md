@@ -299,6 +299,19 @@ modifier scopes standalone controls; apply the Stage's `skin` argument to
 configure an entire Stage. `VesperStagePrimaryPlayButton` accepts an optional
 `label` override for host-localized copy. Skin selection does not localize text.
 
+Stage text is localized separately through `VesperPlayerStageStrings`. The default,
+`VesperPlayerStageStrings.localized()`, follows the system language and ships
+English and Simplified Chinese. Override individual fields and pass the value as
+the Stage `strings` argument, or scope it with `.vesperPlayerStageStrings(_:)`;
+the explicit argument wins. `liveBehindFormat` and `liveEdgeFormat` use one `%@`
+placeholder for the formatted time.
+
+```swift
+var strings = VesperPlayerStageStrings.localized()
+strings.videoOnDemand = String(localized: "stage.vod")
+VesperPlayerStage(/* ... */, strings: strings)
+```
+
 ## Integration boundaries and validation
 
 The skin covers Dart/Compose/SwiftUI Stage controls, timeline, feedback HUD, and

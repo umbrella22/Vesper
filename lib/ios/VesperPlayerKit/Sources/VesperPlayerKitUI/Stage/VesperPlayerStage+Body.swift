@@ -65,7 +65,7 @@ extension VesperPlayerStage {
                             if let onNavigateBack {
                                 StageIconButton(
                                     icon: .navigateBack,
-                                    label: navigateBackAccessibilityLabel ?? VesperPlayerStageStrings.navigateBack,
+                                    label: navigateBackAccessibilityLabel ?? strings.navigateBack,
                                     variant: .navigation,
                                     action: onNavigateBack
                                 )
@@ -80,13 +80,13 @@ extension VesperPlayerStage {
 
                                     if uiState.isBuffering {
                                         StageChip(
-                                            label: VesperPlayerStageStrings.buffering,
+                                            label: strings.buffering,
                                             accent: skin.colors.accent,
                                             compact: true
                                         )
                                     }
                                 }
-                                Text(stageBadgeText(uiState.timeline))
+                                Text(stageBadgeText(uiState.timeline, strings: strings))
                                     .font(.caption)
                                     .foregroundStyle(skin.colors.secondaryForeground)
                             }
@@ -95,7 +95,7 @@ extension VesperPlayerStage {
 
                             StageIconButton(
                                 icon: .more,
-                                label: VesperPlayerStageStrings.more,
+                                label: strings.more,
                                 variant: .toolbar
                             ) {
                                 onOpenSheet(.menu)
@@ -124,6 +124,7 @@ extension VesperPlayerStage {
             }
         }
         .environment(\.vesperPlayerStageSkin, skin)
+        .environment(\.vesperPlayerStageStrings, strings)
         .background(skin.colors.background)
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)

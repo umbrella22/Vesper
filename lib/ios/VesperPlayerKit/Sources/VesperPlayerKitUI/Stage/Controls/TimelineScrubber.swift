@@ -2,6 +2,7 @@ import SwiftUI
 import VesperPlayerKit
 struct TimelineScrubber: View {
     @Environment(\.vesperPlayerStageSkin) private var skin
+    @Environment(\.vesperPlayerStageStrings) private var strings
     private var knobSize: CGFloat { compact ? skin.metrics.timelineThumbSize : skin.metrics.timelineLargeThumbSize }
     private var touchHeight: CGFloat { max(compact ? 22 : 28, max(knobSize, skin.metrics.timelineTrackHeight) + 8) }
     let displayedRatio: Double
@@ -73,7 +74,7 @@ struct TimelineScrubber: View {
                 in: 0...1,
                 step: 0.05
             ) {
-                Text(VesperPlayerStageStrings.playbackPosition)
+                Text(strings.playbackPosition)
             }
             .disabled(!enabled)
             .accessibilityValue(

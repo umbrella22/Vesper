@@ -60,10 +60,10 @@ private func liveDvrWindowSummary(
     )
 }
 
-func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
+func qualityButtonLabel(_ policy: VesperAbrPolicy, strings: VesperPlayerStageStrings) -> String {
     switch policy.mode {
     case .auto:
-        return VesperPlayerStageStrings.auto
+        return strings.auto
     case .constrained:
         if let maxWidth = policy.maxWidth, let maxHeight = policy.maxHeight {
             let resolutionLabel = "\(maxWidth)x\(maxHeight)"
@@ -75,10 +75,10 @@ func qualityButtonLabel(_ policy: VesperAbrPolicy) -> String {
         } else if let maxBitRate = policy.maxBitRate {
             return formatBitRate(maxBitRate)
         } else {
-            return VesperPlayerStageStrings.qualityButtonCapped
+            return strings.qualityCapped
         }
     case .fixedTrack:
-        return VesperPlayerStageStrings.qualityButtonPinned
+        return strings.qualityPinned
     }
 }
 
@@ -86,7 +86,8 @@ func qualityButtonLabel(
     _ trackCatalog: VesperTrackCatalog,
     _ trackSelection: VesperTrackSelectionSnapshot,
     effectiveVideoTrackId: String?,
-    fixedTrackStatus: VesperFixedTrackStatus?
+    fixedTrackStatus: VesperFixedTrackStatus?,
+    strings: VesperPlayerStageStrings
 ) -> String {
     let requestedTrack = requestedFixedVideoTrack(trackCatalog, trackSelection)
     let effectiveTrack = effectiveVideoTrack(trackCatalog, effectiveVideoTrackId)
@@ -100,19 +101,19 @@ func qualityButtonLabel(
     switch trackSelection.abrPolicy.mode {
     case .fixedTrack:
         guard let requestedTrack else {
-            return VesperPlayerStageStrings.quality
+            return strings.quality
         }
         switch resolvedStatus {
         case .pending, .fallback:
-            return "\(VesperPlayerStageStrings.qualityButtonLocking) · \(qualityLabel(requestedTrack))"
+            return "\(strings.qualityLocking) · \(qualityLabel(requestedTrack))"
         case .locked, nil:
-            return "\(VesperPlayerStageStrings.qualityButtonPinned) · \(qualityLabel(requestedTrack))"
+            return "\(strings.qualityPinned) · \(qualityLabel(requestedTrack))"
         }
     case .constrained, .auto:
         if let effectiveTrack {
-            return "\(VesperPlayerStageStrings.auto) · \(qualityLabel(effectiveTrack))"
+            return "\(strings.auto) · \(qualityLabel(effectiveTrack))"
         }
-        return qualityButtonLabel(trackSelection.abrPolicy)
+        return qualityButtonLabel(trackSelection.abrPolicy, strings: strings)
     }
 }
 
@@ -156,43 +157,43 @@ func currentFixedTrackStatus(
     return effectiveVideoTrackId == requestedTrack.id ? .locked : .fallback
 }
 
-func stageBadgeText(_ timeline: TimelineUiState) -> String {
+func stageBadgeText(_ timeline: TimelineUiState, strings: VesperPlayerStageStrings) -> String {
     switch timeline.kind {
     case .vod:
-        return VesperPlayerStageStrings.stageVideoOnDemand
+        return strings.videoOnDemand
     case .live:
-        return VesperPlayerStageStrings.stageLiveStream
+        return strings.liveStream
     case .liveDvr:
-        return VesperPlayerStageStrings.stageLiveWithDvrWindow
+        return strings.liveWithDvrWindow
     }
 }
 
-func liveButtonLabel(_ timeline: TimelineUiState) -> String {
+func liveButtonLabel(_ timeline: TimelineUiState, strings: VesperPlayerStageStrings) -> String {
     switch liveButtonState(timeline) {
     case .goLive:
-        return VesperPlayerStageStrings.goLive
+        return strings.goLive
     case .live:
-        return VesperPlayerStageStrings.live
+        return strings.live
     case let .liveBehind(behindMs):
-        return VesperPlayerStageStrings.liveBehind(formatMillis(behindMs))
+        return strings.liveBehind(formatMillis(behindMs))
     }
 }
 
-func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> String {
+func timelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?, strings: VesperPlayerStageStrings) -> String {
     switch timelineSummaryState(timeline, pendingSeekRatio: pendingSeekRatio) {
     case .live:
-        return VesperPlayerStageStrings.live
+        return strings.live
     case let .liveEdge(liveEdge):
-        return VesperPlayerStageStrings.liveEdge(formatMillis(liveEdge))
+        return strings.liveEdge(formatMillis(liveEdge))
     case let .window(positionMs, endMs):
         return "\(formatMillis(positionMs)) / \(formatMillis(endMs))"
     }
 }
 
-func compactTimelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?) -> String {
+func compactTimelineSummary(_ timeline: TimelineUiState, pendingSeekRatio: Double?, strings: VesperPlayerStageStrings) -> String {
     switch timelineSummaryState(timeline, pendingSeekRatio: pendingSeekRatio) {
     case .live, .liveEdge:
-        return VesperPlayerStageStrings.live
+        return strings.live
     case let .window(positionMs, endMs):
         return "\(formatMillis(positionMs))/\(formatMillis(endMs))"
     }

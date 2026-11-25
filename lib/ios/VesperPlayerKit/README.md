@@ -213,7 +213,9 @@ The package does not embed demo URLs or preset sources. Construct
 ## Stage skins
 
 `VesperPlayerKitUI` exposes `VesperPlayerStageSkin`, SF Symbols and custom image
-builders, and public skinned action buttons. See the [Stage skin contract](../../doc/stage-skins.md)
+builders, and public skinned action buttons. Stage text follows the system
+language (English and Simplified Chinese) and can be overridden with
+`VesperPlayerStageStrings`. See the [Stage skin contract](../../doc/stage-skins.md)
 for SwiftUI scopes, runtime switching, and matching UI package requirements.
 
 ## Minimal SwiftUI Usage

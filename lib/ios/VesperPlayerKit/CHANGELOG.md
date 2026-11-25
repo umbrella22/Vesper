@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Localize `VesperPlayerStage` text from `VesperPlayerKitUI` resources. The
+  Stage follows the system language and ships English and Simplified Chinese;
+  existing callers keep their signatures and now show Chinese on Chinese
+  systems.
+- Make `VesperPlayerStageStrings` a public value type with
+  `localized()` / `localized(locale:)`. Override Stage text with the new
+  `strings:` initializer argument or the `vesperPlayerStageStrings(_:)` modifier;
+  an explicit argument takes precedence over the environment value.
+- Align Stage text with Android and HarmonyOS: the live badge reads `LIVE`,
+  the DVR badge reads `Live with DVR window`, a fixed quality reads `Locked`,
+  and the live-edge summary uses `·` as its separator.
+
 ## 0.11.0 - 2026-11-23
 
 ## 0.10.0 - 2026-11-21

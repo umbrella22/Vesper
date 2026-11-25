@@ -3,6 +3,7 @@ import VesperPlayerKit
 
 @MainActor
 public struct VesperStagePrimaryPlayButton: View {
+    @Environment(\.vesperPlayerStageStrings) private var strings
     private let isPlaying: Bool
     private let label: String?
     private let style: VesperStageButtonStyle?
@@ -16,7 +17,7 @@ public struct VesperStagePrimaryPlayButton: View {
     }
     public var body: some View {
         VesperStageIconButton(
-            label: label ?? (isPlaying ? VesperPlayerStageStrings.pause : VesperPlayerStageStrings.play),
+            label: label ?? (isPlaying ? strings.pause : strings.play),
             variant: .primary, style: style, action: action
         ) { VesperStageIcon(isPlaying ? .pause : .play) }
     }

@@ -10,6 +10,8 @@ public enum VesperStageControlLayout: Hashable {
 @MainActor
 public struct VesperPlayerStage: View {
     let skin: VesperPlayerStageSkin
+    let explicitStrings: VesperPlayerStageStrings?
+    @Environment(\.vesperPlayerStageStrings) var environmentStrings
     let surface: AnyView
     let contentOverlay: AnyView?
     let expandedControlBarLeading: AnyView?
@@ -37,6 +39,8 @@ public struct VesperPlayerStage: View {
     let currentVolumeRatio: () -> Double?
     let onSetVolumeRatio: (Double) -> Double?
     @State var stageSize = CGSize.zero
+
+    var strings: VesperPlayerStageStrings { explicitStrings ?? environmentStrings }
     @State var interactionRevision = 0
     @State var stageGestureKind: StageAreaGestureKind?
     @State var deviceGestureStartRatio = 0.0
@@ -47,6 +51,10 @@ public struct VesperPlayerStage: View {
 
     /// Creates a Stage with optional host content, expanded controls, and a
     /// state-labelled navigation action.
+    ///
+    /// `strings` overrides Stage text. When it is nil, the Stage uses the
+    /// `vesperPlayerStageStrings` environment value, which defaults to
+    /// ``VesperPlayerStageStrings/localized()`` and follows the system language.
     public init(
         surface: AnyView,
         uiState: PlayerHostUiState,
@@ -74,9 +82,11 @@ public struct VesperPlayerStage: View {
         expandedControlBarLeading: AnyView? = nil,
         onNavigateBack: (() -> Void)? = nil,
         navigateBackAccessibilityLabel: String? = nil,
-        skin: VesperPlayerStageSkin? = nil
+        skin: VesperPlayerStageSkin? = nil,
+        strings: VesperPlayerStageStrings? = nil
     ) {
         self.skin = skin ?? VesperPlayerStageSkin()
+        self.explicitStrings = strings
         self.surface = surface
         self.contentOverlay = contentOverlay
         self.expandedControlBarLeading = expandedControlBarLeading

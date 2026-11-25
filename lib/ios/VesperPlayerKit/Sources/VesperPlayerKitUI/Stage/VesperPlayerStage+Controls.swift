@@ -11,7 +11,7 @@ extension VesperPlayerStage {
     }
 
     var playButtonLabel: String {
-        isPlaying ? VesperPlayerStageStrings.pause : VesperPlayerStageStrings.play
+        isPlaying ? strings.pause : strings.play
     }
 
     var fullscreenIcon: VesperStageIconRole {
@@ -19,7 +19,7 @@ extension VesperPlayerStage {
     }
 
     var fullscreenLabel: String {
-        isFullscreen ? VesperPlayerStageStrings.exitFullscreen : VesperPlayerStageStrings.fullscreen
+        isFullscreen ? strings.exitFullscreen : strings.fullscreen
     }
 
     var qualityPillLabel: String {
@@ -27,7 +27,8 @@ extension VesperPlayerStage {
             trackCatalog,
             trackSelection,
             effectiveVideoTrackId: effectiveVideoTrackId,
-            fixedTrackStatus: fixedTrackStatus
+            fixedTrackStatus: fixedTrackStatus,
+            strings: strings
         )
     }
 
@@ -60,13 +61,13 @@ extension VesperPlayerStage {
                 }
             )
 
-            Text(compactTimelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio))
+            Text(compactTimelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio, strings: strings))
                 .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(skin.colors.foreground)
                 .lineLimit(1)
 
             if uiState.timeline.kind == .liveDvr {
-                StagePillButton(label: liveButtonLabel(uiState.timeline), compact: true) {
+                StagePillButton(label: liveButtonLabel(uiState.timeline, strings: strings), compact: true) {
                     onSeekToLiveEdge()
                     controlsVisible = true
                 }
@@ -87,7 +88,7 @@ extension VesperPlayerStage {
 
     var expandedControls: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(timelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio))
+            Text(timelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio, strings: strings))
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(skin.colors.foreground)
                 .lineLimit(1)
@@ -127,7 +128,7 @@ extension VesperPlayerStage {
                 Spacer(minLength: 12)
 
                 if uiState.timeline.kind == .liveDvr {
-                    StagePillButton(label: liveButtonLabel(uiState.timeline), compact: true) {
+                    StagePillButton(label: liveButtonLabel(uiState.timeline, strings: strings), compact: true) {
                         onSeekToLiveEdge()
                         controlsVisible = true
                     }
