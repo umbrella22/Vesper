@@ -192,3 +192,31 @@ fn duplicate_version_or_empty_translation_is_rejected() {
         assert!(!output_path(directory.path()).exists());
     }
 }
+
+#[test]
+fn relative_changelog_links_rewrite_to_tag_blobs_outside_code_and_footer_counts_six_frameworks() {
+    let changelog = CHANGELOG
+        .replace(
+            "- Preserve **manual PiP** after automatic entry is disabled.",
+            "- See [native plugin migration guide](lib/doc/native-plugin-migration.md), `[inline](lib/doc/inline.md)`, and [external](https://example.com/docs).\n\n```markdown\n[fenced](lib/doc/fenced.md)\n```",
+        )
+        .replace(
+            "- 关闭自动进入后，仍然支持**手动画中画**。",
+            "- 参见[迁移指南](./lib/doc/native-plugin-migration.md)。",
+        );
+    let directory = fixture(&changelog, "v0.6.2", true);
+    let output = generate(directory.path(), "v0.6.2");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let notes = fs::read_to_string(output_path(directory.path())).expect("read notes");
+    assert!(notes.contains("[native plugin migration guide](https://github.com/example/vesper/blob/v0.6.2/lib/doc/native-plugin-migration.md)"));
+    assert!(notes.contains("[迁移指南](https://github.com/example/vesper/blob/v0.6.2/lib/doc/native-plugin-migration.md)"));
+    assert!(notes.contains("`[inline](lib/doc/inline.md)`"));
+    assert!(notes.contains("[external](https://example.com/docs)"));
+    assert!(notes.contains("[fenced](lib/doc/fenced.md)"));
+    assert!(notes.contains("the six optional iOS plugin/runtime XCFrameworks"));
+    assert!(!notes.contains("the eight optional iOS plugin/runtime XCFrameworks"));
+}

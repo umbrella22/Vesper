@@ -72,6 +72,7 @@ pub fn generate(
     let notes = render_notes(NotesInput {
         tag,
         previous_tag: previous_tag.as_deref(),
+        repository_url: repository_url.as_deref(),
         compare_url: compare_url.as_deref(),
         download_base: download_base.as_deref(),
         release_channel: release_channel(tag),
@@ -86,6 +87,7 @@ pub fn generate(
 struct NotesInput<'a> {
     tag: &'a str,
     previous_tag: Option<&'a str>,
+    repository_url: Option<&'a str>,
     compare_url: Option<&'a str>,
     download_base: Option<&'a str>,
     release_channel: &'static str,
@@ -99,6 +101,151 @@ struct ChangelogSummaries {
     chinese: String,
 }
 
+fn advance_markdown_fence(line: &str, fence: &mut Option<(u8, usize)>) -> bool {
+    let was_fenced = fence.is_some();
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() <= 3
+        && let Some(&marker @ (b'`' | b'~')) = trimmed.as_bytes().first()
+    {
+        let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
+        match *fence {
+            Some((opening, minimum))
+                if marker == opening
+                    && length >= minimum
+                    && trimmed[length..].trim().is_empty() =>
+            {
+                *fence = None;
+            }
+            None if length >= 3 => *fence = Some((marker, length)),
+            _ => {}
+        }
+    }
+    was_fenced || fence.is_some()
+}
+
+fn is_relative_repo_target(target: &str) -> bool {
+    let clean = target.strip_prefix("./").unwrap_or(target);
+    if clean.is_empty()
+        || clean == "."
+        || clean == ".."
+        || clean.starts_with('/')
+        || clean.starts_with('#')
+        || clean.starts_with("../")
+    {
+        return false;
+    }
+    let prefix = clean.split(['/', '#', '?']).next().unwrap_or("");
+    !prefix.contains(':')
+}
+
+fn rewrite_inline_relative_links(line: &str, repository_url: &str, tag: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut output = String::with_capacity(line.len());
+    let mut copy_from = 0;
+    let mut inline_code: Option<usize> = None;
+    let mut bracket_depth: usize = 0;
+    let mut last_open_is_image = false;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if inline_code.is_none() && bytes[index] == b'\\' && index + 1 < bytes.len() {
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'`' {
+            let run = bytes[index..].iter().take_while(|&&b| b == b'`').count();
+            match inline_code {
+                Some(open_run) if run == open_run => inline_code = None,
+                None => inline_code = Some(run),
+                _ => {}
+            }
+            index += run;
+            continue;
+        }
+        if inline_code.is_some() {
+            index += 1;
+            continue;
+        }
+        match bytes[index] {
+            b'[' => {
+                if bracket_depth == 0 {
+                    last_open_is_image = index > 0 && bytes[index - 1] == b'!';
+                }
+                bracket_depth += 1;
+                index += 1;
+            }
+            b']' if bracket_depth > 0 => {
+                bracket_depth -= 1;
+                if bracket_depth == 0 && !last_open_is_image && bytes.get(index + 1) == Some(&b'(')
+                {
+                    let target_start = index + 2;
+                    let mut depth = 1usize;
+                    let mut scan = target_start;
+                    while scan < bytes.len() {
+                        match bytes[scan] {
+                            b'\\' if scan + 1 < bytes.len() => scan += 2,
+                            b'(' => {
+                                depth += 1;
+                                scan += 1;
+                            }
+                            b')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                scan += 1;
+                            }
+                            _ => scan += 1,
+                        }
+                    }
+                    if depth == 0 {
+                        let inner = &line[target_start..scan];
+                        let leading_ws = inner.len() - inner.trim_start().len();
+                        let trimmed = &inner[leading_ws..];
+                        let dest_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+                        let dest = &trimmed[..dest_len];
+                        if is_relative_repo_target(dest) {
+                            let clean = dest.strip_prefix("./").unwrap_or(dest);
+                            let dest_byte_start = target_start + leading_ws;
+                            let dest_byte_end = dest_byte_start + dest_len;
+                            output.push_str(&line[copy_from..dest_byte_start]);
+                            output.push_str(repository_url.trim_end_matches('/'));
+                            output.push_str("/blob/");
+                            output.push_str(tag);
+                            output.push('/');
+                            output.push_str(clean);
+                            copy_from = dest_byte_end;
+                        }
+                        index = scan + 1;
+                        continue;
+                    }
+                }
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    output.push_str(&line[copy_from..]);
+    output
+}
+
+fn rewrite_relative_markdown_links(markdown: &str, repository_url: &str, tag: &str) -> String {
+    let mut fence = None::<(u8, usize)>;
+    let mut lines = Vec::new();
+    for raw in markdown.lines() {
+        if advance_markdown_fence(raw, &mut fence) {
+            lines.push(raw.to_owned());
+        } else {
+            lines.push(rewrite_inline_relative_links(raw, repository_url, tag));
+        }
+    }
+    let mut result = lines.join("\n");
+    if markdown.ends_with('\n') && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 fn changelog_summaries(source: &str, version: &str) -> ReleaseResult<ChangelogSummaries> {
     let mut found = false;
     let mut active = false;
@@ -109,25 +256,7 @@ fn changelog_summaries(source: &str, version: &str) -> ReleaseResult<ChangelogSu
 
     for raw in source.lines() {
         // Headings and locale markers inside fenced examples are content.
-        let was_fenced = fence.is_some();
-        let trimmed = raw.trim_start_matches(' ');
-        if raw.len() - trimmed.len() <= 3
-            && let Some(&marker @ (b'`' | b'~')) = trimmed.as_bytes().first()
-        {
-            let length = trimmed.bytes().take_while(|byte| *byte == marker).count();
-            match fence {
-                Some((opening, minimum))
-                    if marker == opening
-                        && length >= minimum
-                        && trimmed[length..].trim().is_empty() =>
-                {
-                    fence = None
-                }
-                None if length >= 3 => fence = Some((marker, length)),
-                _ => {}
-            }
-        }
-        if !was_fenced && fence.is_none() {
+        if !advance_markdown_fence(raw, &mut fence) {
             if let Some(heading) = raw.strip_prefix("## ") {
                 active = heading.split_whitespace().next() == Some(version);
                 if active {
@@ -230,7 +359,11 @@ fn render_notes(input: NotesInput<'_>) -> String {
     blank(&mut output);
     line(&mut output, "## Change Summary");
     blank(&mut output);
-    block(&mut output, &input.summaries.english);
+    let english_summary = input.repository_url.map_or_else(
+        || input.summaries.english.clone(),
+        |repo| rewrite_relative_markdown_links(&input.summaries.english, repo, input.tag),
+    );
+    block(&mut output, &english_summary);
     blank(&mut output);
     line(&mut output, "---");
     blank(&mut output);
@@ -267,7 +400,11 @@ fn render_notes(input: NotesInput<'_>) -> String {
     blank(&mut output);
     line(&mut output, "## 变更摘要");
     blank(&mut output);
-    block(&mut output, &input.summaries.chinese);
+    let chinese_summary = input.repository_url.map_or_else(
+        || input.summaries.chinese.clone(),
+        |repo| rewrite_relative_markdown_links(&input.summaries.chinese, repo, input.tag),
+    );
+    block(&mut output, &chinese_summary);
     blank(&mut output);
     line(&mut output, "---");
     blank(&mut output);
@@ -374,7 +511,7 @@ fn render_notes(input: NotesInput<'_>) -> String {
     blank(&mut output);
     line(
         &mut output,
-        "Tagged releases include the eight optional iOS plugin/runtime XCFrameworks only together with the FFmpeg compliance bundle and exact corresponding source asset. FFmpeg remains separately licensed; its notices, configure metadata, source, and LGPL relinking boundary are not covered by Vesper's Apache-2.0 source license.",
+        "Tagged releases include the six optional iOS plugin/runtime XCFrameworks only together with the FFmpeg compliance bundle and exact corresponding source asset. FFmpeg remains separately licensed; its notices, configure metadata, source, and LGPL relinking boundary are not covered by Vesper's Apache-2.0 source license.",
     );
     blank(&mut output);
     line(&mut output, "## Release Contributors");
