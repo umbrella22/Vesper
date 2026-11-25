@@ -12,7 +12,7 @@ export struct ExampleAction {
   build() {
     Button({ type: ButtonType.Capsule }) {
       Row({ space: 8 }) {
-        if (this.icon !== undefined) { SymbolGlyph(this.icon).fontSize(19).fontColor([this.primary ? this.palette.onAccent : this.palette.accent]) }
+        if (this.icon !== undefined) { SymbolGlyph(this.icon).fontSize(19).fontColor([this.primary ? this.palette.onAccent : this.danger ? this.palette.danger : this.palette.title]) }
         Text(this.title).fontSize(15).fontWeight(FontWeight.Medium).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor(this.primary ? this.palette.onAccent : this.danger ? this.palette.danger : this.palette.title)
       }.justifyContent(FlexAlign.Center)
@@ -33,7 +33,7 @@ export struct ExampleIconAction {
   onAction: () => void = (): void => {};
   build() {
     Button({ type: ButtonType.Circle }) {
-      SymbolGlyph(this.icon).fontSize(22).fontColor([this.danger ? this.palette.danger : this.palette.accent])
+      SymbolGlyph(this.icon).fontSize(22).fontColor([this.danger ? this.palette.danger : this.palette.title])
     }.width(48).height(48).backgroundColor(Color.Transparent).enabled(this.isEnabled).opacity(this.isEnabled ? 1 : 0.38)
       .onClick(this.onAction).accessibilityText(this.title).id(this.title)
   }

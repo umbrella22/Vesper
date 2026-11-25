@@ -5,9 +5,12 @@ import { VesperPlayerStage, VesperPlayerStageSkin, VesperStageColors, VesperStag
 import { ExampleModel } from '../model/ExampleModel';
 import { ExampleFullscreen } from '../model/ExampleFullscreen';
 import { examplePalette, ExamplePalette } from '../model/ExampleSupport';
+import { isWideLayout, parentStagePane, shellBackAction, sidebarWidth, tabAt, tabIndex } from '../model/ExampleShell';
 import { PlaybackPanel } from '../components/PlaybackPanel';
 import { DownloadsPanel } from '../components/DownloadsPanel';
 import { DiagnosticsPanel } from '../components/DiagnosticsPanel';
+import { CollectionPanel, LibraryPanel } from '../components/LibraryPanel';
+import { SettingsSheet } from '../components/SettingsSheet';
 
 function blueSkin(): VesperPlayerStageSkin {
   const colors = new VesperStageColors();
@@ -25,6 +28,7 @@ struct Index {
   @StorageLink('vesper.example.foreground') foreground: boolean = true;
   @State fullscreen: boolean = false;
   @State appearance: boolean = false;
+  @Provide('vesper.example.routes') routes: NavPathStack = new NavPathStack();
   @State viewportWidth: number = 400;
   @State viewportHeight: number = 800;
   @State windowError: string = '';
@@ -50,8 +54,8 @@ struct Index {
   private palette(theme: string, colorMode: number): ExamplePalette {
     return examplePalette(theme === 'dark' || theme === 'system' && colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
   }
-  private wide(width: number): boolean { return width >= Math.max(840, 680 * Math.min(1.5, Math.max(1, this.fontScale))); }
-  private sidebar(): number { return Math.min(400, Math.max(320, this.viewportWidth * 0.3)); }
+  private wide(width: number): boolean { return isWideLayout(width, this.fontScale); }
+  private sidebar(): number { return sidebarWidth(this.viewportWidth); }
   private playerWidth(): number { return Math.max(96, this.viewportWidth - (this.wide(this.viewportWidth) ? this.sidebar() + 40 : 40)); }
   private playerHeight(): number | string { return this.fullscreen ? this.viewportHeight : this.wide(this.viewportWidth) ? '100%' : 248; }
   aboutToAppear(): void {
@@ -115,143 +119,125 @@ struct Index {
   }
   onBackPress(): boolean {
     const pane = this.stagePresentation.settingsPane;
-    if (pane !== undefined) {
-      this.stagePresentation = { controlsVisible: true, locked: false,
-        settingsPane: pane === 'menu' ? undefined : pane === 'captionStyle' ? 'subtitle' : 'menu' }; return true;
+    const action = shellBackAction({ sheet: this.appearance ? 'settings' : '', routes: this.routes.size(),
+      settingsPane: pane, fullscreen: this.fullscreen, tab: this.model.tab });
+    if (action === 'closeSheet') { this.appearance = false; return true; }
+    if (action === 'stagePane' && pane !== undefined) {
+      this.stagePresentation = { controlsVisible: true, locked: false, settingsPane: parentStagePane(pane) }; return true;
     }
-    if (this.fullscreen) { this.setFullscreen(false); return true; }
-    if (this.model.tab !== 'play') { this.model.tab = 'play'; return true; }
+    if (action === 'exitFullscreen') { this.setFullscreen(false); return true; }
+    if (action === 'popRoute') { this.routes.pop(); return true; }
+    if (action === 'homeTab') { this.model.tab = 'play'; return true; }
     return false;
   }
-  @Builder appearancePanel() {
-    Column({ space: 8 }) {
-      Row() {
-        Text($r('app.string.example_appearance')).fontSize(16).fontColor(this.palette(this.model.theme, this.colorMode).title).layoutWeight(1)
-        Select([{ value: this.text($r('app.string.example_system')) }, { value: this.text($r('app.string.example_light')) }, { value: this.text($r('app.string.example_dark')) }])
-          .selected(['system', 'light', 'dark'].indexOf(this.model.theme))
-          .value(this.text(this.model.theme === 'dark' ? $r('app.string.example_dark') : this.model.theme === 'light' ? $r('app.string.example_light') : $r('app.string.example_system')))
-          .onSelect((index: number): void => { this.model.setTheme(['system', 'light', 'dark'][index]); }).accessibilityText(this.text($r('app.string.example_appearance')))
-      }.width('100%').constraintSize({ minHeight: 56 })
-      Row() {
-        Text($r('app.string.example_inline_controls')).fontSize(16).fontColor(this.palette(this.model.theme, this.colorMode).title).layoutWeight(1)
-        Select([{ value: this.text($r('app.string.example_compact')) }, { value: this.text($r('app.string.example_expanded')) }, { value: this.text($r('app.string.example_classic')) }])
-          .selected(['compact', 'expanded', 'standard'].indexOf(this.model.layout))
-          .value(this.text(this.model.layout === 'standard' ? $r('app.string.example_classic') : this.model.layout === 'expanded' ? $r('app.string.example_expanded') : $r('app.string.example_compact')))
-          .onSelect((index: number): void => { this.model.layout = ['compact', 'expanded', 'standard'][index]; })
-      }.width('100%').constraintSize({ minHeight: 56 })
-      Row() {
-        Text($r('app.string.example_fullscreen_controls')).fontSize(16).fontColor(this.palette(this.model.theme, this.colorMode).title).layoutWeight(1)
-        Select([{ value: this.text($r('app.string.example_expanded')) }, { value: this.text($r('app.string.example_compact')) }])
-          .selected(this.model.fullscreenLayout === 'compact' ? 1 : 0)
-          .value(this.text(this.model.fullscreenLayout === 'compact' ? $r('app.string.example_compact') : $r('app.string.example_expanded')))
-          .onSelect((index: number): void => { this.model.fullscreenLayout = index === 1 ? 'compact' : 'expanded'; })
-      }.width('100%').constraintSize({ minHeight: 56 })
-      Row() {
-        Text($r('app.string.example_blue_accent')).fontSize(16).fontColor(this.palette(this.model.theme, this.colorMode).title).layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.model.accented }).accessibilityText(this.text($r('app.string.example_blue_accent')))
-          .onChange((enabled: boolean): void => { this.model.accented = enabled; })
-      }.width('100%').constraintSize({ minHeight: 56 })
-      Row() {
-        Text($r('app.string.example_reduced_motion')).fontSize(16).fontColor(this.palette(this.model.theme, this.colorMode).title).layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.reducedMotion }).accessibilityText(this.text($r('app.string.example_reduced_motion')))
-          .onChange((enabled: boolean): void => { this.reducedMotion = enabled; })
-      }.width('100%').constraintSize({ minHeight: 56 })
-      Text($r('app.string.example_appearance_note')).fontSize(13).lineHeight(19).fontColor(this.palette(this.model.theme, this.colorMode).secondary).width('100%')
-    }.padding({ left: 24, right: 24, bottom: 24 }).width('100%')
+  @Builder settingsSheet() {
+    SettingsSheet({ model: this.model, palette: this.palette(this.model.theme, this.colorMode), reducedMotion: this.reducedMotion,
+      onReducedMotionChange: (value: boolean): void => { this.reducedMotion = value; } })
   }
-  @Builder tabBar() {
-    Tabs({ barPosition: BarPosition.End, index: ['play', 'diagnostics', 'downloads'].indexOf(this.model.tab) }) {
+  @Builder tabBar(vertical: boolean) {
+    Tabs({ barPosition: vertical ? BarPosition.Start : BarPosition.End, index: tabIndex(this.model.tab) }) {
       TabContent() { Column() {} }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.play_fill')) }, this.text($r('app.string.example_play'))))
-      TabContent() { Column() {} }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.waveform')) }, this.text($r('app.string.example_diagnostics'))))
+      TabContent() { Column() {} }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.film')) }, this.text($r('app.string.example_library'))))
       TabContent() { Column() {} }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.download')) }, this.text($r('app.string.example_downloads'))))
-    }.height(64).barHeight(64).width('100%').scrollable(false).animationDuration(0)
-      .onChange((index: number): void => { this.model.tab = ['play', 'diagnostics', 'downloads'][index]; })
+      TabContent() { Column() {} }.tabBar(BottomTabBarStyle.of({ normal: new SymbolGlyphModifier($r('sys.symbol.waveform')) }, this.text($r('app.string.example_lab'))))
+    }.vertical(vertical).barWidth(vertical ? 96 : '100%').barHeight(vertical ? '100%' : 64)
+      .width(vertical ? 96 : '100%').height(vertical ? '100%' : 64).scrollable(false).animationDuration(0)
+      .onChange((index: number): void => { this.model.tab = tabAt(index); })
       .visibility(this.fullscreen ? Visibility.None : Visibility.Visible).backgroundColor(this.palette(this.model.theme, this.colorMode).surface)
   }
-  @Builder themeSelector() {
-    Scroll() {
-      Row({ space: 10 }) {
-        ForEach(['system', 'light', 'dark'], (mode: string) => {
-          Button({ type: ButtonType.Capsule }) {
-            Row({ space: 6 }) {
-              SymbolGlyph(mode === 'dark' ? $r('sys.symbol.moon') : mode === 'light' ? $r('sys.symbol.sun_max') : $r('sys.symbol.circle_lefthalf_inset_filled'))
-                .fontSize(16).fontColor([this.model.theme === mode ? Color.White : this.palette(this.model.theme, this.colorMode).title]).accessibilityLevel('no')
-              Text(this.text(mode === 'dark' ? $r('app.string.example_dark') : mode === 'light' ? $r('app.string.example_light') : $r('app.string.example_system')))
-                .fontSize(14).maxLines(1)
-            }.padding({ left: 12, right: 12 }).height(40)
-          }.padding(0).backgroundColor(this.model.theme === mode ? this.palette(this.model.theme, this.colorMode).accent : this.palette(this.model.theme, this.colorMode).surface)
-            .fontColor(this.model.theme === mode ? Color.White : this.palette(this.model.theme, this.colorMode).title)
-            .accessibilitySelected(this.model.theme === mode).onClick((): void => { this.model.setTheme(mode); })
-        }, (mode: string): string => mode)
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.gearshape')).fontSize(20).fontColor([this.palette(this.model.theme, this.colorMode).title]).accessibilityLevel('no')
-        }.width(44).height(44).backgroundColor(this.palette(this.model.theme, this.colorMode).surface)
-          .accessibilityText(this.text($r('app.string.example_appearance'))).onClick((): void => { this.appearance = true; })
-      }
-    }.width('100%').height(48).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-      .visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
+  @Builder playPage() {
+    Scroll(this.pageScroller) {
+      Column({ space: this.fullscreen ? 0 : 18 }) {
+        Column({ space: 6 }) {
+          Text(this.model.nowPlayingTitle).fontSize(20).fontWeight(FontWeight.Medium).fontColor(this.palette(this.model.theme, this.colorMode).title).width('100%').maxLines(2)
+          Text(this.model.current()?.detail ?? this.text($r('app.string.example_description_empty'))).fontSize(13).lineHeight(19)
+            .fontColor(this.palette(this.model.theme, this.colorMode).secondary).maxLines(2).width('100%')
+        }.alignItems(HorizontalAlign.Start).width('100%').visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
+        Flex({ direction: this.wide(this.viewportWidth) && !this.fullscreen ? FlexDirection.Row : FlexDirection.Column }) {
+          // Scrolling and fullscreen retain this single Stage and native Surface.
+          Column() {
+            VesperPlayerStage({ binding: this.model.binding, title: this.model.nowPlayingTitle,
+              controlLayout: this.fullscreen ? this.model.fullscreenLayout : this.model.layout,
+              interactionEnabled: this.model.tab === 'play' && this.routes.size() === 0 && !this.model.pipActive && this.foreground,
+              isFullscreen: this.fullscreen, skin: this.model.accented ? this.accentSkin : undefined,
+              presentation: this.stagePresentation, onPresentationChange: (value: VesperStagePresentation): void => { this.stagePresentation = value; },
+              reducedMotion: this.reducedMotion, availableHeight: this.viewportHeight, environment: this.environment, safeArea: this.insets,
+              onPictureInPicture: (): void => { this.model.pictureInPicture(); },
+              onFullscreenChange: (value: boolean): void => { this.setFullscreen(value); },
+              onChangeSource: (): void => { if (this.fullscreen) { this.setFullscreen(false); } else { this.model.pickVideo(); } },
+              onRetry: (): void => { this.model.retry(); } })
+              .width('100%').height(this.playerHeight()).clip(true)
+          }.width(this.fullscreen ? '100%' : this.wide(this.viewportWidth) ? this.playerWidth() : '100%')
+            .height(this.playerHeight()).flexShrink(0).backgroundColor($r('app.color.stage'))
+            .borderRadius(this.fullscreen ? 0 : 16).clip(true)
+          Scroll() {
+            PlaybackPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode), contentPadding: 0 }).width('100%')
+          }.width(this.wide(this.viewportWidth) ? this.sidebar() : '100%')
+            .height(this.wide(this.viewportWidth) && !this.fullscreen ? '100%' : undefined)
+            .enableScrollInteraction(this.wide(this.viewportWidth) && !this.fullscreen)
+            .scrollBar(this.wide(this.viewportWidth) ? BarState.Auto : BarState.Off)
+            .padding({ top: this.wide(this.viewportWidth) ? 0 : 18, left: this.wide(this.viewportWidth) ? 20 : 0 })
+            .visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
+        }.width('100%').layoutWeight(this.wide(this.viewportWidth) && !this.fullscreen ? 1 : 0)
+      }.width('100%').height(this.wide(this.viewportWidth) && !this.fullscreen ? '100%' : undefined)
+        .padding(this.fullscreen ? 0 : 20).onAreaChange((): void => { this.restoreScroll(); })
+    }.width('100%').height('100%').scrollBar(this.fullscreen || this.wide(this.viewportWidth) ? BarState.Off : BarState.Auto)
+      .enableScrollInteraction(!this.fullscreen && !this.wide(this.viewportWidth))
+      .visibility(this.model.tab === 'play' ? Visibility.Visible : Visibility.Hidden)
+  }
+  @Builder routeMap(name: string, param: Object) {
+    if (name === 'collection') {
+      NavDestination() {
+        Scroll() {
+          CollectionPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode), collection: String(param),
+            onPlayed: (): void => { this.routes.clear(); } })
+        }.width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Auto)
+      }.title(this.model.text('example_collection_' + String(param))).backgroundColor(this.palette(this.model.theme, this.colorMode).top)
+    }
+  }
+  @Builder statusRow() {
+    if (!this.fullscreen && (this.model.message.length > 0 || this.windowError.length > 0 || this.model.busy)) {
+      Row({ space: 8 }) {
+        if (this.model.busy) { LoadingProgress().width(18).height(18).color(this.palette(this.model.theme, this.colorMode).secondary) }
+        Text(this.windowError || this.model.message || this.text($r('app.string.example_ready'))).fontSize(12).maxLines(3)
+          .fontColor(this.model.messageFailed || this.windowError.length > 0 ? this.palette(this.model.theme, this.colorMode).danger : this.palette(this.model.theme, this.colorMode).secondary).layoutWeight(1)
+      }.padding({ left: 20, right: 20, top: 8, bottom: 8 }).width('100%')
+    }
+  }
+  private title(): string {
+    if (this.model.tab === 'play') { return 'Vesper'; }
+    return this.text(this.model.tab === 'library' ? $r('app.string.example_library') : this.model.tab === 'downloads' ? $r('app.string.example_downloads') : $r('app.string.example_lab'));
   }
   build() {
-    Navigation() {
-      Column() {
-        Stack({ alignContent: Alignment.TopStart }) {
-          Scroll(this.pageScroller) {
-            Column({ space: this.fullscreen ? 0 : 18 }) {
-              Column({ space: 6 }) {
-                Text(this.model.nowPlayingTitle).fontSize(20).fontWeight(FontWeight.Medium).fontColor(this.palette(this.model.theme, this.colorMode).title).width('100%').maxLines(2)
-                Text(this.model.current()?.detail ?? this.text($r('app.string.example_description_empty'))).fontSize(13).lineHeight(19)
-                  .fontColor(this.palette(this.model.theme, this.colorMode).secondary).maxLines(2).width('100%')
-              }.alignItems(HorizontalAlign.Start).width('100%').visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
-              this.themeSelector()
-              Flex({ direction: this.wide(this.viewportWidth) && !this.fullscreen ? FlexDirection.Row : FlexDirection.Column }) {
-                // Scrolling and fullscreen retain this single Stage and native Surface.
-                Column() {
-                  VesperPlayerStage({ binding: this.model.binding, title: this.model.nowPlayingTitle,
-                    controlLayout: this.fullscreen ? this.model.fullscreenLayout : this.model.layout,
-                    interactionEnabled: this.model.tab === 'play' && !this.model.pipActive && this.foreground,
-                    isFullscreen: this.fullscreen, skin: this.model.accented ? this.accentSkin : undefined,
-                    presentation: this.stagePresentation, onPresentationChange: (value: VesperStagePresentation): void => { this.stagePresentation = value; },
-                    reducedMotion: this.reducedMotion, availableHeight: this.viewportHeight, environment: this.environment, safeArea: this.insets,
-                    onPictureInPicture: (): void => { this.model.pictureInPicture(); },
-                    onFullscreenChange: (value: boolean): void => { this.setFullscreen(value); },
-                    onChangeSource: (): void => { if (this.fullscreen) { this.setFullscreen(false); } else { this.model.pickVideo(); } },
-                    onRetry: (): void => { this.model.retry(); } })
-                    .width('100%').height(this.playerHeight()).clip(true)
-                }.width(this.fullscreen ? '100%' : this.wide(this.viewportWidth) ? this.playerWidth() : '100%')
-                  .height(this.playerHeight()).flexShrink(0)
-                Scroll() {
-                  PlaybackPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode), contentPadding: 0 }).width('100%')
-                }.width(this.wide(this.viewportWidth) ? this.sidebar() : '100%')
-                  .height(this.wide(this.viewportWidth) && !this.fullscreen ? '100%' : undefined)
-                  .enableScrollInteraction(this.wide(this.viewportWidth) && !this.fullscreen)
-                  .scrollBar(this.wide(this.viewportWidth) ? BarState.Auto : BarState.Off)
-                  .padding({ top: this.wide(this.viewportWidth) ? 0 : 18, left: this.wide(this.viewportWidth) ? 20 : 0 })
-                  .visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
-              }.width('100%').layoutWeight(this.wide(this.viewportWidth) && !this.fullscreen ? 1 : 0)
-            }.width('100%').height(this.wide(this.viewportWidth) && !this.fullscreen ? '100%' : undefined)
-              .padding(this.fullscreen ? 0 : 20).onAreaChange((): void => { this.restoreScroll(); })
-          }.width('100%').height('100%').scrollBar(this.fullscreen || this.wide(this.viewportWidth) ? BarState.Off : BarState.Auto)
-            .enableScrollInteraction(!this.fullscreen && !this.wide(this.viewportWidth))
-            .visibility(this.model.tab === 'play' ? Visibility.Visible : Visibility.Hidden)
-          if (this.model.tab === 'diagnostics') {
-            Scroll() { DiagnosticsPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode) }) }.width('100%').height('100%').scrollBar(BarState.Auto)
-          }
-          if (this.model.tab === 'downloads') {
-            Scroll() { DownloadsPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode) }) }.width('100%').height('100%').scrollBar(BarState.Auto)
-          }
-        }.width('100%').layoutWeight(1)
-        if (!this.fullscreen && (this.model.message.length > 0 || this.windowError.length > 0 || this.model.busy)) {
-          Row({ space: 8 }) {
-            if (this.model.busy) { LoadingProgress().width(18).height(18).color(this.palette(this.model.theme, this.colorMode).accent) }
-            Text(this.windowError || this.model.message || this.text($r('app.string.example_ready'))).fontSize(12).maxLines(3)
-              .fontColor(this.model.messageFailed || this.windowError.length > 0 ? this.palette(this.model.theme, this.colorMode).danger : this.palette(this.model.theme, this.colorMode).secondary).layoutWeight(1)
-          }.padding({ left: 20, right: 20, top: 8, bottom: 8 }).width('100%')
-        }
-        this.tabBar()
-      }.width('100%').height('100%').linearGradient({ angle: 180, colors: [[this.palette(this.model.theme, this.colorMode).top, 0], [this.palette(this.model.theme, this.colorMode).bottom, 1]] })
+    Navigation(this.routes) {
+      Row() {
+        if (this.wide(this.viewportWidth) && !this.fullscreen) { this.tabBar(true) }
+        Column() {
+          Stack({ alignContent: Alignment.TopStart }) {
+            this.playPage()
+            if (this.model.tab === 'library') {
+              Scroll() { LibraryPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode),
+                onOpenCollection: (collection: string): void => { this.routes.pushPath({ name: 'collection', param: collection }); } }) }
+                .width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Auto)
+            }
+            if (this.model.tab === 'lab') {
+              Scroll() { DiagnosticsPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode) }) }.width('100%').height('100%').scrollBar(BarState.Auto)
+            }
+            if (this.model.tab === 'downloads') {
+              Scroll() { DownloadsPanel({ model: this.model, palette: this.palette(this.model.theme, this.colorMode) }) }.width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Auto)
+            }
+          }.width('100%').layoutWeight(1)
+          this.statusRow()
+          if (!this.wide(this.viewportWidth)) { this.tabBar(false) }
+        }.layoutWeight(1).height('100%')
+      }.width('100%').height('100%')
+        .backgroundColor(this.fullscreen ? $r('app.color.stage') : this.palette(this.model.theme, this.colorMode).top)
         .onAreaChange((before: Area, after: Area): void => { this.viewportWidth = Number(after.width); this.viewportHeight = Number(after.height); })
-    }.title(this.model.tab === 'play' ? 'Vesper' : this.text(this.model.tab === 'downloads' ? $r('app.string.example_downloads') : $r('app.string.example_diagnostics')))
-      .titleMode(NavigationTitleMode.Mini).mode(NavigationMode.Stack).hideBackButton(true).hideTitleBar(this.fullscreen)
-      .bindSheet($$this.appearance, this.appearancePanel(), { height: SheetSize.FIT_CONTENT, title: { title: this.text($r('app.string.example_settings')) }, dragBar: true, showClose: true })
+    }.title(this.title()).titleMode(NavigationTitleMode.Mini).mode(NavigationMode.Stack).hideBackButton(true).hideTitleBar(this.fullscreen)
+      .menus(this.fullscreen ? [] : [{ value: this.text($r('app.string.example_settings')), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.gearshape')),
+        action: (): void => { this.appearance = true; } }])
+      .navDestination(this.routeMap)
+      .bindSheet($$this.appearance, this.settingsSheet(), { height: SheetSize.MEDIUM, title: { title: this.text($r('app.string.example_settings')) },
+        dragBar: true, showClose: true, backgroundColor: this.palette(this.model.theme, this.colorMode).surface })
   }
 }

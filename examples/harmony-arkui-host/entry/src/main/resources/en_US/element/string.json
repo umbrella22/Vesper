@@ -54,7 +54,7 @@
     },
     {
       "name": "example_blue_accent",
-      "value": "System blue player"
+      "value": "Stage accent skin"
     },
     {
       "name": "example_reduced_motion",
@@ -879,6 +879,38 @@
     {
       "name": "example_diag_scenario_finished",
       "value": "Check finished. Save the report to share your results."
+    },
+    {
+      "name": "example_library",
+      "value": "Library"
+    },
+    {
+      "name": "example_library_detail",
+      "value": "Sample sources grouped by scenario. Tap an item to start playback."
+    },
+    {
+      "name": "example_lab",
+      "value": "Lab"
+    },
+    {
+      "name": "example_collection_samples",
+      "value": "Samples"
+    },
+    {
+      "name": "example_collection_samples_detail",
+      "value": "Built-in HLS, DASH, and MP4 streams."
+    },
+    {
+      "name": "example_collection_custom",
+      "value": "My media"
+    },
+    {
+      "name": "example_collection_custom_detail",
+      "value": "Files and streams you opened on this device."
+    },
+    {
+      "name": "example_collection_empty",
+      "value": "This collection is empty. Open a file or stream from Play to add one."
     }
   ]
 }

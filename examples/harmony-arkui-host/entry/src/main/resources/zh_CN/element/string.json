@@ -54,7 +54,7 @@
     },
     {
       "name": "example_blue_accent",
-      "value": "系统蓝播放器"
+      "value": "舞台强调色皮肤"
     },
     {
       "name": "example_reduced_motion",
@@ -879,6 +879,38 @@
     {
       "name": "example_diag_scenario_finished",
       "value": "检查完成，可保存报告并主动提交结果。"
+    },
+    {
+      "name": "example_library",
+      "value": "媒体库"
+    },
+    {
+      "name": "example_library_detail",
+      "value": "按场景分组的示例源，点条目即开始播放。"
+    },
+    {
+      "name": "example_lab",
+      "value": "实验室"
+    },
+    {
+      "name": "example_collection_samples",
+      "value": "示例源"
+    },
+    {
+      "name": "example_collection_samples_detail",
+      "value": "内置的 HLS、DASH 与 MP4 流。"
+    },
+    {
+      "name": "example_collection_custom",
+      "value": "我的媒体"
+    },
+    {
+      "name": "example_collection_custom_detail",
+      "value": "在本机打开过的文件和网络流。"
+    },
+    {
+      "name": "example_collection_empty",
+      "value": "这个合集还没有媒体。在「播放」页打开文件或网络流即可加入。"
     }
   ]
 }

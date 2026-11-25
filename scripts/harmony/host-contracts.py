@@ -42,7 +42,7 @@ subprocess.run([str(tools / 'tool/node/bin/node'), str(root / 'lib/harmony/tests
                cwd=root, env=environment, check=True, timeout=60)
 subprocess.run([str(tools / 'tool/node/bin/node'), str(root / 'lib/harmony/tests/binding.cjs')],
                cwd=root, env=environment, check=True, timeout=60)
-for suite in ['support', 'model', 'fullscreen', 'diagnostic-scenarios']:
+for suite in ['support', 'model', 'fullscreen', 'diagnostic-scenarios', 'shell']:
     subprocess.run([str(tools / 'tool/node/bin/node'), str(root / f'examples/harmony-arkui-host/tests/{suite}.cjs')],
                    cwd=root, env=environment, check=True, timeout=60)
 for suite in ['dvr-target', 'native-player-state']:

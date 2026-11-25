@@ -15,10 +15,10 @@ export struct DownloadTaskCard {
       Text(this.entry.snapshot.title || this.text('downloaded_video')).fontSize(17).fontWeight(FontWeight.Medium)
         .fontColor(this.palette.title).width('100%').maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(this.text('download_' + this.entry.snapshot.status)).fontSize(13)
-        .fontColor(this.entry.snapshot.status === 'Failed' ? this.palette.danger : this.palette.accent).width('100%')
+        .fontColor(this.entry.snapshot.status === 'Failed' ? this.palette.danger : this.palette.secondary).width('100%')
       if (downloadPercent(this.entry.snapshot) !== undefined) {
         Progress({ value: downloadPercent(this.entry.snapshot) ?? 0, total: 100, type: ProgressType.Linear })
-          .color(this.palette.accent).backgroundColor(this.palette.field).width('100%')
+          .color(this.palette.title).backgroundColor(this.palette.field).width('100%')
       }
       Text(formatBytes(this.entry.snapshot.receivedBytes) + ' / ' + formatBytes(this.entry.snapshot.totalBytes))
         .fontFeature('tnum').fontSize(13).fontColor(this.palette.secondary).width('100%')
@@ -31,7 +31,7 @@ export struct DownloadTaskCard {
       }
       if (this.entry.snapshot.status === 'Completed') {
         Row({ space: 8 }) {
-          ExampleAction({ title: this.text('play_offline'), icon: $r('sys.symbol.play_fill'), palette: this.palette, primary: true,
+          ExampleAction({ title: this.text('play_offline'), icon: $r('sys.symbol.play_fill'), palette: this.palette,
             isEnabled: this.available(), onAction: (): void => { this.model.playDownload(this.entry.snapshot); } }).layoutWeight(1)
           ExampleIconAction({ title: this.text('save'), icon: $r('sys.symbol.square_and_arrow_down'), palette: this.palette,
             isEnabled: this.exportable(), onAction: (): void => { this.model.exportDownload(this.entry.snapshot, false); } })

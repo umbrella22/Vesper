@@ -267,19 +267,21 @@ export class ExampleModel {
     this.system.updateMetadata({ sessionId: snapshot.sessionId, sourceId: snapshot.sourceId, playbackEpoch: snapshot.playbackEpoch }, { title: item.title });
     this.systemMetadataKey = key;
   }
-  play(item: ExampleQueueItem): void { this.run('Open video', async (): Promise<void> => { await this.activate(item); }); }
+  play(item: ExampleQueueItem, done?: (succeeded: boolean) => void): void {
+    this.run('Open video', async (): Promise<void> => { await this.activate(item); }, done);
+  }
   retry(): void { const item = this.current(); if (item !== undefined) { this.play(item); } }
   next(direction: number): void {
     const index = this.queue.findIndex((item: ExampleQueueItem) => item.id === this.selectedId) + direction;
     if (index >= 0 && index < this.queue.length) { this.play(this.queue[index]); }
   }
-  openRemote(playNow: boolean): void {
+  openRemote(playNow: boolean, done?: (succeeded: boolean) => void): void {
     this.run(playNow ? 'Open stream' : 'Add to queue', async (): Promise<void> => {
       const source = remoteSource(this.address, this.protocol);
       source.label = this.text('example_remote_video');
       const item = this.addSource(source, source.protocol.toUpperCase());
       if (playNow) { await this.activate(item); } else { this.notify('example_added'); }
-    });
+    }, done);
   }
   removeQueueItem(item: ExampleQueueItem): void {
     if (item.builtin || item.id === this.selectedId) { return; }
@@ -288,9 +290,9 @@ export class ExampleModel {
       item.handle.close(); this.notify('example_removed_queue');
     });
   }
-  playSample(protocol: string): void {
+  playSample(protocol: string, done?: (succeeded: boolean) => void): void {
     const item = this.queue.find((entry: ExampleQueueItem): boolean => entry.builtin && entry.source.kind === 'remote' && entry.source.protocol === protocol);
-    if (item !== undefined) { this.play(item); }
+    if (item !== undefined) { this.play(item, done); } else if (done !== undefined) { done(false); }
   }
   queuePreview(): ExampleQueueItem[] {
     const active = this.queue.findIndex((item: ExampleQueueItem): boolean => item.id === this.selectedId);
@@ -360,7 +362,7 @@ export class ExampleModel {
   private refreshOperations(): void {
     this.recoveryState = this.recovery?.snapshot().state ?? 'off';
     if (this.closed) { return; }
-    if (this.tab === 'diagnostics' && !this.diagnosticPending && Date.now() - this.lastDiagnosticSample >= 2000
+    if (this.tab === 'lab' && !this.diagnosticPending && Date.now() - this.lastDiagnosticSample >= 2000
       && ['prepared', 'playing', 'paused'].includes(this.snapshot.state)) {
       this.diagnosticPending = true; this.lastDiagnosticSample = Date.now();
       try {
@@ -390,13 +392,15 @@ export class ExampleModel {
     const pip = this.pip?.snapshot(); this.pipState = pip?.state ?? 'Off';
     this.pipActive = pip !== undefined && [PiPWindow.PiPState.ABOUT_TO_START, PiPWindow.PiPState.STARTED, PiPWindow.PiPState.ABOUT_TO_STOP].some((state: number): boolean => pip.state === `native:${state}`);
   }
-  pickVideo(): void {
+  /** A cancelled picker reports no success, so the open-media sheet stays available. */
+  pickVideo(done?: (succeeded: boolean) => void): void {
+    let cancelled = false;
     this.run('Choose video', async (): Promise<void> => {
       const context = this.hostContext();
       if (this.queue.length >= EXAMPLE_QUEUE_CAPACITY) { throw new VesperPlayerError('capacity', 'Remove a queued video before importing another.'); }
       const selected = await new picker.DocumentViewPicker(context).select({ maxSelectNumber: 1, fileSuffixFilters: ['Video|.mp4,.m4v,.mov'] });
       this.check();
-      if (selected.length === 0) { this.notify('example_pick_cancelled'); return; }
+      if (selected.length === 0) { cancelled = true; this.notify('example_pick_cancelled'); return; }
       const input = await fs.open(selected[0], fs.OpenMode.READ_ONLY);
       const path = `${context.filesDir}/example-media/import-${Date.now()}-${this.nextId}.mp4`;
       let accepted = false;
@@ -416,9 +420,9 @@ export class ExampleModel {
         await fs.close(input);
         if (!accepted && await fs.access(path)) { await fs.unlink(path); }
       }
-    });
+    }, (succeeded: boolean): void => { if (done !== undefined) { done(succeeded && !cancelled); } });
   }
-  createDownload(): void {
+  createDownload(done?: (succeeded: boolean) => void): void {
     this.run('Create download', async (): Promise<void> => {
       const source = remoteSource(this.downloadAddress, this.downloadProtocol);
       source.label = this.text('example_downloaded_video');
@@ -427,7 +431,7 @@ export class ExampleModel {
         const task = await this.downloadManager().create(handle, `${source.protocol.toUpperCase()} video ${Date.now()}`);
         this.check(); this.downloadManager().start(task.taskId); this.refreshDownloads(); this.notify('example_download_started');
       } finally { handle.close(); }
-    });
+    }, done);
   }
   pauseDownload(task: VesperDownloadSnapshot): void {
     this.run('Pause download', async (): Promise<void> => {
@@ -601,10 +605,12 @@ export class ExampleModel {
     const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((value: number) => value.toString().padStart(2, '0')).join(':');
     this.logs = appendLog(this.logs, { id: ++this.logId, time: time, title: title, detail: detail, failed: failed });
   }
-  private run(action: string, work: () => Promise<void>): void {
+  /** `done` reports the outcome after failure feedback is published, so a sheet can close or keep its error. */
+  private run(action: string, work: () => Promise<void>, done?: (succeeded: boolean) => void): void {
     if (this.closed || this.busy || !this.ready) { return; }
     this.busy = true; this.message = ''; this.messageFailed = false;
-    work().catch((error: Error): void => { if (!this.closed) { this.failure(action, error); } })
+    work().then((): void => { if (!this.closed && done !== undefined) { done(true); } },
+      (error: Error): void => { if (!this.closed) { this.failure(action, error); if (done !== undefined) { done(false); } } })
       .finally((): void => { if (!this.closed) { this.busy = false; } });
   }
   close(): Promise<void> {

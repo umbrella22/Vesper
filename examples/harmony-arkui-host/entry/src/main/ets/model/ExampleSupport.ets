@@ -15,14 +15,18 @@ export interface ExamplePalette {
   danger: ResourceColor;
 }
 
+/**
+ * Shell colors come from the base/dark resource qualifiers; the application color mode
+ * (system, light, or dark) selects the set, so the flag only keeps call sites explicit.
+ */
 export function examplePalette(dark: boolean): ExamplePalette {
   return {
-    top: dark ? '#0C1018' : '#F8F2EA', bottom: dark ? '#06080D' : '#F2F4F9',
-    surface: $r('sys.color.ohos_id_color_dialog_bg'), field: $r('sys.color.ohos_id_color_sub_background'),
-    title: $r('sys.color.ohos_id_color_text_primary'), secondary: $r('sys.color.ohos_id_color_text_secondary'),
-    accent: dark ? '#88B5FF' : '#256DFF', onAccent: dark ? '#06122A' : Color.White,
-    accentSoft: dark ? '#16345C' : '#E8F0FF', line: dark ? '#30343A' : '#E5E7EB',
-    danger: $r('sys.color.ohos_id_color_alert')
+    top: $r('app.color.bg'), bottom: $r('app.color.bg'),
+    surface: $r('app.color.surface'), field: $r('app.color.surface_2'),
+    title: $r('app.color.ink'), secondary: $r('app.color.ink_2'),
+    accent: dark ? $r('app.color.accent') : $r('app.color.accent_ink'), onAccent: $r('app.color.on_accent'),
+    accentSoft: $r('app.color.accent_soft'), line: $r('app.color.line'),
+    danger: $r('app.color.err')
   };
 }
 

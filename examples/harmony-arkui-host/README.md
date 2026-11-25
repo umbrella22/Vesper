@@ -14,7 +14,9 @@ project in DevEco Studio and configure device signing to run on a physical phone
 or tablet. CI artifact checks cover builds and host contracts; device playback
 results retain their own source identity.
 
-The Diagnostics tab runs bounded checks on the selected video: progression,
+The app shell has four tabs: Play, Library (with a collection second-level page),
+Downloads, and Lab; app settings open from the title-bar gear in a half-modal
+sheet. The Lab tab runs bounded checks on the selected video: progression,
 alternate audio, seeking to the final 15 seconds and completion, and live DVR
 availability. The user can record audible-output and device/simulator observations,
 then copy or save a local JSON report through the document picker. Reports exclude
@@ -56,7 +58,7 @@ playback defaults to compact; fullscreen defaults to expanded with time, scrubbe
 and bottom actions. Audio, subtitles, quality, speed and caption styles use
 separate content-sized native settings panes.
 The app adds previous/next, Picture in Picture, and an **App settings**
-sheet for independent inline/fullscreen layouts, optional system-blue accent,
+sheet for independent inline/fullscreen layouts, an optional Stage accent skin,
 reduced motion and persisted System/Light/Dark
 appearance. System/Light/Dark choices appear above the Stage. Phones and narrow
 windows use a 248 vp inline Stage; the header, theme choices, Stage and playback

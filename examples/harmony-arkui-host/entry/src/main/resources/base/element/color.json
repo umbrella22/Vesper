@@ -1,1 +1,25 @@
-{ "color": [{ "name": "start_window_background", "value": "#FFFFFF" }] }
+{
+  "color": [
+    { "name": "start_window_background", "value": "#F5F3EE" },
+    { "name": "bg", "value": "#F5F3EE" },
+    { "name": "surface", "value": "#FFFFFF" },
+    { "name": "surface_2", "value": "#ECE9E2" },
+    { "name": "ink", "value": "#17181E" },
+    { "name": "ink_2", "value": "#5C5F6B" },
+    { "name": "line", "value": "#1A17181E" },
+    { "name": "accent", "value": "#E8A93A" },
+    { "name": "on_accent", "value": "#1B1406" },
+    { "name": "accent_ink", "value": "#8C5B00" },
+    { "name": "accent_soft", "value": "#24E8A93A" },
+    { "name": "ok", "value": "#2E9D6A" },
+    { "name": "warn", "value": "#D98A1C" },
+    { "name": "err", "value": "#D2463C" },
+    { "name": "info", "value": "#4C7FD9" },
+    { "name": "scrim", "value": "#6B08090E" },
+    { "name": "stage", "value": "#0B0D16" },
+    { "name": "stage_fg", "value": "#F4F2EC" },
+    { "name": "stage_fg_2", "value": "#B3F4F2EC" },
+    { "name": "stage_line", "value": "#42F4F2EC" },
+    { "name": "stage_hud", "value": "#BD0B0D16" }
+  ]
+}
