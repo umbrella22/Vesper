@@ -28,6 +28,7 @@ class VesperTimelineScrubber extends StatefulWidget {
 }
 
 class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
+  static const _accessibilityStep = 0.05;
   final GlobalKey _scrubberKey = GlobalKey();
   int? _activePointer;
   Offset? _pointerDownPosition;
@@ -127,6 +128,9 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
     final trackHeight = metrics.timelineTrackHeight;
     final ratio = widget.displayedRatio.clamp(0.0, 1.0);
     final enabled = widget.enabled;
+    final higher = (ratio + _accessibilityStep).clamp(0.0, 1.0);
+    final lower = (ratio - _accessibilityStep).clamp(0.0, 1.0);
+    String percent(double value) => '${(value * 100).round()}%';
     final inactiveTrackColor = skin.colors.timelineInactive.withValues(
       alpha: skin.colors.timelineInactive.a * (enabled ? 0.16 : 0.10),
     );
@@ -219,7 +223,15 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
           enabled: enabled,
           label: widget.semanticLabel ??
               VesperPlayerStageStrings.of(context).playbackPosition,
-          value: '${(ratio * 100).round()}%',
+          value: percent(ratio),
+          increasedValue: enabled && higher > ratio ? percent(higher) : null,
+          decreasedValue: enabled && lower < ratio ? percent(lower) : null,
+          onIncrease: enabled && higher > ratio
+              ? () => widget.onSeekCommit(higher)
+              : null,
+          onDecrease: enabled && lower < ratio
+              ? () => widget.onSeekCommit(lower)
+              : null,
           child: scrubber,
         );
       },

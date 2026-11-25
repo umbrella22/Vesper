@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_host/src/shell/example_host_navigation.dart';
 import 'package:flutter_host/src/shell/example_host_shell.dart';
@@ -147,6 +150,69 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Playback failed'), findsOneWidget);
     expect(find.byType(ExampleOpenMediaSheet), findsOneWidget);
+  });
+
+  testWidgets('open media: a native failure preserves the URL for retry', (
+    tester,
+  ) async {
+    const url = 'https://example.com/retry.m3u8';
+    final attempts = <String>[];
+    await tester.pumpWidget(
+      _Harness(
+        strings: ExampleHostStrings.zh,
+        onOpenUrl: (value) async {
+          attempts.add(value);
+          if (attempts.length == 1) throw PlatformException(code: 'openFailed');
+          return null;
+        },
+      ),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('shell-open-media-fab')),
+    );
+    await tester.pumpAndSettle();
+    final field = find.byKey(const ValueKey<String>('open-media-url-field'));
+    final submit = find.byKey(const ValueKey<String>('open-media-url-submit'));
+    await tester.enterText(field, url);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(ExampleHostStrings.zh[ExampleHostText.openMediaFailed]),
+      findsOneWidget,
+    );
+    expect(tester.widget<TextField>(field).enabled, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, url);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+    expect(attempts, [url, url]);
+    expect(find.byType(ExampleOpenMediaSheet), findsNothing);
+  });
+
+  testWidgets('open media: a late success cannot pop the page underneath', (
+    tester,
+  ) async {
+    final pending = Completer<String?>();
+    await tester.pumpWidget(_Harness(onOpenUrl: (_) => pending.future));
+    final state = tester.state<_HarnessState>(find.byType(_Harness));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('shell-open-media-fab')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('open-media-url-field')),
+      'https://example.com/video.mp4',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('open-media-url-submit')),
+    );
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    pending.complete(null);
+    await tester.pumpAndSettle();
+    expect(find.byType(ExampleOpenMediaSheet), findsNothing);
+    expect(find.text('body-play'), findsOneWidget);
+    expect(state.lastOpened, isFalse);
   });
 
   testWidgets('open media: success closes and switches to play', (

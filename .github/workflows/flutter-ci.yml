@@ -581,6 +581,15 @@ jobs:
           flutter build ios --release --config-only --no-codesign
           grep -F -- '.iOS("17.0")' ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift
 
+      - name: Resolve Flutter plugins against a renamed local kit
+        working-directory: examples/flutter-host
+        run: |
+          kit="$(mktemp -d "$RUNNER_TEMP/kit-checkout.XXXXXX")"
+          ln -s "$VESPER_FLUTTER_IOS_LOCAL_SPM_PACKAGE"/{Package.swift,Sources,Artifacts} "$kit/"
+          VESPER_FLUTTER_IOS_LOCAL_KIT="$kit" swift package \
+            --package-path ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage \
+            --scratch-path "$RUNNER_TEMP/renamed-kit-resolve" resolve
+
       - name: Check iOS bridge crates
         run: cargo check -p player-platform-ios -p player-ffi-ios
 

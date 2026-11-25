@@ -70,6 +70,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   final Set<VesperPlayerController> _pendingControllers =
       <VesperPlayerController>{};
   int _sourceRequestGeneration = 0;
+  int _libraryPlayRequest = 0;
   int _pictureInPictureBindingGeneration = 0;
   bool _isClosing = false;
   VesperDownloadManager? _downloadManager;
@@ -98,6 +99,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   bool _isRebuildingController = false;
   bool _isCapturingHdrEvidence = false;
   bool _sheetOpen = false;
+  final _hostRevision = ValueNotifier<int>(0);
   bool _hasHandledFinishedPlayback = false;
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
@@ -142,6 +144,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
 
   void _updateState(VoidCallback fn) {
     setState(fn);
+    _hostRevision.value++;
   }
 
   void _appendHostLog({
@@ -245,6 +248,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
     unawaited(_restoreSystemPresentation());
     _remoteUrlController.dispose();
     _downloadUrlController.dispose();
+    _hostRevision.dispose();
     super.dispose();
   }
 

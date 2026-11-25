@@ -76,17 +76,24 @@ class _ExampleOpenMediaSheetState extends State<ExampleOpenMediaSheet> {
       _busy = true;
       _error = null;
     });
-    final result = await action();
+    String? result;
+    try {
+      result = await action();
+    } catch (_) {
+      if (!mounted) return;
+      result = ExampleHostStrings.of(context)[ExampleHostText.openMediaFailed];
+    }
     if (!mounted) {
       return;
     }
-    if (result == null) {
+    if (result == null && ModalRoute.of(context)?.isCurrent == true) {
       Navigator.of(context).pop(true);
       return;
     }
+    final message = result == null || result.isEmpty ? null : result;
     setState(() {
       _busy = false;
-      _error = result.isEmpty ? null : result;
+      _error = message;
     });
   }
 

@@ -43,22 +43,24 @@ extension _PlayerHostShellPages on _PlayerHostPageState {
         showDragHandle: true,
         builder: (sheetContext) => ExampleHostStringsScope(
           strings: strings,
-          child: StatefulBuilder(
-            // Rebuild on parent state changes is not needed: the section
-            // reads live controller state through its own listenables.
-            builder: (context, _) => SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  Text(
-                    strings[ExampleHostText.castSheetTitle],
-                    style: Theme.of(context).textTheme.titleLarge,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Text(
+                  strings[ExampleHostText.castSheetTitle],
+                  style: Theme.of(sheetContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                ListenableBuilder(
+                  listenable: _hostRevision,
+                  builder: (_, _) => _buildSystemPlaybackSection(
+                    _controller ?? controller,
+                    palette,
                   ),
-                  const SizedBox(height: 12),
-                  _buildSystemPlaybackSection(controller, palette),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

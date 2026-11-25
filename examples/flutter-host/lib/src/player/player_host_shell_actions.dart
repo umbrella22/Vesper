@@ -51,7 +51,9 @@ extension _PlayerHostShellActions on _PlayerHostPageState {
     ExampleHostStrings strings,
   ) {
     final pipAvailable = _pictureInPictureAvailability?.isAvailable ?? false;
-    final castSupported = Platform.isAndroid || Platform.isIOS;
+    final castSupported =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
     return <ExampleQuickAction>[
       if (pipAvailable)
         ExampleQuickAction(
@@ -128,29 +130,30 @@ extension _PlayerHostShellActions on _PlayerHostPageState {
     if (source == null) {
       return strings[ExampleHostText.openMediaFailed];
     }
-    await _activatePlaylistSource(
-      controller,
-      itemId: item.playlistItemId,
-      source: source,
-    );
+    try {
+      await _activatePlaylistSource(
+        controller,
+        itemId: item.playlistItemId,
+        source: source,
+      );
+    } catch (_) {
+      return strings[ExampleHostText.openMediaFailed];
+    }
     return null;
   }
 
-  void _playLibraryItem(ExampleLibraryItem item) {
+  Future<void> _playLibraryItem(ExampleLibraryItem item) async {
     final controller = _controller;
     if (controller == null) {
       return;
     }
-    unawaited(() async {
-      final error = await _openLibraryItem(controller, item);
-      if (!mounted) {
-        return;
-      }
-      if (error != null) {
-        _showMessage(error);
-        return;
-      }
-      _setNavigation(_navigation.showPlayer());
-    }());
+    final request = ++_libraryPlayRequest;
+    final error = await _openLibraryItem(controller, item);
+    if (!mounted || request != _libraryPlayRequest) return;
+    if (error != null) {
+      _showMessage(error);
+      return;
+    }
+    _setNavigation(_navigation.showPlayer());
   }
 }

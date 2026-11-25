@@ -171,7 +171,7 @@ elsif remote_matches.zero?
 else
   abort("expected exactly one remote VesperPlayerKit dependency in #{manifest}, found #{remote_matches}")
 end
-unless updated.scan(/\.package\(name: "VesperPlayerKit", path:/).length == 1
+unless updated.scan(local).length == 1
   abort("local VesperPlayerKit dependency was not installed in #{manifest}")
 end
 File.write(manifest, updated)

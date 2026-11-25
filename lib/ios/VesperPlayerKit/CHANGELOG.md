@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.12.0 - 2026-11-25
+## 0.12.0 - 2026-11-26
 
 - Localize `VesperPlayerStage` text from `VesperPlayerKitUI` resources. The
   Stage follows the system language and ships English and Simplified Chinese;

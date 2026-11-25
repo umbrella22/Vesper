@@ -977,6 +977,50 @@ void main() {
     expect(deviceControls.brightnessSets.length, greaterThan(firstSetCount));
   });
 
+  testWidgets(
+      'timeline accessibility actions announce and commit bounded seeks',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      Future<SemanticsNode> timelineAt(int seconds,
+          {bool seekable = true}) async {
+        await pumpStage(tester,
+            snapshot: _playingSnapshot.copyWith(
+              timeline: VesperTimeline(
+                kind: VesperTimelineKind.vod,
+                isSeekable: seekable,
+                seekableRange: null,
+                liveEdgeMs: null,
+                positionMs: seconds * 1000,
+                durationMs: 100000,
+              ),
+            ));
+        return find.semantics.byLabel('Playback position').evaluate().single;
+      }
+
+      final middle = await timelineAt(45);
+      expect(middle.value, '45%');
+      expect(middle.increasedValue, '50%');
+      expect(middle.decreasedValue, '40%');
+      middle.owner!.performAction(middle.id, SemanticsAction.increase);
+      middle.owner!.performAction(middle.id, SemanticsAction.decrease);
+      final nearEnd = await timelineAt(98);
+      expect(nearEnd.increasedValue, '100%');
+      nearEnd.owner!.performAction(nearEnd.id, SemanticsAction.increase);
+      final nearStart = await timelineAt(2);
+      expect(nearStart.decreasedValue, '0%');
+      nearStart.owner!.performAction(nearStart.id, SemanticsAction.decrease);
+      expect(platform.seekRatios, [0.5, 0.4, 1.0, 0.0]);
+
+      final disabled =
+          (await timelineAt(45, seekable: false)).getSemanticsData();
+      expect(disabled.hasAction(SemanticsAction.increase), isFalse);
+      expect(disabled.hasAction(SemanticsAction.decrease), isFalse);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('visible timeline and buttons remain clickable', (tester) async {
     await pumpStage(tester);
 

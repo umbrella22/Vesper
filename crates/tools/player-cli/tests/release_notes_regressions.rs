@@ -220,3 +220,40 @@ fn relative_changelog_links_rewrite_to_tag_blobs_outside_code_and_footer_counts_
     assert!(notes.contains("the six optional iOS plugin/runtime XCFrameworks"));
     assert!(!notes.contains("the eight optional iOS plugin/runtime XCFrameworks"));
 }
+
+#[test]
+fn angle_delimited_links_keep_their_delimiters_titles_and_code_examples() {
+    let links = r#"[doc](<./docs/A B).md> "Title (one") and [next](docs/C(D).md)
+[external](<https://example.com/A B.md> 'Title') and [anchor](<#details>)
+`[inline](<docs/A B.md>)`
+Unclosed [prose
+[wrapped](<./docs/C D.md>
+  "Wrapped title")
+`across
+[code](<docs/C D.md>)
+lines`
+
+```md
+[fenced](<docs/A B.md>)
+```"#;
+    let directory = fixture(
+        &CHANGELOG.replace(
+            "- Preserve **manual PiP** after automatic entry is disabled.",
+            links,
+        ),
+        "v0.6.2",
+        true,
+    );
+    let output = generate(directory.path(), "v0.6.2");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let notes = fs::read_to_string(output_path(directory.path())).expect("read notes");
+    let base = "https://github.com/example/vesper/blob/v0.6.2/";
+    let expected = links
+        .replace("<./docs/", &format!("<{base}docs/"))
+        .replace("(docs/C(D).md)", &format!("({base}docs/C(D).md)"));
+    assert!(notes.contains(&expected), "{notes}");
+}

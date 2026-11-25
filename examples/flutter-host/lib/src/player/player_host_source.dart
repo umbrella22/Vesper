@@ -6,6 +6,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     VesperSourceActivationOptions activationOptions =
         const VesperSourceActivationOptions(playWhenReady: false),
     bool preservePlaylistState = false,
+    ExamplePlaybackOrigin? origin,
   }) async {
     final generation = ++_sourceRequestGeneration;
     bool isCurrent() =>
@@ -34,18 +35,6 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       final renderSurfaceKind = directNativePlaybackRequired
           ? VesperPlayerRenderSurfaceKind.surfaceView
           : VesperPlayerRenderSurfaceKind.textureView;
-      if (mounted) {
-        _updateState(() {
-          _sourceNormalizerPluginReferences =
-              sourceNormalizerConfiguration.pluginReferences;
-          _frameProcessorPluginReferences = frameProcessorPluginReferences;
-        });
-      } else {
-        _sourceNormalizerPluginReferences =
-            sourceNormalizerConfiguration.pluginReferences;
-        _frameProcessorPluginReferences = frameProcessorPluginReferences;
-      }
-
       nextController = await VesperPlayerController.create(
         renderSurfaceKind: renderSurfaceKind,
         resiliencePolicy: _selectedResilienceProfile.policy,
@@ -72,16 +61,30 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
         isCurrent: isCurrent,
       );
       checkCurrent();
+      final previous = _controller;
       if (!preservePlaylistState) {
         _playlistItemIds = <String>[flutterHlsPlaylistItemId];
         _activePlaylistItemId = flutterHlsPlaylistItemId;
-        _activeDirectSource = selectedSource;
-        _playbackOrigin = const ExampleQueuePlaybackOrigin(
-          flutterHlsPlaylistItemId,
-        );
+        origin = const ExampleQueuePlaybackOrigin(flutterHlsPlaylistItemId);
       }
-
-      final previous = _controller;
+      if (origin != null) {
+        _recordActiveSource(selectedSource, origin);
+        if (directNativePlaybackRequired) {
+          if (_sourceNormalizerSetting !=
+                  ExampleSourceNormalizerSetting.disabled ||
+              _frameProcessorPluginReferences.isNotEmpty) {
+            _showMessage(_hostStrings[ExampleHostText.dolbyPluginsTurnedOff]);
+          }
+          _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
+          _appendHostLog(
+            title: 'Dolby direct native playback',
+            detail: _hostStrings[ExampleHostText.logDolbyDirectDetail],
+          );
+        }
+      }
+      _sourceNormalizerPluginReferences =
+          sourceNormalizerConfiguration.pluginReferences;
+      _frameProcessorPluginReferences = frameProcessorPluginReferences;
       _controller = nextController;
       _observeControllerSnapshot(nextController);
       if (previous != null && !identical(previous, nextController)) {
@@ -161,41 +164,34 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
         previousSnapshot.playbackState == VesperPlaybackState.playing;
 
     final strings = _hostStrings;
+    final previousSetting = _sourceNormalizerSetting;
     _updateState(() {
       _sourceNormalizerSetting = setting;
-      _isRebuildingController = true;
       _appendHostLog(
         title: strings[ExampleHostText.logPluginModeChanged],
         detail: setting.title(strings),
       );
-      _controllerFuture = _createController(
-        source: activeSource,
-        activationOptions: VesperSourceActivationOptions(
-          playWhenReady: shouldResumePlayback,
-          startPosition: Duration(milliseconds: restorePositionMs),
-          playbackRate: previousSnapshot.playbackRate,
-        ),
-        preservePlaylistState: true,
-      );
     });
-
-    final rebuilding = _controllerFuture;
+    final rebuilding = _rebuildControllerForSource(
+      activeSource,
+      VesperSourceActivationOptions(
+        playWhenReady: shouldResumePlayback,
+        startPosition: Duration(milliseconds: restorePositionMs),
+        playbackRate: previousSnapshot.playbackRate,
+      ),
+    );
+    final generation = _sourceRequestGeneration;
     try {
       await rebuilding;
     } catch (error) {
-      if (mounted) {
+      if (mounted && generation == _sourceRequestGeneration) {
+        _updateState(() => _sourceNormalizerSetting = previousSetting);
         _showMessage(
           strings.format(
             ExampleHostText.normalizerSwitchFailed,
             <String, Object?>{'error': error},
           ),
         );
-      }
-    } finally {
-      if (mounted && identical(_controllerFuture, rebuilding)) {
-        _updateState(() {
-          _isRebuildingController = false;
-        });
       }
     }
   }
@@ -298,88 +294,81 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
   Future<void> _selectSource(
     VesperPlayerController controller,
     VesperPlayerSource source, {
-    ExamplePlaybackOrigin? origin,
+    required ExamplePlaybackOrigin origin,
   }) async {
+    if (!mounted || _isClosing || !identical(_controller, controller)) return;
+    final directNativePlaybackRequired =
+        exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(source);
+    const activation = VesperSourceActivationOptions(playWhenReady: true);
+    if (directNativePlaybackRequired ||
+        (_sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
+            _sourceNormalizerSetting !=
+                ExampleSourceNormalizerSetting.diagnosticsOnly)) {
+      await _rebuildControllerForSource(source, activation, origin: origin);
+      return;
+    }
     final generation = ++_sourceRequestGeneration;
     bool isCurrent() =>
         mounted &&
         !_isClosing &&
         generation == _sourceRequestGeneration &&
         identical(_controller, controller);
+    await activateExampleSource(
+      controller,
+      source,
+      options: activation,
+      isCurrent: isCurrent,
+    );
     if (!isCurrent()) return;
-    final directNativePlaybackRequired =
-        exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(source);
+    _recordActiveSource(source, origin);
+    await _configureSystemPlayback(controller, source, isCurrent: isCurrent);
+  }
+
+  void _recordActiveSource(
+    VesperPlayerSource source,
+    ExamplePlaybackOrigin origin,
+  ) {
     _activeDirectSource = source;
     _playbackOrigin = origin;
     if (source.kind == VesperPlayerSourceKind.remote) {
       _remoteUrlController.text = source.uri;
     }
-    if (directNativePlaybackRequired) {
-      final wasPluginRoute =
-          _sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled ||
-          _frameProcessorPluginReferences.isNotEmpty;
-      final strings = _hostStrings;
-      if (wasPluginRoute && mounted) {
-        _showMessage(strings[ExampleHostText.dolbyPluginsTurnedOff]);
-      }
-      _updateState(() {
-        _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
-        _appendHostLog(
-          title: 'Dolby direct native playback',
-          detail: strings[ExampleHostText.logDolbyDirectDetail],
-        );
-      });
-      await _rebuildControllerForSource(
-        source,
-        shouldResumePlayback:
-            controller.snapshot.playbackState == VesperPlaybackState.playing,
-      );
-      return;
-    }
-    if (_sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
-        _sourceNormalizerSetting !=
-            ExampleSourceNormalizerSetting.diagnosticsOnly) {
-      await _rebuildControllerForSource(
-        source,
-        shouldResumePlayback:
-            controller.snapshot.playbackState == VesperPlaybackState.playing,
-      );
-      return;
-    }
-    await activateExampleSource(
-      controller,
-      source,
-      options: const VesperSourceActivationOptions(playWhenReady: true),
-      isCurrent: isCurrent,
-    );
-    if (!isCurrent()) return;
-    await _configureSystemPlayback(controller, source, isCurrent: isCurrent);
   }
 
   Future<void> _rebuildControllerForSource(
-    VesperPlayerSource source, {
-    required bool shouldResumePlayback,
+    VesperPlayerSource? source,
+    VesperSourceActivationOptions activationOptions, {
+    ExamplePlaybackOrigin? origin,
   }) async {
     if (!mounted || _isClosing) return;
-
+    final retained = _controller;
     _updateState(() {
       _isRebuildingController = true;
       _controllerFuture = _createController(
         source: source,
-        activationOptions: VesperSourceActivationOptions(
-          playWhenReady: shouldResumePlayback,
-        ),
+        activationOptions: activationOptions,
         preservePlaylistState: true,
+        origin: origin,
       );
     });
 
     final rebuilding = _controllerFuture;
+    var succeeded = false;
     try {
       await rebuilding;
+      if (!identical(_controllerFuture, rebuilding)) {
+        throw StateError('Controller replacement was superseded.');
+      }
+      succeeded = true;
     } finally {
       if (mounted && identical(_controllerFuture, rebuilding)) {
         _updateState(() {
           _isRebuildingController = false;
+          if (!succeeded &&
+              retained != null &&
+              identical(_controller, retained)) {
+            _controllerFuture = Future.value(retained);
+          }
         });
       }
     }

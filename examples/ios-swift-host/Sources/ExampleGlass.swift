@@ -5,13 +5,14 @@ let exampleShellAccent = Color(red: 232.0 / 255.0, green: 169.0 / 255.0, blue: 5
 
 /// Liquid Glass helpers for the host shell.
 ///
-/// On iOS 26+ these map to the system glass APIs. On iOS 17 through 25 they
-/// fall back to `.ultraThinMaterial` and the regular bordered button styles.
+/// The compiler guards match the SDKs bundled with Xcode 26 and 26.1.
+/// Earlier SDKs and runtimes use material and bordered button styles.
 /// Glass is only applied to navigation-level and floating controls; content
 /// lists keep their plain backgrounds.
 extension View {
     @ViewBuilder
     func exampleGlassButtonStyle(prominent: Bool = false) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             if prominent {
                 self.buttonStyle(.glassProminent).tint(exampleShellAccent)
@@ -19,30 +20,46 @@ extension View {
                 self.buttonStyle(.glass)
             }
         } else {
-            if prominent {
-                self.buttonStyle(.borderedProminent).tint(exampleShellAccent)
-            } else {
-                self.buttonStyle(.bordered)
-            }
+            exampleBorderedButtonStyle(prominent: prominent)
+        }
+        #else
+        exampleBorderedButtonStyle(prominent: prominent)
+        #endif
+    }
+
+    @ViewBuilder
+    private func exampleBorderedButtonStyle(prominent: Bool) -> some View {
+        if prominent {
+            self.buttonStyle(.borderedProminent).tint(exampleShellAccent)
+        } else {
+            self.buttonStyle(.bordered)
         }
     }
 
     @ViewBuilder
     func exampleFloatingGlass<S: Shape>(in shape: S) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular.interactive(), in: shape)
         } else {
             self.background(.ultraThinMaterial, in: shape)
         }
+        #else
+        self.background(.ultraThinMaterial, in: shape)
+        #endif
     }
 
     @ViewBuilder
     func exampleTabBarMinimizeOnScroll() -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self.tabBarMinimizeBehavior(.onScrollDown)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 
     @ViewBuilder
@@ -50,11 +67,15 @@ extension View {
         isEnabled: Bool,
         @ViewBuilder content: () -> Accessory
     ) -> some View {
+        #if compiler(>=6.2.1)
         if #available(iOS 26.1, *) {
             self.tabViewBottomAccessory(isEnabled: isEnabled, content: content)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
@@ -64,6 +85,7 @@ struct ExampleGlassGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             GlassEffectContainer(spacing: spacing) {
                 content()
@@ -71,5 +93,8 @@ struct ExampleGlassGroup<Content: View>: View {
         } else {
             content()
         }
+        #else
+        content()
+        #endif
     }
 }

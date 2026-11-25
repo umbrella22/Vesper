@@ -10,7 +10,7 @@ private let vesperPlayerKitLocalPath = Context.environment["VESPER_FLUTTER_IOS_L
     .flatMap { $0.isEmpty ? nil : $0 }
 
 private let vesperPlayerKitDependency: Package.Dependency =
-    vesperPlayerKitLocalPath.map { Package.Dependency.package(path: $0) } ?? .package(
+    vesperPlayerKitLocalPath.map { .package(name: "VesperPlayerKit", path: $0) } ?? .package(
         url: "https://github.com/umbrella22/VesperPlayerKit.git",
         exact: vesperPlayerKitVersion
     )

@@ -138,35 +138,98 @@ fn is_relative_repo_target(target: &str) -> bool {
     !prefix.contains(':')
 }
 
-fn rewrite_inline_relative_links(line: &str, repository_url: &str, tag: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut output = String::with_capacity(line.len());
+/// Returns the URL's byte range (excluding any angle brackets) and the end of the link.
+fn inline_link_destination(text: &str, start: usize) -> Option<(std::ops::Range<usize>, usize)> {
+    let input = text[start..].trim_start();
+    let offset = text.len() - input.len();
+    let angled = input.starts_with('<');
+    let url_start = usize::from(angled);
+    let mut chars = input[url_start..].char_indices();
+    let mut depth = 0usize;
+    let url_end = loop {
+        let (index, ch) = chars.next()?;
+        match ch {
+            '\\' if chars
+                .as_str()
+                .starts_with(|c: char| c.is_ascii_punctuation()) =>
+            {
+                chars.next();
+            }
+            '>' if angled => break url_start + index,
+            '<' | '\r' | '\n' if angled => return None,
+            '(' if !angled => depth += 1,
+            ')' if !angled && depth > 0 => depth -= 1,
+            ')' if !angled => break index,
+            ch if !angled && ch.is_whitespace() && depth == 0 => break index,
+            ch if !angled && ch.is_whitespace() => return None,
+            _ => {}
+        }
+    };
+    let suffix = &input[url_end + usize::from(angled)..];
+    let mut rest = suffix.trim_start();
+    if rest.len() < suffix.len() && !rest.starts_with(')') {
+        let mut title = rest.chars();
+        let closing = match title.next()? {
+            '"' => '"',
+            '\'' => '\'',
+            '(' => ')',
+            _ => return None,
+        };
+        loop {
+            match title.next()? {
+                '\\' => {
+                    title.next()?;
+                }
+                ch if ch == closing => break,
+                _ => {}
+            }
+        }
+        rest = title.as_str().trim_start();
+    }
+    rest.strip_prefix(')')?;
+    Some((
+        offset + url_start..offset + url_end,
+        text.len() - rest.len() + 1,
+    ))
+}
+
+/// Skip a complete code span or just the literal opener when it has no matching closer.
+fn markdown_code_span_len(text: &str) -> usize {
+    let opener = text.bytes().take_while(|&b| b == b'`').count();
+    let mut rest = &text[opener..];
+    while let Some(start) = rest.find('`') {
+        let run = rest[start..].bytes().take_while(|&b| b == b'`').count();
+        rest = &rest[start + run..];
+        if run == opener {
+            return text.len() - rest.len();
+        }
+    }
+    opener
+}
+
+fn rewrite_inline_relative_links(text: &str, repository_url: &str, tag: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut output = String::with_capacity(text.len());
     let mut copy_from = 0;
-    let mut inline_code: Option<usize> = None;
     let mut bracket_depth: usize = 0;
     let mut last_open_is_image = false;
     let mut index = 0;
 
     while index < bytes.len() {
-        if inline_code.is_none() && bytes[index] == b'\\' && index + 1 < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
             index += 2;
             continue;
         }
         if bytes[index] == b'`' {
-            let run = bytes[index..].iter().take_while(|&&b| b == b'`').count();
-            match inline_code {
-                Some(open_run) if run == open_run => inline_code = None,
-                None => inline_code = Some(run),
-                _ => {}
-            }
-            index += run;
-            continue;
-        }
-        if inline_code.is_some() {
-            index += 1;
+            index += markdown_code_span_len(&text[index..]);
             continue;
         }
         match bytes[index] {
+            b'\n' => {
+                // A stray label opener on one line must not hide later links.
+                bracket_depth = 0;
+                index += 1;
+            }
             b'[' => {
                 if bracket_depth == 0 {
                     last_open_is_image = index > 0 && bytes[index - 1] == b'!';
@@ -176,73 +239,55 @@ fn rewrite_inline_relative_links(line: &str, repository_url: &str, tag: &str) ->
             }
             b']' if bracket_depth > 0 => {
                 bracket_depth -= 1;
-                if bracket_depth == 0 && !last_open_is_image && bytes.get(index + 1) == Some(&b'(')
+                if bracket_depth == 0
+                    && !last_open_is_image
+                    && bytes.get(index + 1) == Some(&b'(')
+                    && let Some((range, end)) = inline_link_destination(text, index + 2)
                 {
-                    let target_start = index + 2;
-                    let mut depth = 1usize;
-                    let mut scan = target_start;
-                    while scan < bytes.len() {
-                        match bytes[scan] {
-                            b'\\' if scan + 1 < bytes.len() => scan += 2,
-                            b'(' => {
-                                depth += 1;
-                                scan += 1;
-                            }
-                            b')' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                                scan += 1;
-                            }
-                            _ => scan += 1,
-                        }
+                    let dest = &text[range.clone()];
+                    if is_relative_repo_target(dest) {
+                        output.push_str(&text[copy_from..range.start]);
+                        output.push_str(repository_url.trim_end_matches('/'));
+                        output.push_str("/blob/");
+                        output.push_str(tag);
+                        output.push('/');
+                        output.push_str(dest.strip_prefix("./").unwrap_or(dest));
+                        copy_from = range.end;
                     }
-                    if depth == 0 {
-                        let inner = &line[target_start..scan];
-                        let leading_ws = inner.len() - inner.trim_start().len();
-                        let trimmed = &inner[leading_ws..];
-                        let dest_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
-                        let dest = &trimmed[..dest_len];
-                        if is_relative_repo_target(dest) {
-                            let clean = dest.strip_prefix("./").unwrap_or(dest);
-                            let dest_byte_start = target_start + leading_ws;
-                            let dest_byte_end = dest_byte_start + dest_len;
-                            output.push_str(&line[copy_from..dest_byte_start]);
-                            output.push_str(repository_url.trim_end_matches('/'));
-                            output.push_str("/blob/");
-                            output.push_str(tag);
-                            output.push('/');
-                            output.push_str(clean);
-                            copy_from = dest_byte_end;
-                        }
-                        index = scan + 1;
-                        continue;
-                    }
+                    index = end;
+                    continue;
                 }
                 index += 1;
             }
             _ => index += 1,
         }
     }
-    output.push_str(&line[copy_from..]);
+    output.push_str(&text[copy_from..]);
     output
 }
 
 fn rewrite_relative_markdown_links(markdown: &str, repository_url: &str, tag: &str) -> String {
     let mut fence = None::<(u8, usize)>;
-    let mut lines = Vec::new();
-    for raw in markdown.lines() {
-        if advance_markdown_fence(raw, &mut fence) {
-            lines.push(raw.to_owned());
+    let mut result = String::with_capacity(markdown.len());
+    let mut paragraph = String::new();
+    for line in markdown.split_inclusive('\n') {
+        if advance_markdown_fence(line, &mut fence) || line.trim().is_empty() {
+            result.push_str(&rewrite_inline_relative_links(
+                &paragraph,
+                repository_url,
+                tag,
+            ));
+            paragraph.clear();
+            result.push_str(line);
         } else {
-            lines.push(rewrite_inline_relative_links(raw, repository_url, tag));
+            paragraph.push_str(line);
         }
     }
-    let mut result = lines.join("\n");
-    if markdown.ends_with('\n') && !result.ends_with('\n') {
-        result.push('\n');
-    }
+    result.push_str(&rewrite_inline_relative_links(
+        &paragraph,
+        repository_url,
+        tag,
+    ));
     result
 }
 

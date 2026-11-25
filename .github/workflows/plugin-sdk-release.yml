@@ -317,7 +317,7 @@ jobs:
           fi
           LC_ALL=C sha256sum "${archives[@]}" | LC_ALL=C sort -k2 > SHA256SUMS.txt
           cat > RELEASE_NOTES.md <<EOF
-          Vesper Plugin SDK ${VERSION} is the first stable Rust plugin authoring and tooling release.
+          Vesper Plugin SDK ${VERSION} includes Rust plugin authoring libraries and the Vesper CLI.
 
           Install the CLI from crates.io:
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.12.0 - 2026-11-25
+## 0.12.0 - 2026-11-26
 
 - Localize Stage copy: `VesperPlayerStage` now follows `Localizations.localeOf` and ships English and Simplified Chinese strings aligned with the Android and iOS host kits.
 - Add `VesperPlayerStageStrings.of`, `forLocale`, `en()` and `copyWith`, plus `VesperPlayerStageStringsScope` for app-wide overrides. Explicit `strings` arguments still take precedence.
