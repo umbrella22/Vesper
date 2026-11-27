@@ -147,7 +147,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.7.1"
+          gradle-version: "9.9.2"
 
       - name: Verify current version metadata
         run: ./scripts/vesper release verify-current

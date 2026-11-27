@@ -230,12 +230,10 @@ root does not contain shared Gradle state. An explicit non-empty
 `GRADLE_USER_HOME` override still takes precedence. Invoke Android commands
 through `./scripts/vesper`; no shell helper is required.
 
-The independent Android library and Compose host pin Gradle 9.7.1. The Flutter
-Android host remains on Gradle 9.3.1 because Flutter 3.47.2 reports Gradle
-9.7.1 with AGP 9.1 as an incompatible tooling pair. CI mirrors this split by
-invocation: Android library and Compose steps use the provisioned Gradle 9.7.1,
-while `flutter build` uses the Flutter host's 9.3.1 wrapper, including in mixed
-release jobs.
+The Android library and Compose host pin Gradle 9.9.2. The Flutter Android
+host pins Gradle 9.3.1 for Flutter 3.47.2, including in release jobs. Flutter
+Android CI also builds the release APK with Flutter 3.50.1, setting the host
+wrapper to Gradle 9.5.0 for that build. All three builds use AGP 9.1.1.
 
 ## GitHub Actions
 

@@ -161,7 +161,7 @@ already permits the loopback connection.
 
 ```sh
 project="$PWD/examples/android-compose-host"
-gradle_bin=$(find "$project/.gradle/wrapper/dists" -path '*/gradle-9.7.1/bin/gradle' -type f -perm -111 | head -1)
+gradle_bin=$(find "$project/.gradle/wrapper/dists" -path '*/gradle-9.9.2/bin/gradle' -type f -perm -111 | head -1)
 test -n "$gradle_bin" || exit 1
 VESPER_ANDROID_RTSP_BRIDGE=1 GRADLE_USER_HOME="$project/.gradle/gradle-user-home" \
   "$gradle_bin" -p "$project" :app:assembleDebug

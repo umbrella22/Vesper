@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Upgrade the Android SDK and Compose example builds to Gradle 9.9.2 with AGP 9.1.1.
+
 ## 0.12.0 - 2026-11-26
 
 ## 0.11.0 - 2026-11-23
